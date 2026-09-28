@@ -1,5 +1,6 @@
 <script setup lang="ts">
 type Inbox = {
+  mailerMode: 'fake' | 'resend'
   contactStatus: string | null
   subject: { namespace: string, id: string } | null
   subscriptions: { audience: string, status: string }[]
@@ -30,6 +31,9 @@ const retrySubscription = computed(() =>
 )
 const canRetryDelivery = computed(() =>
   retrySubscription.value?.status === 'PENDING_CONFIRMATION'
+)
+const canSimulateFailure = computed(() =>
+  canRetryDelivery.value && inbox.value?.mailerMode === 'fake'
 )
 
 function errorMessage(error: unknown): string {
@@ -81,7 +85,9 @@ async function resend() {
       body: { email: email.value, audience: retryAudience.value }
     })
     await refreshInbox()
-    message.value = `Confirmation email requested again for ${retryAudience.value}. The accepted-delivery count and timestamp below update when a new fake mail is delivered.`
+    message.value = inbox.value?.mailerMode === 'resend'
+      ? `Confirmation email requested again for ${retryAudience.value}. Check the recipient inbox for the new message.`
+      : `Confirmation email requested again for ${retryAudience.value}. The accepted-delivery count and timestamp below update when a new fake mail is delivered.`
   } catch (error) {
     message.value = errorMessage(error)
   } finally {
@@ -150,7 +156,7 @@ async function setSuppression(suppressed: boolean) {
 <template>
   <main>
     <h1>Better Newsletter · Nuxt demo</h1>
-    <p>Anonymous signup with explicit consent. No database, mail key, or real email delivery.</p>
+    <p>Development-only lifecycle playground with explicit consent and optional real Resend delivery.</p>
 
     <section>
       <h2>Subscribe</h2>
@@ -191,8 +197,9 @@ async function setSuppression(suppressed: boolean) {
           <option value="AMBIGUOUS">Interrupted/ambiguous delivery (wait for lease)</option>
         </select>
       </label>
-      <button :disabled="busy || !email || !canRetryDelivery" @click="failNext">Fail next delivery</button>
+      <button :disabled="busy || !email || !canSimulateFailure" @click="failNext">Fail next delivery</button>
       <button :disabled="busy" @click="advanceClock(11_000)">Advance clock 11 seconds</button>
+      <p v-if="inbox?.mailerMode === 'resend'">Synthetic provider failures are disabled while real Resend delivery is enabled.</p>
       <p>To test expiry, open a confirmation link <em>after</em> advancing the demo clock six minutes.</p>
       <button :disabled="busy" @click="advanceClock(6 * 60_000)">Advance clock six minutes</button>
     </section>
@@ -212,21 +219,30 @@ async function setSuppression(suppressed: boolean) {
       <button :disabled="busy || !email" @click="refreshInbox">Refresh inbox</button>
       <p role="status">{{ message }}</p>
       <template v-if="inbox">
+        <p>
+          Delivery mode:
+          <strong>{{ inbox.mailerMode === 'resend' ? 'Resend (real email)' : 'Fake mailer (local only)' }}</strong>
+        </p>
+        <p v-if="inbox.mailerMode === 'resend'">
+          Confirmation links are delivered only to the recipient email address and are intentionally not exposed here.
+        </p>
         <p>Contact: {{ inbox.contactStatus ?? 'not found' }} · Subject: {{ inbox.subject ? `${inbox.subject.namespace}/${inbox.subject.id}` : 'none' }}</p>
         <ul>
           <li v-for="subscription in inbox.subscriptions" :key="subscription.audience">
             {{ subscription.audience }}: {{ subscription.status }}
           </li>
         </ul>
-        <h3>Latest accepted confirmation mail per audience</h3>
-        <ul>
-          <li v-for="link in inbox.confirmationLinks" :key="link.audience">
-            {{ link.audience }} · accepted deliveries: {{ link.acceptedDeliveries }}
-            · last delivered: {{ link.lastDeliveredAt }}
-            · expires: {{ link.expiresAt }} ·
-            <a :href="link.url" target="_blank" rel="noopener noreferrer">Open confirmation landing page</a>
-          </li>
-        </ul>
+        <template v-if="inbox.mailerMode === 'fake'">
+          <h3>Latest accepted confirmation mail per audience</h3>
+          <ul>
+            <li v-for="link in inbox.confirmationLinks" :key="link.audience">
+              {{ link.audience }} · accepted deliveries: {{ link.acceptedDeliveries }}
+              · last delivered: {{ link.lastDeliveredAt }}
+              · expires: {{ link.expiresAt }} ·
+              <a :href="link.url" target="_blank" rel="noopener noreferrer">Open confirmation landing page</a>
+            </li>
+          </ul>
+        </template>
         <h3>Capability links</h3>
         <ul>
           <li v-for="link in inbox.unsubscribeLinks" :key="link.audience">

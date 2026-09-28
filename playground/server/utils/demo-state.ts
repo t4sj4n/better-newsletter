@@ -8,11 +8,19 @@ export interface DemoMessage {
   acceptedDeliveries: number
 }
 
+export type DemoMailerMode = 'fake' | 'resend'
 type Failure = 'TEMPORARY' | 'AMBIGUOUS'
 
 const messages = new Map<string, Map<string, DemoMessage>>()
 const failures = new Map<string, Failure>()
 let clockOffsetMs = 0
+
+export function getDemoMailerMode(): DemoMailerMode {
+  const mode = process.env.DEMO_MAILER?.trim().toLowerCase()
+  if (mode == null || mode === '' || mode === 'fake') return 'fake'
+  if (mode === 'resend') return 'resend'
+  throw new Error('DEMO_MAILER must be either "fake" or "resend".')
+}
 
 export function getDemoOrigin(): string {
   const url = new URL(process.env.DEMO_APP_ORIGIN ?? 'http://localhost:3000')

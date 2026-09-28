@@ -1,5 +1,5 @@
 import { useBetterNewsletter } from 'better-newsletter/nuxt/server'
-import { getDemoMessages, getDemoOrigin } from '../../utils/demo-state'
+import { getDemoMailerMode, getDemoMessages, getDemoOrigin } from '../../utils/demo-state'
 
 export default defineEventHandler(async (event) => {
   if (!import.meta.dev) throw createError({ statusCode: 404 })
@@ -68,6 +68,7 @@ export default defineEventHandler(async (event) => {
       })()
 
   return {
+    mailerMode: getDemoMailerMode(),
     contactStatus: contact?.status ?? null,
     subject: contact?.subject ?? null,
     subscriptions: subscriptions.map(subscription => ({

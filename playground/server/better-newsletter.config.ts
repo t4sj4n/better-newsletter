@@ -1,10 +1,37 @@
+import { Kysely, PostgresDialect } from 'kysely'
+import { Pool } from 'pg'
 import { memoryCapabilities, memoryStorage } from 'better-newsletter/memory'
+import { postgresStorage } from 'better-newsletter/postgres'
 import { resendMailer } from 'better-newsletter/resend'
 import { defineBetterNewsletterConfig, newsletterUrl } from 'better-newsletter/nuxt/server'
-import { demoClock, demoMailer, getDemoMailerMode, getDemoOrigin } from './utils/demo-state'
+import {
+  demoClock,
+  demoMailer,
+  getDemoMailerMode,
+  getDemoOrigin,
+  getDemoStorageMode
+} from './utils/demo-state'
 
-// Deliberately process-local: restarting the example clears consent and links.
-const storage = memoryStorage()
+type DemoDatabase = Record<string, never>
+
+function createDemoStorage() {
+  if (getDemoStorageMode() === 'memory') return memoryStorage()
+
+  const connectionString = process.env.DATABASE_URL?.trim()
+  if (!connectionString) {
+    throw new Error('DEMO_STORAGE=postgres requires DATABASE_URL.')
+  }
+
+  const db = new Kysely<DemoDatabase>({
+    dialect: new PostgresDialect({
+      pool: new Pool({ connectionString })
+    })
+  })
+  return postgresStorage(db)
+}
+
+// Long-lived adapters live outside the per-request configuration factory.
+const storage = createDemoStorage()
 const capabilities = memoryCapabilities()
 
 function realMailer(origin: string) {

@@ -2,7 +2,7 @@
 
 Framework-agnostic newsletter subscription and consent lifecycle infrastructure for TypeScript.
 
-> **Status:** early development. The core lifecycle, PostgreSQL/Kysely persistence, Resend confirmation delivery, and Nuxt/Nitro adapter are available.
+> **Status:** early development. The core lifecycle, PostgreSQL persistence, Resend confirmation delivery, and Nuxt/Nitro adapter are available.
 
 ## Scope
 
@@ -106,7 +106,7 @@ const newsletter = createNewsletter({
 })
 ```
 
-The host supplies the lifecycle storage contract. Each storage transaction exposes a `confirmationTokens: ConfirmationTokenStore`, and the capabilities receive that store for every confirmation operation. Token replacement, consumption and revocation therefore commit or roll back together with lifecycle state and events. No unsubscribe nonce store is needed. The PostgreSQL/Kysely adapter provides durable storage for this contract.
+The host supplies the lifecycle storage contract. Each storage transaction exposes a `confirmationTokens: ConfirmationTokenStore`, and the capabilities receive that store for every confirmation operation. Token replacement, consumption and revocation therefore commit or roll back together with lifecycle state and events. No unsubscribe nonce store is needed. The PostgreSQL adapter provides durable storage for this contract.
 
 Security properties:
 
@@ -432,33 +432,33 @@ import {
 
 `memoryCapabilities()` uses the real hashing/HMAC implementation with an ephemeral signing key. Confirmation digests live in `memoryStorage()` and roll back with its transactions; `confirmationTokenSnapshot()` exposes the committed records for assertions. For distributed-style tests, combine separate `createSecureCapabilities()` instances with the same signing key and one shared `memoryStorage()`. The memory storage reports duplicate inserts as `StorageConflictError`. None of the memory stores are durable production persistence.
 
-Production storage must provide transaction semantics strong enough to serialize conflicting contact-wide and subscription transitions, including generation checks and delivery claims. The PostgreSQL/Kysely adapter enforces database uniqueness and atomicity.
+Production storage must provide transaction semantics strong enough to serialize conflicting contact-wide and subscription transitions, including generation checks and delivery claims. The PostgreSQL adapter enforces database uniqueness and atomicity.
 
-## PostgreSQL / Kysely
+## PostgreSQL
 
-The PostgreSQL adapter targets PostgreSQL 14 or newer, Kysely 0.28.x, `pg` 8.x, and Node.js 20.11 or newer. If you use the optional `/kysely` subpath, install a supported Kysely version and a PostgreSQL driver in your application (for example, `pnpm add kysely@^0.28.17 pg@^8`). Kysely is an optional peer dependency; `pg` is only a development dependency of this package. Core-only consumers do not need either. Provide your own configured Kysely database instance and connection pool; the library does not own their lifecycle. From a checkout of this repository, apply the inspectable V1 migration **before** using the adapter:
+The PostgreSQL adapter targets PostgreSQL 14 or newer, Kysely 0.28.x, `pg` 8.x, and Node.js 20.11 or newer. It is implemented with Kysely but supports PostgreSQL specifically; the public adapter does not imply compatibility with other Kysely dialects. If you use the optional `/postgres` subpath, install a supported Kysely version and a PostgreSQL driver in your application (for example, `pnpm add kysely@^0.28.17 pg@^8`). Kysely is an optional peer dependency; `pg` is only a development dependency of this package. Core-only consumers do not need either. Provide your own configured Kysely database instance and connection pool; the library does not own their lifecycle. From a checkout of this repository, apply the inspectable V1 migration **before** using the adapter:
 
 ```bash
-psql "$DATABASE_URL" --single-transaction -v ON_ERROR_STOP=1 -f migrations/001_newsletter.sql
+psql "$DATABASE_URL" --single-transaction -v ON_ERROR_STOP=1 -f migrations/postgres/001_newsletter.sql
 ```
 
-In deployments, review and run that SQL inside your host migration runner's transaction instead. The migration contains no `BEGIN` or `COMMIT`, so it does not prematurely commit an enclosing transaction. Importing `better-newsletter/kysely` does not create or alter tables. Apply future schema changes as new forward migrations; V1 does not promise a destructive rollback.
+In deployments, review and run that SQL inside your host migration runner's transaction instead. The migration contains no `BEGIN` or `COMMIT`, so it does not prematurely commit an enclosing transaction. Importing `better-newsletter/postgres` does not create or alter tables. Apply future schema changes as new forward migrations; V1 does not promise a destructive rollback.
 
 ```ts
 import { createNewsletter } from 'better-newsletter'
 import { createHmacRateLimitKeyProvider } from 'better-newsletter/security'
 import {
-  kyselyRateLimiter,
-  kyselyStorage,
+  postgresRateLimiter,
+  postgresStorage,
   listEligibleSubscriptions
-} from 'better-newsletter/kysely'
+} from 'better-newsletter/postgres'
 
 // db is the host application's configured Kysely instance for PostgreSQL.
 const newsletter = createNewsletter({
-  storage: kyselyStorage(db),
+  storage: postgresStorage(db),
   mailer,
   capabilities,
-  rateLimiter: kyselyRateLimiter(db),
+  rateLimiter: postgresRateLimiter(db),
   rateLimitKeyProvider: createHmacRateLimitKeyProvider({
     secret: process.env.NEWSLETTER_RATE_LIMIT_SECRET!
   })
@@ -473,7 +473,7 @@ The migration defines `newsletter_contacts`, `newsletter_subscriptions`, `newsle
 
 Only confirmation-token digests, never raw confirmation tokens, belong in `newsletter_tokens`. Its identity `id` orders equal-timestamp records deterministically for bounded retention within `(subscription_id, lifecycle_generation)`; `sequence` gives events append order even when timestamps match. Store `capabilityGeneration` and `lifecycleGeneration` persistently; do not reset generations or reuse IDs. All state transitions, token mutations, and event appends must share one atomic transaction. Serialize conflicting transitions with `SERIALIZABLE` isolation or row locks, taking contact locks before subscription locks and token locks. Retry unique violations, serialization failures, and deadlocks through the storage conflict contract rather than continuing a failed transaction.
 
-`newsletter_rate_limits` is an optional SQL fixed-window counter keyed by `(key_hash, action, window_ms, bucket_start_ms)`, with `attempt_count` and `expires_at`; including the window length prevents different configured policies from sharing a bucket. `kyselyRateLimiter(db)` performs atomic consumption across service instances and accepts any string returned by your `RateLimitKeyProvider` (including base64url HMACs); despite the `key_hash` column name, it stores the provided key as-is. Always supply a privacy-preserving opaque key rather than raw e-mail or IP data. Rate-limit counters and expired token rows need explicit scheduled cleanup; neither import nor the core starts a scheduler. Keep HMAC signing and rate-limit secrets stable across process restarts and protect them outside the database. Rotating a signing secret invalidates outstanding unsubscribe links; rotating the rate-limit secret resets effective buckets.
+`newsletter_rate_limits` is an optional SQL fixed-window counter keyed by `(key_hash, action, window_ms, bucket_start_ms)`, with `attempt_count` and `expires_at`; including the window length prevents different configured policies from sharing a bucket. `postgresRateLimiter(db)` performs atomic consumption across service instances and accepts any string returned by your `RateLimitKeyProvider` (including base64url HMACs); despite the `key_hash` column name, it stores the provided key as-is. Always supply a privacy-preserving opaque key rather than raw e-mail or IP data. Rate-limit counters and expired token rows need explicit scheduled cleanup; neither import nor the core starts a scheduler. Keep HMAC signing and rate-limit secrets stable across process restarts and protect them outside the database. Rotating a signing secret invalidates outstanding unsubscribe links; rotating the rate-limit secret resets effective buckets.
 
 Deleting a Contact cascades to its Subscriptions, token records, and lifecycle events, so intentional erasure removes historical evidence too. Events are otherwise append-only; the schema does not use an immutable-event trigger that would block erasure. Plan operational retention, exports, and erasure with that behavior in mind.
 
@@ -576,7 +576,7 @@ abuseGuard: {
 
 The handler passes this transient context to the core `abuseGuard` and `rateLimitKeyProvider`; it does not itself persist raw IPs or CAPTCHA tokens. Never trust a client-supplied IP or session claim in `body`. If you add a trusted network identity from `event`, hash/HMAC it before writing any rate-limit key; do not include raw IPs or CAPTCHA tokens in contact metadata, events or logs.
 
-For production, replace memory adapters with `kyselyStorage(db)` and `kyselyRateLimiter(db)` from `better-newsletter/kysely` (apply `migrations/001_newsletter.sql` first), `createSecureCapabilities({ hmacSecret })`, `createHmacRateLimitKeyProvider({ secret })`, and `resendMailer({ apiKey, from, renderConfirmation })` from `better-newsletter/resend`. Configure a verified sender, durable PostgreSQL connection, stable server-side signing/rate-limit secrets, a trusted origin for URLs, and runtime-safe background delivery (`waitUntil`, an awaited fallback or a durable worker). See the adapter sections above for integration details; the example deliberately uses none of these external services.
+For production, replace memory adapters with `postgresStorage(db)` and `postgresRateLimiter(db)` from `better-newsletter/postgres` (apply `migrations/postgres/001_newsletter.sql` first), `createSecureCapabilities({ hmacSecret })`, `createHmacRateLimitKeyProvider({ secret })`, and `resendMailer({ apiKey, from, renderConfirmation })` from `better-newsletter/resend`. Configure a verified sender, durable PostgreSQL connection, stable server-side signing/rate-limit secrets, a trusted origin for URLs, and runtime-safe background delivery (`waitUntil`, an awaited fallback or a durable worker). See the adapter sections above for integration details; the example deliberately uses none of these external services.
 
 ### Consumer example and maintainer playground
 
@@ -610,7 +610,7 @@ Repository layout:
 | `playground/` | Full maintainer development/debugging Nuxt app, excluded from the npm artifact. |
 | `examples/basic/` | Minimal, copyable consumer integration example, excluded from the npm artifact. |
 | `test/` | Automated tests; `test/fixtures/` contains automated consumers, not documentation examples. |
-| `migrations/` | SQL migrations shipped with the package. |
+| `migrations/` | Database-specific SQL migrations shipped with the package. |
 | `dist/` | Generated package output, not committed to Git. |
 
 ```bash

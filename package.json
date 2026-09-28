@@ -32,9 +32,9 @@
       "types": "./dist/resend.d.ts",
       "import": "./dist/resend.js"
     },
-    "./kysely": {
-      "types": "./dist/kysely.d.ts",
-      "import": "./dist/kysely.js"
+    "./postgres": {
+      "types": "./dist/postgres.d.ts",
+      "import": "./dist/postgres.js"
     },
     "./nuxt": {
       "types": "./dist/nuxt.d.ts",

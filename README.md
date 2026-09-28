@@ -2,7 +2,7 @@
 
 Framework-agnostic newsletter subscription and consent lifecycle infrastructure for TypeScript.
 
-> **Status:** early development. The core subscription lifecycle is implemented; production token hardening, database and delivery adapters follow in issues #3–#6.
+> **Status:** early development. The core lifecycle and production security primitives are implemented; persistent PostgreSQL and delivery/framework adapters follow in issues #4–#6.
 
 ## Scope
 
@@ -77,14 +77,105 @@ const newsletter = createNewsletter({
   storage,
   mailer,
   capabilities,
-  tokenGenerator,
   confirmation: {
     expiresInMs: 24 * 60 * 60 * 1000
   }
 })
 ```
 
-Time and IDs can be injected for deterministic tests.
+Time, IDs, and confirmation-token generation can be injected for deterministic tests. When no token generator is supplied, the core uses a Web Crypto generator that produces 32 random bytes.
+
+## Production security
+
+The security layer is framework- and database-neutral:
+
+```ts
+import {
+  createNewsletter,
+  createSecureCapabilities
+} from 'better-newsletter'
+
+const capabilities = createSecureCapabilities({
+  confirmationStore,
+  nonceStore,
+  hmacSecret: process.env.NEWSLETTER_LINK_SECRET!
+})
+
+const newsletter = createNewsletter({
+  storage,
+  mailer,
+  capabilities
+})
+```
+
+The host supplies persistence for `ConfirmationTokenStore` and `CapabilityNonceStore`. Issue #4 provides the PostgreSQL/Kysely implementation.
+
+Security properties:
+
+- confirmation tokens use 32 bytes of Web Crypto entropy by default;
+- only SHA-256 confirmation-token digests are persisted;
+- confirmation consumption is single-use and must be atomic in the token store;
+- confirmation links are scoped to one Subscription;
+- unsubscribe links are HMAC-SHA-256 signed and purpose-bound;
+- unsubscribe capabilities contain no e-mail address;
+- rotatable nonces revoke existing unsubscribe links without storing raw signed capabilities;
+- per-audience unsubscribe and unsubscribe-all use distinct purposes;
+- re-subscription rotates/revokes old capabilities;
+- expired, consumed, and revoked confirmation records can be removed through explicit cleanup.
+
+Use a secret with at least 32 bytes for HMAC signing.
+
+### Scanner-safe web flows
+
+Core methods are mutation methods. Framework integrations should use a safe landing page and an explicit mutation:
+
+```text
+GET link
+  -> render confirmation/unsubscribe page
+  -> POST/action
+  -> confirm() or unsubscribe()
+```
+
+Do not confirm or unsubscribe merely because an e-mail security scanner or link preview performed a GET. An application may deliberately implement a browser-side auto-POST confirmation flow, but it is not the library default.
+
+### Cleanup
+
+Token expiry and physical deletion are separate. Expired tokens become invalid immediately; cleanup is explicit and scheduler-neutral:
+
+```ts
+await newsletter.cleanupConfirmationTokens({
+  retentionMs: 7 * 24 * 60 * 60 * 1000
+})
+```
+
+Call this from the scheduler appropriate to the host runtime.
+
+## Abuse protection
+
+`subscribe()` and `resendConfirmation()` support a generic `AbuseGuard` plus provider-neutral rate limiting:
+
+```ts
+import {
+  createHmacRateLimitKeyProvider
+} from 'better-newsletter/security'
+
+const newsletter = createNewsletter({
+  storage,
+  mailer,
+  capabilities,
+  abuseGuard,
+  rateLimiter,
+  rateLimitKeyProvider: createHmacRateLimitKeyProvider({
+    secret: process.env.NEWSLETTER_RATE_LIMIT_SECRET!
+  })
+})
+```
+
+The built-in HMAC key provider derives opaque 64-character keys instead of passing raw e-mail addresses to the rate limiter. A framework adapter may supply trusted request context and a custom material function for an IP/fingerprint-based policy.
+
+Rate limiting is intentionally not represented by a silent production no-op. If a `rateLimiter` is configured, a `rateLimitKeyProvider` is required as well. Signup and resend use separate action buckets and policies.
+
+The generic abuse guard can integrate a honeypot, Cloudflare Turnstile, hCaptcha, ALTCHA, WAF/session proof, or another host-owned mechanism without coupling the core to that provider.
 
 ## Subscribe and confirm
 
@@ -117,7 +208,9 @@ Confirmation is capability-based:
 await newsletter.confirm({ token })
 ```
 
-The capability contract is intentionally abstract in #2. Issue #3 owns cryptographic generation, hashed persistence, expiry cleanup, replay hardening and scanner-safe web integration.
+Production confirmation capabilities are provided by `createSecureCapabilities()`. Raw confirmation tokens are never persisted by that implementation: only SHA-256 digests are passed to the token store. Tokens are purpose-bound, subscription-bound, expiring, and atomically consumable through the store contract.
+
+The default resend policy retains at most the immediately previous still-valid confirmation token (`maxActiveTokens: 2`) to tolerate ambiguous mail-provider timeouts without allowing an unbounded set of live links. Applications may instead choose `REPLACE_PREVIOUS`.
 
 ## Unsubscribe and preferences
 
@@ -235,7 +328,7 @@ import {
 
 `memoryStorage()` serializes conflicting in-process transactions so lifecycle concurrency can be tested deterministically.
 
-`memoryCapabilities()` stores raw opaque values in memory and is **not production security**. It exists to exercise #2 without prematurely implementing #3. Do not use it as a production confirmation/unsubscribe token store.
+`memoryCapabilities()` remains a deliberately insecure compatibility/test adapter that stores raw opaque values in memory. Prefer combining `createSecureCapabilities()` with `memoryConfirmationTokenStore()` and `memoryCapabilityNonceStore()` when tests should exercise the real hashing/HMAC behavior. None of the memory stores are durable production persistence.
 
 Production storage must provide transaction semantics strong enough to serialize conflicting Contact + audience transitions. The PostgreSQL/Kysely adapter in #4 will additionally enforce database uniqueness and atomicity.
 
@@ -279,7 +372,7 @@ listmonk is AGPLv3. This MIT project does **not** copy or port listmonk implemen
 
 Issue #2 implements the framework-neutral lifecycle and consent model. The following remain separate:
 
-- #3: cryptographic token/capability security, abuse protection and cleanup;
+- #3: cryptographic token/capability security, abuse protection and cleanup (implemented here);
 - #4: Kysely/PostgreSQL persistence;
 - #5: Resend delivery adapter;
 - #6: Nuxt/Nitro integration;

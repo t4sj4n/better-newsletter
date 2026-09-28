@@ -11,6 +11,7 @@ export type {
   IdGenerator,
   NewsletterConfig,
   NewsletterCore,
+  NewsletterRateLimits,
   TokenGenerator
 } from './config.js'
 
@@ -76,6 +77,7 @@ export type {
   ConfirmInput,
   ConfirmResult,
   ContactLookup,
+  CleanupConfirmationTokensInput,
   CreateUnsubscribeCapabilityInput,
   ImportSubscriptionInput,
   LinkSubjectInput,
@@ -98,3 +100,28 @@ export type {
   NewsletterStorageTransaction,
   SubscriptionPatch
 } from './storage.js'
+
+export {
+  CAPABILITY_PURPOSES,
+  CONFIRMATION_REPLACEMENT_STRATEGIES,
+  createHmacRateLimitKeyProvider,
+  createSecureCapabilities,
+  secureTokenGenerator,
+  sha256Digest
+} from './security.js'
+
+export type {
+  AbuseGuard,
+  CapabilityNonceRecord,
+  CapabilityNonceStore,
+  CapabilityPurpose,
+  ConfirmationReplacementStrategy,
+  ConfirmationTokenRecord,
+  ConfirmationTokenStore,
+  HmacRateLimitKeyProviderOptions,
+  PublicAbuseAction,
+  RateLimiter,
+  RateLimitKeyProvider,
+  RateLimitPolicy,
+  SecureCapabilitiesOptions
+} from './security.js'

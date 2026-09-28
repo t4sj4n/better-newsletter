@@ -31,19 +31,22 @@ function checkArchive(tarball) {
   }
 
   for (const subpath of [
-    '.', './memory', './security', './kysely', './resend',
+    '.', './memory', './security', './postgres', './resend',
     './nuxt', './nuxt/server', './nuxt/client'
   ]) {
     if (!packed.exports?.[subpath]) {
       throw new Error(`Missing package export: ${subpath}`)
     }
   }
+  if (packed.exports?.['./kysely']) {
+    throw new Error('The unpublished ./kysely export must not be shipped')
+  }
 
   const required = new Set([
     'package/package.json',
     'package/README.md',
     'package/LICENSE',
-    'package/migrations/001_newsletter.sql'
+    'package/migrations/postgres/001_newsletter.sql'
   ])
   for (const [subpath, entry] of Object.entries(packed.exports)) {
     for (const target of typeof entry === 'string' ? [entry] : Object.values(entry)) {
@@ -101,8 +104,8 @@ function checkConsumer(name, tarball, peers, types, runtime) {
       throw new Error(`Unexpected optional peer in ${name} consumer: ${peer}`)
     }
   }
-  if (name === 'kysely' && existsSync(join(consumer, 'node_modules', 'pg'))) {
-    throw new Error('Kysely consumer unexpectedly installed PostgreSQL')
+  if (name === 'postgres' && existsSync(join(consumer, 'node_modules', 'pg'))) {
+    throw new Error('PostgreSQL consumer unexpectedly installed the pg driver')
   }
   run('pnpm', ['exec', 'tsc', '-p', 'tsconfig.json'], consumer)
   run('node', ['--no-warnings=ExperimentalWarning', '--loader', join(scratch, 'isolate.mjs'), 'smoke.mjs'],
@@ -158,23 +161,23 @@ if (typeof core.createNewsletter !== 'function' ||
 }
 `)
 
-  checkConsumer('kysely', tarball, {
+  checkConsumer('postgres', tarball, {
     kysely: manifest.peerDependencies.kysely
   }, `
-import { kyselyStorage, kyselyRateLimiter } from 'better-newsletter/kysely'
+import { postgresStorage, postgresRateLimiter } from 'better-newsletter/postgres'
 import type { Kysely } from 'kysely'
 declare const hostDb: Kysely<{}>
-const storage = kyselyStorage(hostDb)
-const limiter = kyselyRateLimiter(hostDb)
+const storage = postgresStorage(hostDb)
+const limiter = postgresRateLimiter(hostDb)
 void [storage, limiter]
 `, `
-import { kyselyStorage, kyselyRateLimiter } from 'better-newsletter/kysely'
-if (typeof kyselyStorage !== 'function' || typeof kyselyRateLimiter !== 'function') {
-  throw new Error('Kysely adapter runtime exports are missing')
+import { postgresStorage, postgresRateLimiter } from 'better-newsletter/postgres'
+if (typeof postgresStorage !== 'function' || typeof postgresRateLimiter !== 'function') {
+  throw new Error('PostgreSQL adapter runtime exports are missing')
 }
-if (typeof kyselyStorage({})?.transaction !== 'function' ||
-    typeof kyselyRateLimiter({})?.consume !== 'function') {
-  throw new Error('Kysely adapters cannot be constructed from a host database')
+if (typeof postgresStorage({})?.transaction !== 'function' ||
+    typeof postgresRateLimiter({})?.consume !== 'function') {
+  throw new Error('PostgreSQL adapters cannot be constructed from a host Kysely database')
 }
 `)
 

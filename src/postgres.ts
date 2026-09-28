@@ -184,7 +184,7 @@ function required<T>(rows: readonly T[], entity: string): T {
   return row
 }
 
-class KyselyConfirmationTokenStore<DB> implements ConfirmationTokenStore {
+class PostgresConfirmationTokenStore<DB> implements ConfirmationTokenStore {
   constructor(private readonly trx: Transaction<DB>) {}
 
   async replace(input: Parameters<ConfirmationTokenStore['replace']>[0]) {
@@ -402,7 +402,7 @@ function transactionAdapter<DB>(trx: Transaction<DB>): NewsletterStorageTransact
       `.execute(trx)
       return result.rows.map(eventFromRow)
     },
-    confirmationTokens: new KyselyConfirmationTokenStore(trx)
+    confirmationTokens: new PostgresConfirmationTokenStore(trx)
   }
 }
 
@@ -412,7 +412,7 @@ function isPgConflict(error: unknown): boolean {
 }
 
 /** Uses the caller's pool; PostgreSQL SERIALIZABLE aborts competing stale transitions. */
-export function kyselyStorage<DB>(db: Kysely<DB>): NewsletterStorage {
+export function postgresStorage<DB>(db: Kysely<DB>): NewsletterStorage {
   return {
     async transaction<T>(operation: (transaction: NewsletterStorageTransaction) => Promise<T>) {
       try {
@@ -457,16 +457,16 @@ export async function listEligibleSubscriptions<DB>(
   }))
 }
 
-export interface KyselyRateLimiter {
+export interface PostgresRateLimiter {
   readonly consume: RateLimiter['consume']
   cleanup(input?: { readonly now?: Date }): Promise<number>
 }
 
 /** Use a privacy-preserving key provider; the limiter never sees raw request context. */
-export function kyselyRateLimiter<DB>(
+export function postgresRateLimiter<DB>(
   db: Kysely<DB>,
   clock: { now(): Date } = { now: () => new Date() }
-): KyselyRateLimiter {
+): PostgresRateLimiter {
   return {
     async consume(input: {
       readonly key: string

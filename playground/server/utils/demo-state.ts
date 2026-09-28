@@ -9,6 +9,7 @@ export interface DemoMessage {
 }
 
 export type DemoMailerMode = 'fake' | 'resend'
+export type DemoStorageMode = 'memory' | 'postgres'
 type Failure = 'TEMPORARY' | 'AMBIGUOUS'
 
 const messages = new Map<string, Map<string, DemoMessage>>()
@@ -20,6 +21,13 @@ export function getDemoMailerMode(): DemoMailerMode {
   if (mode == null || mode === '' || mode === 'fake') return 'fake'
   if (mode === 'resend') return 'resend'
   throw new Error('DEMO_MAILER must be either "fake" or "resend".')
+}
+
+export function getDemoStorageMode(): DemoStorageMode {
+  const mode = process.env.DEMO_STORAGE?.trim().toLowerCase()
+  if (mode == null || mode === '' || mode === 'memory') return 'memory'
+  if (mode === 'postgres') return 'postgres'
+  throw new Error('DEMO_STORAGE must be either "memory" or "postgres".')
 }
 
 export function getDemoOrigin(): string {

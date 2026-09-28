@@ -1,6 +1,6 @@
 # Nuxt 4 / Nitro development playground
 
-This playground consumes the repository's public package exports through a local link (`link:..`) and uses process-local `memoryStorage()` and `memoryCapabilities()`. Delivery defaults to a server-only fake mailer, so no database, Resend account, API key or real email is needed. For a manual end-to-end test, real Resend delivery can be enabled explicitly with server-only environment variables. It is **not a production starter**: every restart loses consent and signing state, and production builds cannot use the demo service or development-only inbox/control endpoints.
+This playground consumes the repository's public package exports through a local link (`link:..`). Storage defaults to process-local `memoryStorage()` and delivery defaults to a server-only fake mailer, so no database, Resend account, API key or real email is needed. PostgreSQL storage and real Resend delivery can each be enabled independently with server-only environment variables. It is **not a production starter**: memory mode loses consent on restart, the demo capability signing key is always ephemeral, and production builds cannot use the demo service or development-only inbox/control endpoints.
 
 ## Run locally
 
@@ -15,6 +15,27 @@ pnpm --dir playground dev
 The root install includes this playground through `pnpm-workspace.yaml`. It still links the library as a package and imports only its public exports. To validate the entire Nuxt app, run `pnpm --dir playground typecheck` and `pnpm --dir playground build` after the library build.
 
 Visit `http://localhost:3000`. If you run on a different origin, set `DEMO_APP_ORIGIN` to that fixed URL **before** starting Nuxt (for example, `DEMO_APP_ORIGIN=http://localhost:3001 pnpm --dir playground dev --port 3001`). The application supplies this trusted origin; no incoming Host header is used to build links.
+
+### Optional PostgreSQL storage
+
+Memory remains the default. To exercise the real PostgreSQL adapter, create `playground/.env` from `playground/.env.example` and set:
+
+```dotenv
+DEMO_STORAGE=postgres
+DATABASE_URL=postgresql://user:password@localhost:5432/better_newsletter
+```
+
+Apply the PostgreSQL migration from the repository root before starting the playground:
+
+```bash
+psql "$DATABASE_URL" --single-transaction -v ON_ERROR_STOP=1 -f migrations/postgres/001_newsletter.sql
+```
+
+Then start the playground normally with `pnpm --dir playground dev`. The connection string is read only by the server configuration and is never exposed through Nuxt public runtime config.
+
+PostgreSQL mode persists Contact, Subscription, confirmation-token, lifecycle-event and delivery-claim state across application restarts. The playground still uses `memoryCapabilities()`, so its HMAC signing key is intentionally ephemeral: existing unsubscribe/preferences capability links become invalid after a restart. This is a maintainer test mode, not a production deployment recipe.
+
+Storage and delivery modes are independent. For example, `DEMO_STORAGE=postgres` with `DEMO_MAILER=fake` tests durable persistence without sending mail, while `DEMO_STORAGE=postgres` with `DEMO_MAILER=resend` exercises both production adapters together.
 
 ### Optional real Resend delivery
 
@@ -64,4 +85,4 @@ pnpm --dir playground add ./better-newsletter-<version>.tgz
 pnpm --dir playground build
 ```
 
-Replace `<version>` with the tarball name printed by `pnpm pack`. This changes the example's dependency for your local test; revert it to `"link:.."` afterward and remove the test tarball. Do not commit packed artifacts. The root README documents production Kysely/PostgreSQL + Resend configuration, route overrides/disablement, trusted origins, abuse protection and deployment background-task requirements.
+Replace `<version>` with the tarball name printed by `pnpm pack`. This changes the example's dependency for your local test; revert it to `"link:.."` afterward and remove the test tarball. Do not commit packed artifacts. The root README documents production PostgreSQL + Resend configuration, route overrides/disablement, trusted origins, abuse protection and deployment background-task requirements.

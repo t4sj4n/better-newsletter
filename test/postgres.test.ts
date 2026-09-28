@@ -17,10 +17,10 @@ import {
   type NewsletterMailer
 } from '../src/index.js'
 import {
-  kyselyRateLimiter,
-  kyselyStorage,
+  postgresRateLimiter,
+  postgresStorage,
   listEligibleSubscriptions
-} from '../src/kysely.js'
+} from '../src/postgres.js'
 
 const databaseUrl = process.env.DATABASE_URL
 const secret = '0123456789abcdef0123456789abcdef'
@@ -38,7 +38,7 @@ function gate() {
   return { promise, release }
 }
 
-describe.skipIf(!databaseUrl)('PostgreSQL Kysely integration', () => {
+describe.skipIf(!databaseUrl)('PostgreSQL integration', () => {
   const schema = `newsletter_test_${crypto.randomUUID().replaceAll('-', '')}`
   const admin = new Pool({ connectionString: databaseUrl, max: 2 })
   const pool = new Pool({
@@ -54,7 +54,7 @@ describe.skipIf(!databaseUrl)('PostgreSQL Kysely integration', () => {
   beforeAll(async () => {
     await admin.query(`CREATE SCHEMA "${schema}"`)
     const migration = readFileSync(
-      new URL('../migrations/001_newsletter.sql', import.meta.url),
+      new URL('../migrations/postgres/001_newsletter.sql', import.meta.url),
       'utf8'
     )
     const client = await pool.connect()
@@ -102,7 +102,7 @@ describe.skipIf(!databaseUrl)('PostgreSQL Kysely integration', () => {
     }
     const makeService = (overrides: Partial<NewsletterConfig> = {}) =>
       createNewsletter({
-        storage: kyselyStorage(db),
+        storage: postgresStorage(db),
         capabilities: createSecureCapabilities({ hmacSecret: secret }),
         mailer,
         clock,
@@ -278,7 +278,7 @@ describe.skipIf(!databaseUrl)('PostgreSQL Kysely integration', () => {
     const before = await pool.query<{ count: string }>(
       'SELECT count(*) FROM newsletter_events'
     )
-    await expect(kyselyStorage(db).transaction(async trx => {
+    await expect(postgresStorage(db).transaction(async trx => {
       expect(await trx.confirmationTokens.consume({ digest, now: clock.now() })).not.toBeNull()
       const contact = await trx.getContactByEmail(email)
       await trx.updateContact(contact!.id, { status: CONTACT_STATUSES.SUPPRESSED })
@@ -554,7 +554,7 @@ describe.skipIf(!databaseUrl)('PostgreSQL Kysely integration', () => {
       const legacyDigest = await sha256Digest(`stale-${replacementStrategy}`)
       const contact = (await service.getContact({ email }))!
       const subscription = (await service.getSubscription({ email }))!
-      await kyselyStorage(db).transaction(trx => trx.confirmationTokens.replace({
+      await postgresStorage(db).transaction(trx => trx.confirmationTokens.replace({
         record: {
           digest: legacyDigest,
           purpose: 'CONFIRMATION',
@@ -649,8 +649,8 @@ describe.skipIf(!databaseUrl)('PostgreSQL Kysely integration', () => {
       email,
       audienceKey: 'default'
     })
-    const first = kyselyRateLimiter(db, clock)
-    const second = kyselyRateLimiter(db, clock)
+    const first = postgresRateLimiter(db, clock)
+    const second = postgresRateLimiter(db, clock)
     expect(key).toMatch(/^[a-f0-9]{64}$/u)
     const base64urlKey = Buffer.from(key, 'hex').toString('base64url')
     expect(base64urlKey).not.toMatch(/^[a-f0-9]{64}$/u)
@@ -686,7 +686,7 @@ describe.skipIf(!databaseUrl)('PostgreSQL Kysely integration', () => {
     const { makeService, clock } = setup()
     const hmacProvider = createHmacRateLimitKeyProvider({ secret })
     const service = makeService({
-      rateLimiter: kyselyRateLimiter(db, clock),
+      rateLimiter: postgresRateLimiter(db, clock),
       rateLimitKeyProvider: {
         async createKey(input) {
           return Buffer.from(await hmacProvider.createKey(input), 'hex').toString('base64url')

@@ -2,6 +2,7 @@ import { describe, expect, it, vi } from 'vitest'
 import {
   CONFIRMATION_REPLACEMENT_STRATEGIES,
   MAIL_DELIVERY_FAILURES,
+  MAIL_DELIVERY_REASONS,
   NEWSLETTER_EVENT_TYPES,
   StorageConflictError,
   SUBSCRIPTION_STATUSES,
@@ -426,7 +427,7 @@ describe('durable confirmation retries', () => {
   it.each(['token-generation', 'token-persistence', 'provider-rejection', 'provider-timeout'] as const)(
     'resumes failed re-subscription after %s from another service instance',
     async failure => {
-      const { newsletter, createInstance, mailer, messages, waitForEvents } = setup()
+      const { newsletter, createInstance, mailer, messages, waitForEvents, advance } = setup()
       await newsletter.subscribe(signup)
       await waitForEvents(NEWSLETTER_EVENT_TYPES.CONFIRMATION_SENT, 1)
       const single = (await newsletter.createUnsubscribeCapability({ email }))!
@@ -450,7 +451,9 @@ describe('durable confirmation retries', () => {
       expect(pending).toMatchObject({
         lifecycleGeneration: 2,
         confirmationSentAt: null,
-        confirmationDelivery: { attemptId: null, leaseExpiresAt: null }
+        confirmationDelivery: failure === 'provider-timeout'
+          ? { attemptId: expect.any(String), leaseExpiresAt: expect.any(Date) }
+          : { attemptId: null, leaseExpiresAt: null }
       })
 
       const restarted = createInstance()
@@ -458,6 +461,7 @@ describe('durable confirmation retries', () => {
         .resolves.toEqual({ unsubscribed: false })
       await expect(restarted.unsubscribeAll({ capability: all }))
         .resolves.toEqual({ unsubscribed: false })
+      if (failure === 'provider-timeout') advance(1_000)
       await restarted.subscribe({ ...signup, consent: { granted: true, version: 'ignored' } })
       await waitForEvents(NEWSLETTER_EVENT_TYPES.CONFIRMATION_SENT, 2)
       expect(await restarted.getSubscription({ email })).toMatchObject({
@@ -471,12 +475,13 @@ describe('durable confirmation retries', () => {
   )
 
   it('keeps ambiguous provider tokens usable while bounding retained retry tokens', async () => {
-    const { newsletter, tokens, messages, mailer, waitForEvents } = setup()
+    const { newsletter, tokens, messages, mailer, waitForEvents, advance } = setup()
     mailer.sendConfirmation.mockImplementation(async input => {
       messages.push(input)
       throw new Error('delivery may have succeeded')
     })
     for (let attempt = 1; attempt <= 3; attempt += 1) {
+      if (attempt > 1) advance(1_000)
       await newsletter.subscribe(signup)
       await waitForEvents(NEWSLETTER_EVENT_TYPES.CONFIRMATION_SEND_FAILED, attempt)
     }
@@ -600,7 +605,7 @@ describe('durable confirmation retries', () => {
       metadata: {
         attemptId: messages[1]!.attemptId,
         authoritative: false,
-        outcome: 'TEMPORARY',
+        outcome: 'AMBIGUOUS',
         stage: 'DELIVERY'
       }
     })
@@ -853,7 +858,7 @@ describe('delivery outcomes', () => {
     const { newsletter, mailer, messages, settle } = setup()
     mailer.sendConfirmation.mockImplementationOnce(async input => {
       messages.push(input)
-      return { accepted: false, failure: MAIL_DELIVERY_FAILURES.PERMANENT, reason: 'invalid-recipient' }
+      return { accepted: false, failure: MAIL_DELIVERY_FAILURES.PERMANENT, reason: MAIL_DELIVERY_REASONS.INVALID_REQUEST }
     })
     await newsletter.subscribe(signup)
     await settle()
@@ -861,7 +866,7 @@ describe('delivery outcomes', () => {
     expect((await newsletter.getSubscription({ email }))?.confirmationDelivery).toBeNull()
     expect((await newsletter.listEvents({ email })).at(-1)).toMatchObject({
       type: NEWSLETTER_EVENT_TYPES.CONFIRMATION_SEND_FAILED,
-      metadata: { outcome: MAIL_DELIVERY_FAILURES.PERMANENT, reason: 'invalid-recipient', authoritative: true }
+      metadata: { outcome: MAIL_DELIVERY_FAILURES.PERMANENT, reason: MAIL_DELIVERY_REASONS.INVALID_REQUEST, authoritative: true }
     })
 
     await newsletter.subscribe(signup)

@@ -24,6 +24,7 @@ import {
 } from './errors.js'
 import {
   MAIL_DELIVERY_FAILURES,
+  MAIL_DELIVERY_REASONS,
   type MailDeliveryResult
 } from './mailer.js'
 import {
@@ -554,12 +555,19 @@ export function createNewsletter(config: NewsletterConfig): NewsletterCore {
         lifecycleGeneration
       })
     } catch {
-      result = { accepted: false }
+      result = stage === 'DELIVERY'
+        ? { accepted: false, failure: MAIL_DELIVERY_FAILURES.AMBIGUOUS, reason: MAIL_DELIVERY_REASONS.UNKNOWN }
+        : { accepted: false, failure: MAIL_DELIVERY_FAILURES.TEMPORARY, reason: MAIL_DELIVERY_REASONS.TOKEN_SETUP_FAILED }
     }
 
     const failure = result.accepted
       ? null
       : result.failure ?? MAIL_DELIVERY_FAILURES.TEMPORARY
+    const reason = !result.accepted && result.reason !== undefined
+      ? Object.values(MAIL_DELIVERY_REASONS).some(code => code === result.reason)
+        ? result.reason
+        : MAIL_DELIVERY_REASONS.UNKNOWN
+      : undefined
     const completedAt = clock.now()
     await runTransaction(async transaction => {
       const current = await transaction.getSubscriptionById(subscriptionId)
@@ -605,8 +613,8 @@ export function createNewsletter(config: NewsletterConfig): NewsletterCore {
           ...(result.providerMessageId !== undefined
             ? { providerMessageId: result.providerMessageId }
             : {}),
-          ...(!result.accepted && result.reason !== undefined
-            ? { reason: result.reason }
+          ...(reason !== undefined
+            ? { reason }
             : {})
         }
       })

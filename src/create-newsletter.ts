@@ -35,7 +35,8 @@ import {
 import type {
   ContactLookup,
   ImportSubscriptionInput,
-  SubscriptionLookup
+  SubscriptionLookup,
+  SubscribeInput
 } from './operations.js'
 import {
   CONFIRMATION_REPLACEMENT_STRATEGIES,
@@ -206,6 +207,11 @@ function importedSubscriptionMatches(
  * @throws {NewsletterError} If the audience or confirmation lifetime is invalid.
  */
 export function createNewsletter(config: NewsletterConfig): NewsletterCore {
+  return createNewsletterWithSubscriptionBatch(config).service
+}
+
+/** Internal integration helper; batch security runs before any lifecycle work. */
+export function createNewsletterWithSubscriptionBatch(config: NewsletterConfig) {
   const defaultAudience = assertAudienceKey(
     config.defaultAudience ?? DEFAULT_AUDIENCE_KEY
   )
@@ -628,6 +634,138 @@ export function createNewsletter(config: NewsletterConfig): NewsletterCore {
     })
   }
 
+  const subscribe = async (input: SubscribeInput, securityChecked = false) => {
+    const email = normalizeAndValidateEmail(input.email)
+    const audienceKey = assertAudienceKey(input.audience ?? defaultAudience)
+    const now = clock.now()
+    const consent = consentFromPublicInput(input.consent, now)
+    if (!securityChecked) await enforcePublicSecurity(
+      'subscribe',
+      email,
+      audienceKey,
+      input.securityContext
+    )
+
+    const transition = await runTransaction(async transaction => {
+      let contact = await transaction.getContactByEmail(email)
+      let contactCreated = false
+
+      if (contact == null) {
+        contact = await transaction.createContact({
+          id: idGenerator.generate(),
+          capabilityGeneration: 1,
+          email,
+          status: CONTACT_STATUSES.ENABLED,
+          subject: input.subject ?? null,
+          ...(input.metadata !== undefined ? { metadata: input.metadata } : {}),
+          createdAt: now,
+          updatedAt: now
+        })
+        contactCreated = true
+      }
+
+      let subscription = await transaction.getSubscription(
+        contact.id,
+        audienceKey
+      )
+
+      if (subscription == null) {
+        if (!contactCreated) {
+          contact = await transaction.updateContact(contact.id, {
+            capabilityGeneration: nextGeneration(contact.capabilityGeneration),
+            updatedAt: now
+          })
+        }
+
+        subscription = await transaction.createSubscription({
+          id: idGenerator.generate(),
+          lifecycleGeneration: 1,
+          contactId: contact.id,
+          audienceKey,
+          status: SUBSCRIPTION_STATUSES.PENDING_CONFIRMATION,
+          consent,
+          confirmationDelivery: newConfirmationDelivery(),
+          confirmationSentAt: null,
+          confirmedAt: null,
+          unsubscribedAt: null,
+          createdAt: now,
+          updatedAt: now
+        })
+
+        await appendEvent(transaction, {
+          contactId: contact.id,
+          subscriptionId: subscription.id,
+          type: NEWSLETTER_EVENT_TYPES.SIGNED_UP,
+          occurredAt: now,
+          metadata: {
+            audienceKey,
+            consentVersion: consent.version,
+            ...(consent.source != null ? { source: consent.source } : {})
+          }
+        })
+
+        return {
+          contact,
+          subscription,
+          shouldSend: contact.status === CONTACT_STATUSES.ENABLED
+        }
+      }
+
+      if (subscription.status === SUBSCRIPTION_STATUSES.UNSUBSCRIBED) {
+        contact = await transaction.updateContact(contact.id, {
+          capabilityGeneration: nextGeneration(contact.capabilityGeneration),
+          updatedAt: now
+        })
+        subscription = await transaction.updateSubscription(subscription.id, {
+          status: SUBSCRIPTION_STATUSES.PENDING_CONFIRMATION,
+          lifecycleGeneration: nextGeneration(subscription.lifecycleGeneration),
+          consent,
+          confirmationDelivery: newConfirmationDelivery(),
+          confirmationSentAt: null,
+          confirmedAt: null,
+          unsubscribedAt: null,
+          updatedAt: now
+        })
+
+        await appendEvent(transaction, {
+          contactId: contact.id,
+          subscriptionId: subscription.id,
+          type: NEWSLETTER_EVENT_TYPES.RESUBSCRIBED,
+          occurredAt: now,
+          metadata: {
+            audienceKey,
+            consentVersion: consent.version,
+            ...(consent.source != null ? { source: consent.source } : {})
+          }
+        })
+
+        return {
+          contact,
+          subscription,
+          shouldSend: contact.status === CONTACT_STATUSES.ENABLED
+        }
+      }
+
+      return {
+        contact,
+        subscription,
+        shouldSend: contact.status === CONTACT_STATUSES.ENABLED
+          && subscription.status === SUBSCRIPTION_STATUSES.PENDING_CONFIRMATION
+          && subscription.confirmationDelivery != null
+      }
+    })
+
+    if (transition.shouldSend) {
+      runInBackground(requestConfirmation(
+        transition.contact.id,
+        transition.subscription.id,
+        transition.subscription.lifecycleGeneration
+      ))
+    }
+
+    return PUBLIC_ACCEPTED
+  }
+
   const service: NewsletterCore = {
     storage: config.storage,
     mailer: config.mailer,
@@ -650,136 +788,8 @@ export function createNewsletter(config: NewsletterConfig): NewsletterCore {
     }),
     getDeliveryEligibility,
 
-    async subscribe(input) {
-      const email = normalizeAndValidateEmail(input.email)
-      const audienceKey = assertAudienceKey(input.audience ?? defaultAudience)
-      const now = clock.now()
-      const consent = consentFromPublicInput(input.consent, now)
-      await enforcePublicSecurity(
-        'subscribe',
-        email,
-        audienceKey,
-        input.securityContext
-      )
-
-      const transition = await runTransaction(async transaction => {
-        let contact = await transaction.getContactByEmail(email)
-        let contactCreated = false
-
-        if (contact == null) {
-          contact = await transaction.createContact({
-            id: idGenerator.generate(),
-            capabilityGeneration: 1,
-            email,
-            status: CONTACT_STATUSES.ENABLED,
-            subject: input.subject ?? null,
-            ...(input.metadata !== undefined ? { metadata: input.metadata } : {}),
-            createdAt: now,
-            updatedAt: now
-          })
-          contactCreated = true
-        }
-
-        let subscription = await transaction.getSubscription(
-          contact.id,
-          audienceKey
-        )
-
-        if (subscription == null) {
-          if (!contactCreated) {
-            contact = await transaction.updateContact(contact.id, {
-              capabilityGeneration: nextGeneration(contact.capabilityGeneration),
-              updatedAt: now
-            })
-          }
-
-          subscription = await transaction.createSubscription({
-            id: idGenerator.generate(),
-            lifecycleGeneration: 1,
-            contactId: contact.id,
-            audienceKey,
-            status: SUBSCRIPTION_STATUSES.PENDING_CONFIRMATION,
-            consent,
-            confirmationDelivery: newConfirmationDelivery(),
-            confirmationSentAt: null,
-            confirmedAt: null,
-            unsubscribedAt: null,
-            createdAt: now,
-            updatedAt: now
-          })
-
-          await appendEvent(transaction, {
-            contactId: contact.id,
-            subscriptionId: subscription.id,
-            type: NEWSLETTER_EVENT_TYPES.SIGNED_UP,
-            occurredAt: now,
-            metadata: {
-              audienceKey,
-              consentVersion: consent.version,
-              ...(consent.source != null ? { source: consent.source } : {})
-            }
-          })
-
-          return {
-            contact,
-            subscription,
-            shouldSend: contact.status === CONTACT_STATUSES.ENABLED
-          }
-        }
-
-        if (subscription.status === SUBSCRIPTION_STATUSES.UNSUBSCRIBED) {
-          contact = await transaction.updateContact(contact.id, {
-            capabilityGeneration: nextGeneration(contact.capabilityGeneration),
-            updatedAt: now
-          })
-          subscription = await transaction.updateSubscription(subscription.id, {
-            status: SUBSCRIPTION_STATUSES.PENDING_CONFIRMATION,
-            lifecycleGeneration: nextGeneration(subscription.lifecycleGeneration),
-            consent,
-            confirmationDelivery: newConfirmationDelivery(),
-            confirmationSentAt: null,
-            confirmedAt: null,
-            unsubscribedAt: null,
-            updatedAt: now
-          })
-
-          await appendEvent(transaction, {
-            contactId: contact.id,
-            subscriptionId: subscription.id,
-            type: NEWSLETTER_EVENT_TYPES.RESUBSCRIBED,
-            occurredAt: now,
-            metadata: {
-              audienceKey,
-              consentVersion: consent.version,
-              ...(consent.source != null ? { source: consent.source } : {})
-            }
-          })
-
-          return {
-            contact,
-            subscription,
-            shouldSend: contact.status === CONTACT_STATUSES.ENABLED
-          }
-        }
-
-        return {
-          contact,
-          subscription,
-          shouldSend: contact.status === CONTACT_STATUSES.ENABLED
-            && subscription.status === SUBSCRIPTION_STATUSES.PENDING_CONFIRMATION
-            && subscription.confirmationDelivery != null
-        }
-      })
-
-      if (transition.shouldSend) {
-        runInBackground(requestConfirmation(
-          transition.contact.id,
-          transition.subscription.id,
-          transition.subscription.lifecycleGeneration
-        ))
-      }
-
-      return PUBLIC_ACCEPTED
+    subscribe(input) {
+      return subscribe(input)
     },
 
     async resendConfirmation(input) {
@@ -1310,5 +1320,17 @@ export function createNewsletter(config: NewsletterConfig): NewsletterCore {
     }
   }
 
-  return Object.freeze(service)
+  return {
+    service: Object.freeze(service),
+    async subscribeMany(inputs: readonly SubscribeInput[]) {
+      for (const input of inputs) {
+        const email = normalizeAndValidateEmail(input.email)
+        const audience = assertAudienceKey(input.audience ?? defaultAudience)
+        consentFromPublicInput(input.consent, clock.now())
+        await enforcePublicSecurity('subscribe', email, audience, input.securityContext)
+      }
+      for (const input of inputs) await subscribe(input, true)
+      return PUBLIC_ACCEPTED
+    }
+  }
 }

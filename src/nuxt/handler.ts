@@ -5,7 +5,7 @@ import {
   normalizeAndValidateEmail
 } from '../index.js'
 import type { BetterNewsletterModuleOptions, NewsletterRoute } from '../nuxt.js'
-import { flushBetterNewsletter, newsletterSecurityContext, useBetterNewsletter, type BetterNewsletterServerConfig } from './server.js'
+import { flushBetterNewsletter, newsletterSecurityContext, subscribeNewsletterAudiences, useBetterNewsletter, type BetterNewsletterServerConfig } from './server.js'
 
 type PublicOptions = Pick<BetterNewsletterModuleOptions, 'defaultAudience' | 'audiences' | 'consent'>
 
@@ -75,25 +75,23 @@ export async function handleNewsletterRequest(
     const service = await useBetterNewsletter(event, configuration)
     const securityContext = await newsletterSecurityContext(event, body)
     try {
-      for (const audience of requested as string[]) {
-        if (action === 'subscribe') {
-          await service.subscribe({
-            email,
-            audience,
-            consent: {
-              granted: true,
-              version: options.consent.version,
-              source: options.consent.source
-            },
-            ...(securityContext === undefined ? {} : { securityContext })
-          })
-        } else {
-          await service.resendConfirmation({
-            email,
-            audience,
-            ...(securityContext === undefined ? {} : { securityContext })
-          })
-        }
+      if (action === 'subscribe') {
+        await subscribeNewsletterAudiences(event, (requested as string[]).map(audience => ({
+          email,
+          audience,
+          consent: {
+            granted: true,
+            version: options.consent.version,
+            source: options.consent.source
+          },
+          ...(securityContext === undefined ? {} : { securityContext })
+        })))
+      } else {
+        await service.resendConfirmation({
+          email,
+          audience: requested[0] as string,
+          ...(securityContext === undefined ? {} : { securityContext })
+        })
       }
     } catch (error) {
       if (error instanceof NewsletterError && (

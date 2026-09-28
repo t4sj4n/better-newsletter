@@ -319,6 +319,69 @@ describe('Nuxt server integration', () => {
     expect(JSON.stringify(contact)).not.toContain('captcha')
   })
 
+  it.each(['abuse', 'email limit', 'client limit', 'guard error'])(
+    'does not subscribe any audience when a later audience fails its %s check',
+    async failure => {
+      const { config, storage, sent } = configuration()
+      const verify = vi.fn(async (input: { audienceKey: string }) => {
+        if (input.audienceKey === 'product' && failure === 'guard error') {
+          throw new Error('Guard unavailable')
+        }
+        return { allowed: failure !== 'abuse' || input.audienceKey !== 'product' }
+      })
+      const consume = vi.fn(async () => ({ allowed: consume.mock.calls.length < 2 }))
+      const http = await fixture({
+        ...config,
+        abuseGuard: { verify },
+        ...(failure === 'email limit' ? {
+          rateLimiter: { consume },
+          rateLimitKeyProvider: { createKey: async input => input.audienceKey }
+        } : {}),
+        ...(failure === 'client limit' ? {
+          trustedClientIdentity: () => 'trusted-client',
+          clientRateLimit: {
+            secret: 'opaque-client-key-0123456789abcdef0123456789',
+            limiter: { consume }
+          }
+        } : {})
+      })
+      const result = await http.request('subscribe', {
+        email: 'person@example.com', consent: true, consentVersion: '2026-01',
+        audiences: ['default', 'product']
+      })
+      if (failure === 'guard error') expect(result.status).toBe(500)
+      else expect(result).toEqual({ status: 200, body: { accepted: true } })
+      expect(verify.mock.calls.map(([input]) => input.audienceKey)).toEqual(['default', 'product'])
+      expect(await storage.transaction(tx => tx.getContactByEmail('person@example.com'))).toBeNull()
+      expect(sent).toHaveLength(0)
+    }
+  )
+
+  it('checks every audience exactly once before creating subscriptions', async () => {
+    const { config, storage, sent } = configuration()
+    const verify = vi.fn(async () => {
+      expect(await storage.transaction(tx => tx.getContactByEmail('person@example.com'))).toBeNull()
+      expect(sent).toHaveLength(0)
+      return { allowed: true }
+    })
+    const consume = vi.fn(async () => ({ allowed: true }))
+    const http = await fixture({
+      ...config,
+      abuseGuard: { verify },
+      rateLimiter: { consume },
+      rateLimitKeyProvider: { createKey: async input => input.audienceKey }
+    })
+    expect(await http.request('subscribe', {
+      email: 'person@example.com', consent: true, consentVersion: '2026-01',
+      audiences: ['default', 'product']
+    })).toEqual({ status: 200, body: { accepted: true } })
+    expect(verify).toHaveBeenCalledTimes(2)
+    expect(consume).toHaveBeenCalledTimes(2)
+    expect(sent).toHaveLength(2)
+    const contact = await storage.transaction(tx => tx.getContactByEmail('person@example.com'))
+    expect(await storage.transaction(tx => tx.listSubscriptions(contact!.id))).toHaveLength(2)
+  })
+
   it('uses a trusted origin for links and leaves subject linking to application code', async () => {
     const { config } = configuration()
     expect(newsletterUrl(config.origin, '/confirm', 'a&b'))

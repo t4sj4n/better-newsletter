@@ -7,7 +7,8 @@ export default defineEventHandler(async (event) => {
   setHeader(event, 'Cache-Control', 'no-store')
   setHeader(event, 'Referrer-Policy', 'no-referrer')
 
-  const address = getQuery(event).email
+  const body = await readBody<{ email?: unknown } | null>(event)
+  const address = body?.email
   if (typeof address !== 'string') {
     throw createError({ statusCode: 400, statusMessage: 'Enter an email address.' })
   }

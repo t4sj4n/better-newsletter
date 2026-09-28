@@ -138,7 +138,7 @@ export async function resolve(specifier, context, nextResolve) {
   }
   const tarball = join(scratch, tarballs[0])
   checkArchive(tarball)
-  run('pnpm', ['exec', 'publint', 'run', tarball, '--strict'])
+  run('pnpm', ['exec', 'publint', tarball, '--strict'])
 
   checkConsumer('core', tarball, {}, `
 import * as core from 'better-newsletter'

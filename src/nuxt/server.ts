@@ -1,6 +1,7 @@
+import { createNewsletterWithSubscriptionBatch } from '../create-newsletter.js'
+import type { SubscribeInput } from '../operations.js'
 import type { H3Event } from 'h3'
 import {
-  createNewsletter,
   createHmacRateLimitKeyProvider,
   type NewsletterConfig,
   type NewsletterCore,
@@ -35,6 +36,7 @@ const requestServices = new WeakMap<H3Event, {
   service: Promise<NewsletterCore>
   tasks: Promise<void>[]
 }>()
+const requestBatches = new WeakMap<H3Event, ReturnType<typeof createNewsletterWithSubscriptionBatch>['subscribeMany']>()
 const requestConfigs = new WeakMap<H3Event, BetterNewsletterServerConfig>()
 
 function assertOrigin(origin: string): void {
@@ -89,7 +91,7 @@ export async function useBetterNewsletter(
       }),
       rateLimits: clientRateLimit.policies
     }]
-    const core = createNewsletter({
+    const batch = createNewsletterWithSubscriptionBatch({
       ...config,
       ...(rateLimitChecks.length === 0 ? {} : { rateLimitChecks }),
       runBackground(task) {
@@ -102,6 +104,8 @@ export async function useBetterNewsletter(
         }
       }
     })
+    requestBatches.set(event, batch.subscribeMany)
+    const core = batch.service
     const safeService: NewsletterCore = {
       ...core,
       async subscribe(input) {
@@ -138,5 +142,15 @@ export async function flushBetterNewsletter(event: H3Event): Promise<void> {
   if (request == null) return
   for (let index = 0; index < request.tasks.length; index += 1) {
     await request.tasks[index]
+  }
+}
+
+/** Runs all audience security checks before subscribing any audience. */
+export async function subscribeNewsletterAudiences(event: H3Event, inputs: readonly SubscribeInput[]): Promise<void> {
+  await useBetterNewsletter(event)
+  try {
+    await requestBatches.get(event)!(inputs)
+  } finally {
+    await flushBetterNewsletter(event)
   }
 }

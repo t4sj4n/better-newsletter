@@ -15,13 +15,26 @@ const inbox = ref<Inbox | null>(null)
 const message = ref('')
 const busy = ref(false)
 
+let inboxRequest = 0
+watch(email, () => {
+  inboxRequest += 1
+  inbox.value = null
+}, { flush: 'sync' })
+
 async function refreshInbox() {
-  if (!email.value.trim()) return
+  const request = ++inboxRequest
+  const address = email.value.trim()
+  inbox.value = null
+  if (!address) return
   try {
-    inbox.value = await $fetch<Inbox>('/api/example/inbox', {
-      query: { email: email.value.trim() }
+    const result = await $fetch<Inbox>('/api/example/inbox', {
+      method: 'POST',
+      body: { email: address }
     })
+    if (request === inboxRequest) inbox.value = result
   } catch {
+    if (request !== inboxRequest) return
+    inbox.value = null
     message.value = 'Could not load the local inbox.'
   }
 }

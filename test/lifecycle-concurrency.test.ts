@@ -114,6 +114,65 @@ describe('generation-bound lifecycle concurrency', () => {
     }
   )
 
+  it('invalidates an in-flight unsubscribe-all target when an existing contact starts a new audience', async () => {
+    const { newsletter, createInstance, waitForEvents } = setup()
+    await newsletter.subscribe(signup)
+    await waitForEvents(NEWSLETTER_EVENT_TYPES.CONFIRMATION_SENT, 1)
+
+    const all = (await newsletter.createUnsubscribeCapability({
+      email,
+      all: true
+    }))!
+    const reader = createInstance()
+    const resolved = gate()
+    const resume = gate()
+    const original = reader.capabilities.resolveUnsubscribeCapability
+
+    vi.spyOn(reader.capabilities, 'resolveUnsubscribeCapability')
+      .mockImplementationOnce(async value => {
+        const target = await original(value)
+        expect(target).toMatchObject({
+          scope: 'ALL',
+          capabilityGeneration: 1
+        })
+        resolved.release()
+        await resume.promise
+        return target
+      })
+
+    const stale = reader.unsubscribeAll({ capability: all })
+
+    try {
+      await resolved.promise
+      await newsletter.subscribe({
+        ...signup,
+        audience: 'product-news'
+      })
+      await waitForEvents(NEWSLETTER_EVENT_TYPES.CONFIRMATION_SENT, 2)
+
+      expect(await newsletter.getContact({ email })).toMatchObject({
+        capabilityGeneration: 2
+      })
+      expect(await newsletter.getSubscription({
+        email,
+        audience: 'product-news'
+      })).toMatchObject({
+        lifecycleGeneration: 1,
+        status: SUBSCRIPTION_STATUSES.PENDING_CONFIRMATION
+      })
+    } finally {
+      resume.release()
+    }
+
+    await expect(stale).resolves.toEqual({ unsubscribed: false })
+    expect((await newsletter.getSubscription({ email }))?.status)
+      .toBe(SUBSCRIPTION_STATUSES.PENDING_CONFIRMATION)
+    expect((await newsletter.getSubscription({
+      email,
+      audience: 'product-news'
+    }))?.status).toBe(SUBSCRIPTION_STATUSES.PENDING_CONFIRMATION)
+  })
+
   it('issues valid identical links concurrently across independent signers', async () => {
     const { newsletter, createInstance, waitForEvents } = setup()
     await newsletter.subscribe(signup)

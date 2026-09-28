@@ -1,16 +1,24 @@
 export {
   createNewsletter,
   DEFAULT_CONFIRMATION_EXPIRES_IN_MS,
-  systemClock
+  systemClock,
+  systemIdGenerator
 } from './create-newsletter.js'
 
 export type {
   Clock,
   ConfirmationOptions,
+  IdGenerator,
   NewsletterConfig,
   NewsletterCore,
   TokenGenerator
 } from './config.js'
+
+export type {
+  ConfirmationCapabilityTarget,
+  NewsletterCapabilities,
+  UnsubscribeCapabilityTarget
+} from './capabilities.js'
 
 export {
   CONTACT_STATUSES,
@@ -51,8 +59,42 @@ export type {
   NewsletterErrorCode
 } from './errors.js'
 
+export type {
+  ConfirmationMailInput,
+  MailDeliveryResult,
+  NewsletterMailer
+} from './mailer.js'
+
 export {
   assertAudienceKey,
   DEFAULT_AUDIENCE_KEY,
+  normalizeAndValidateEmail,
   normalizeEmail
 } from './normalize.js'
+
+export type {
+  ConfirmInput,
+  ConfirmResult,
+  ContactLookup,
+  CreateUnsubscribeCapabilityInput,
+  ImportSubscriptionInput,
+  LinkSubjectInput,
+  NewsletterService,
+  PublicRequestResult,
+  ResendConfirmationInput,
+  SubscribeInput,
+  SubscriptionLookup,
+  SuppressContactInput,
+  UnsubscribeInput,
+  UnsubscribeResult,
+  UnsuppressContactInput
+} from './operations.js'
+
+export type {
+  ContactPatch,
+  CreateContactInput,
+  CreateSubscriptionInput,
+  NewsletterStorage,
+  NewsletterStorageTransaction,
+  SubscriptionPatch
+} from './storage.js'

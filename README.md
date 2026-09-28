@@ -2,27 +2,26 @@
 
 Framework-agnostic newsletter subscription and consent lifecycle infrastructure for TypeScript.
 
-> **Status:** early development. The domain foundation is being built in issue #1; lifecycle operations are added in the following issues.
+> **Status:** early development. The core subscription lifecycle is implemented; production token hardening, database and delivery adapters follow in issues #3–#6.
 
-## Why this package exists
+## Scope
 
-Applications commonly need a small, security-conscious layer for newsletter consent without adopting a full campaign platform. `better-newsletter` is intended to own the reusable subscription lifecycle while leaving UI, application identity, campaigns, analytics, and provider-specific infrastructure outside the core.
-
-The project is deliberately narrower than a newsletter product:
+`better-newsletter` provides reusable newsletter lifecycle primitives without becoming a campaign platform:
 
 - explicit newsletter consent;
 - Double Opt-In lifecycle;
 - per-audience subscription state;
 - global delivery suppression;
-- auditable lifecycle evidence;
-- provider-neutral storage and mail boundaries;
+- append-only lifecycle evidence;
+- trusted migration/import of known historical consent;
+- provider-neutral storage, delivery and capability contracts;
 - optional linking to an application-owned subject.
 
-It is **not** a campaign editor, CRM, marketing automation suite, authentication library, or segmentation/query engine.
+It is **not** a campaign editor, CRM, marketing automation suite, authentication library, analytics product, or segmentation/query engine.
 
-## Domain model
+## Contact and subscription model
 
-A contact is the delivery identity. A subscription is the consent state for one audience.
+A Contact is the delivery identity. A Subscription is the consent state for one audience.
 
 ```text
 Contact: person@example.com
@@ -38,46 +37,142 @@ This distinction is intentional:
 
 - bounce/complaint/manual suppression belongs to the **Contact**;
 - consent, confirmation and unsubscribe belong to a **Subscription**;
-- one e-mail address can therefore have multiple independent subscriptions;
-- suppressing delivery does not rewrite historical consent state.
+- one e-mail address can have multiple independent subscriptions;
+- suppression blocks delivery without rewriting historical consent state.
 
-V1 uses opaque `audienceKey` strings rather than introducing a list-management subsystem. A single-newsletter application can simply use the built-in `default` audience.
+V1 uses opaque `audienceKey` strings rather than a list-management subsystem. Single-newsletter applications can use the built-in `default` audience.
+
+## Core lifecycle
+
+```text
+new explicit consent
+  -> PENDING_CONFIRMATION
+  -> confirmation
+  -> ACTIVE
+  -> unsubscribe
+  -> UNSUBSCRIBED
+  -> new explicit consent
+  -> PENDING_CONFIRMATION
+```
+
+A globally suppressed Contact cannot be confirmed or receive a confirmation message until a trusted caller deliberately unsuppresses it.
+
+Repeated public signup is neutral and idempotent:
+
+- pending subscriptions are not duplicated or silently given new consent evidence;
+- active subscriptions are not downgraded or re-confirmed;
+- unsubscribed subscriptions require fresh consent and a fresh DOI cycle;
+- suppressed Contacts remain suppressed.
+
+Use the dedicated `resendConfirmation()` operation when a new confirmation message is needed. Abuse throttling and hardened token replacement semantics belong to #3.
+
+## Creating a service
+
+The lifecycle is framework- and provider-neutral. Storage, delivery and capability behavior are injected:
+
+```ts
+import { createNewsletter } from 'better-newsletter'
+
+const newsletter = createNewsletter({
+  storage,
+  mailer,
+  capabilities,
+  tokenGenerator,
+  confirmation: {
+    expiresInMs: 24 * 60 * 60 * 1000
+  }
+})
+```
+
+Time and IDs can be injected for deterministic tests.
+
+## Subscribe and confirm
+
+Public signup requires an explicit consent signal and version:
+
+```ts
+await newsletter.subscribe({
+  email: 'person@example.com',
+  audience: 'default',
+  consent: {
+    granted: true,
+    version: 'privacy-2026-09',
+    source: 'landing-page',
+    locale: 'de'
+  }
+})
+```
+
+The public result is deliberately neutral:
+
+```ts
+{ accepted: true }
+```
+
+It does not reveal whether the address is unknown, pending, active, unsubscribed or suppressed. Confirmation delivery runs asynchronously; signup acceptance does not wait for mail delivery.
+
+Confirmation is capability-based:
+
+```ts
+await newsletter.confirm({ token })
+```
+
+The capability contract is intentionally abstract in #2. Issue #3 owns cryptographic generation, hashed persistence, expiry cleanup, replay hardening and scanner-safe web integration.
+
+## Unsubscribe and preferences
+
+Create an unsubscribe capability from trusted application code and pass only that opaque value to the public action:
+
+```ts
+const capability = await newsletter.createUnsubscribeCapability({
+  email: 'person@example.com',
+  audience: 'product-news'
+})
+
+await newsletter.unsubscribe({ capability })
+```
+
+A separate capability can authorize explicit unsubscribe-all behavior:
+
+```ts
+const capability = await newsletter.createUnsubscribeCapability({
+  email: 'person@example.com',
+  all: true
+})
+
+await newsletter.unsubscribeAll({ capability })
+```
+
+Unsubscribe changes Subscription consent state. It does **not** globally suppress the Contact.
 
 ## External application subjects
 
 A Contact may optionally link to an application-owned entity:
 
 ```ts
-type ExternalSubject = {
-  namespace: string
-  id: string
-}
+await newsletter.linkSubject({
+  email: 'person@example.com',
+  subject: {
+    namespace: 'tipplabor-user',
+    id: '550e8400-e29b-41d4-a716-446655440000'
+  }
+})
 ```
 
-For example:
+The reference is opaque. `better-newsletter` does not query, own, or require the host application's user table. Linking never creates consent or changes Subscription status. Replacing a different existing subject requires the trusted `replace: true` option.
+
+## Suppression
+
+Global operational suppression is explicit and independent from newsletter consent:
 
 ```ts
-{
-  namespace: 'tipplabor-user',
-  id: '550e8400-e29b-41d4-a716-446655440000'
-}
+await newsletter.suppressContact({
+  email: 'person@example.com',
+  reason: 'BOUNCE'
+})
 ```
 
-The reference is intentionally opaque. `better-newsletter` does not query, own, or require the application's user table. Linking a subject is identity metadata only and must never create newsletter consent.
-
-## Delivery eligibility
-
-The core exposes one shared eligibility rule:
-
-```ts
-import {
-  getDeliveryEligibility,
-  CONTACT_STATUSES,
-  SUBSCRIPTION_STATUSES
-} from 'better-newsletter'
-```
-
-A subscription is eligible only when:
+The shared delivery eligibility rule remains:
 
 ```text
 Contact.status == ENABLED
@@ -86,79 +181,30 @@ AND confirmedAt is present
 AND unsubscribedAt is absent
 ```
 
-Future storage and campaign integrations should consume or parity-test against this rule rather than recreating their own interpretation of newsletter status.
+A deliberate trusted `unsuppressContact()` operation re-enables the Contact but does not reactivate or rewrite any Subscription.
 
-## Factory and dependency boundary
+## Trusted import
 
-The initial factory establishes dependency injection without binding the root package to a framework, database, or mail provider:
-
-```ts
-import { createNewsletter } from 'better-newsletter'
-
-const newsletter = createNewsletter({
-  storage,
-  mailer,
-  confirmation: {
-    expiresInMs: 24 * 60 * 60 * 1000
-  }
-})
-```
-
-Time and future token generation can be injected for deterministic tests:
+Existing applications can migrate known historical consent without manufacturing a new DOI:
 
 ```ts
-const newsletter = createNewsletter({
-  storage,
-  mailer,
-  clock: {
-    now: () => new Date('2026-09-28T08:00:00.000Z')
+await newsletter.importSubscription({
+  email: 'legacy@example.com',
+  audience: 'default',
+  status: 'ACTIVE',
+  consent: {
+    version: 'legacy-v1',
+    consentedAt: new Date('2025-01-01T00:00:00Z')
   },
-  tokenGenerator: {
-    generate: () => 'test-token'
-  }
+  confirmedAt: new Date('2025-01-01T00:05:00Z')
 })
 ```
 
-The concrete storage and mail adapter contracts are intentionally completed alongside the lifecycle/security work in issues #2 and #3 rather than prematurely coupling the domain foundation to one persistence model.
+Import is a trusted service operation, not a public signup path. Importing `ACTIVE` requires an explicit `confirmedAt` and no `unsubscribedAt`; the library never invents confirmation evidence. Repeating the same import is idempotent, while conflicting historical facts are rejected.
 
-## Planned lifecycle API
+## Lifecycle events
 
-Issues #2 and #3 add the operational API on top of this foundation:
-
-```ts
-newsletter.subscribe(...)
-newsletter.confirm(...)
-newsletter.resendConfirmation(...)
-newsletter.unsubscribe(...)
-newsletter.unsubscribeAll(...)
-newsletter.getContact(...)
-newsletter.getSubscription(...)
-newsletter.listSubscriptions(...)
-newsletter.linkSubject(...)
-newsletter.suppressContact(...)
-newsletter.importSubscription(...)
-```
-
-The trusted import path is intended for migrating known historical consent facts. It must never be exposed as the public signup path and must never invent Double Opt-In evidence.
-
-## Planned package shape
-
-V1 remains one npm package. Optional integrations will use subpath exports rather than separate packages:
-
-```ts
-import { createNewsletter } from 'better-newsletter'
-
-// Planned:
-import { memoryStorage } from 'better-newsletter/memory'
-import { kyselyStorage } from 'better-newsletter/kysely'
-import { resendMailer } from 'better-newsletter/resend'
-```
-
-Nuxt/Nitro support is also planned as a thin adapter. The core itself must not import Nuxt, Nitro, Vue, Kysely, PostgreSQL, Resend, or Better Auth.
-
-## Lifecycle evidence
-
-The domain defines append-only lifecycle events for evidence and diagnostics, including concepts such as:
+Meaningful transitions append lifecycle evidence such as:
 
 ```text
 SIGNED_UP
@@ -170,17 +216,35 @@ CONFIRMED
 UNSUBSCRIBED
 SUPPRESSED
 UNSUPPRESSED
+SUBJECT_LINKED
 IMPORTED
 ```
 
-The current Contact and Subscription remain the operational source of truth. Events are evidence/history, not an event-sourced reconstruction requirement.
+Current Contact and Subscription rows remain the operational source of truth. The event contract is append-only; it is not an event-sourcing requirement.
+
+## Memory adapters
+
+For tests and development:
+
+```ts
+import {
+  memoryCapabilities,
+  memoryStorage
+} from 'better-newsletter/memory'
+```
+
+`memoryStorage()` serializes conflicting in-process transactions so lifecycle concurrency can be tested deterministically.
+
+`memoryCapabilities()` stores raw opaque values in memory and is **not production security**. It exists to exercise #2 without prematurely implementing #3. Do not use it as a production confirmation/unsubscribe token store.
+
+Production storage must provide transaction semantics strong enough to serialize conflicting Contact + audience transitions. The PostgreSQL/Kysely adapter in #4 will additionally enforce database uniqueness and atomicity.
 
 ## Development
 
 This repository uses pnpm.
 
 ```bash
-pnpm install
+pnpm install --frozen-lockfile
 pnpm check
 ```
 
@@ -197,37 +261,30 @@ pnpm build
 
 ### Tipplabor
 
-Tipplabor is the primary behavioral reference for the first implementation because it already exercises a real Double Opt-In flow, hashed confirmation tokens, resend throttling, neutral public responses, unsubscribe capabilities, event history, and concurrency edge cases.
-
-Relevant reference points:
+Tipplabor is the primary behavioral reference. Its existing newsletter implementation already exercises real DOI, re-subscribe, neutral public responses, provider-send result recording, unsubscribe and concurrency edge cases:
 
 - https://github.com/t4sj4n/tipplabor/issues/65
 - https://github.com/t4sj4n/tipplabor/blob/staging/frontend/server/repositories/newsletter-opt-in-repository.ts
-- https://github.com/t4sj4n/tipplabor/blob/staging/frontend/server/utils/waitlist-email.ts
-- https://github.com/t4sj4n/tipplabor/blob/staging/frontend/server/database/migrations/082_newsletter_history_and_launch_cutoff.ts
+- https://github.com/t4sj4n/tipplabor/blob/staging/frontend/shared/utils/newsletter.ts
 
-The goal is to generalize proven behavior and tests, **not** to copy Tipplabor-specific routes, tables, UI text, account models, launch logic, or Cloudflare assumptions.
+The goal is to generalize proven behavior and tests, **not** to copy Tipplabor-specific routes, tables, UI text, account models, launch logic or Cloudflare assumptions.
 
 ### listmonk
 
-[listmonk](https://github.com/knadh/listmonk) is a useful architectural reference for separating subscriber-wide state from per-list subscription state and for thinking through preference-management edge cases.
+[listmonk](https://github.com/knadh/listmonk) is a non-normative architectural reference for separating subscriber-wide state from per-list subscription state and for preference-management edge cases.
 
-listmonk is licensed under AGPLv3. This MIT project uses it only as a non-normative design reference. **Do not copy or port listmonk implementation code.**
+listmonk is AGPLv3. This MIT project does **not** copy or port listmonk implementation code.
 
-## Scope of issue #1
+## Issue boundaries
 
-Issue #1 establishes:
+Issue #2 implements the framework-neutral lifecycle and consent model. The following remain separate:
 
-- strict TypeScript/ESM package foundation;
-- Contact and Subscription domain types;
-- opaque external-subject references;
-- lifecycle-event types;
-- one central delivery-eligibility rule;
-- factory/dependency-injection boundaries;
-- typed semantic errors;
-- documentation and tests for the foundation.
-
-Actual subscribe/confirm/unsubscribe behavior belongs to #2. Token security and abuse protection belong to #3.
+- #3: cryptographic token/capability security, abuse protection and cleanup;
+- #4: Kysely/PostgreSQL persistence;
+- #5: Resend delivery adapter;
+- #6: Nuxt/Nitro integration;
+- #7: provider bounce/complaint feedback;
+- #8: privacy export and erasure lifecycle.
 
 ## License
 

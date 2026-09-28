@@ -2,7 +2,7 @@
 
 Framework-agnostic newsletter subscription and consent lifecycle infrastructure for TypeScript.
 
-> **Status:** early development. The core lifecycle, PostgreSQL/Kysely persistence, and Resend confirmation delivery are implemented; framework adapters follow in issue #6.
+> **Status:** early development. The core lifecycle, PostgreSQL/Kysely persistence, Resend confirmation delivery, and Nuxt/Nitro adapter are available.
 
 ## Scope
 
@@ -64,7 +64,7 @@ Repeated public signup is neutral and idempotent:
 - unsubscribed subscriptions require fresh consent and a fresh DOI cycle;
 - suppressed Contacts remain suppressed.
 
-Use the dedicated `resendConfirmation()` operation when a new confirmation message is needed. Abuse throttling and hardened token replacement semantics belong to #3.
+Use the dedicated `resendConfirmation()` operation when a new confirmation message is needed. Abuse throttling and confirmation-token replacement are handled by the security and lifecycle configuration described below.
 
 ## Creating a service
 
@@ -284,7 +284,7 @@ The renderer receives the Contact and Subscription (including locale, consent so
 
 Resend receives a SHA-256 idempotency key derived from the stable work ID, *individual attempt* ID and lifecycle generation, not from the recipient, body or bearer token. Replaying the **same attempt with the same payload** can be deduplicated by Resend for [up to 24 hours](https://resend.com/docs/dashboard/emails/idempotency-keys). New leased attempts carry new tokens and new keys, so Resend cannot guarantee exactly-once delivery across attempts. A 409 for an in-flight idempotent request, a generic 5xx or an unknown transport outcome is `AMBIGUOUS`: the core holds the claim until its lease expires instead of starting a new attempt immediately. A new attempt after lease expiry still uses a fresh key; the adapter cannot promise cross-attempt deduplication. Known API-key errors map to `AUTH_FAILED`; other 403 responses, including sender-domain validation failures, map to `INVALID_REQUEST`. Provider rejection is never recorded as an accepted send. The adapter emits only bounded failure codes and does not log API keys, tokens or rendered bodies or persist provider payloads. The host remains responsible for its privacy policy and provider agreement.
 
-Both `subscribe()` and `resendConfirmation()` answer before delivery finishes, so neither response time nor delivery errors reveal whether an address has pending work. Pass `runBackground` to hand the background work to the runtime, for example to `event.waitUntil()` on serverless platforms. The tasks it receives never reject. Background failures are reported through `logger.error` (default: `console`); failures of the synchronous state transition propagate to the caller.
+At the core level, `subscribe()` and `resendConfirmation()` enqueue confirmation delivery and normally answer before it finishes, so delivery errors do not reveal whether an address has pending work. Pass `runBackground` to hand the work to the runtime, for example to `event.waitUntil()` on serverless platforms. The tasks it receives never reject. Background failures are reported through `logger.error` (default: `console`); failures of the synchronous state transition propagate to the caller. The Nuxt server helper handles runtimes without `waitUntil` differently, as described below.
 
 ```ts
 const newsletter = createNewsletter({
@@ -295,6 +295,8 @@ const newsletter = createNewsletter({
   logger
 })
 ```
+
+When adapting a runtime without `waitUntil`, collect background tasks and **await them before the request ends** (or move delivery to a durable worker). Simply starting a floating Promise is not reliable when a serverless worker can terminate at response time. This can extend response time, but the public response must still be neutral. The core does not schedule retries after a restart; retry unfinished work through a later signup/resend or your own scheduler.
 
 ## Unsubscribe and preferences
 
@@ -322,6 +324,21 @@ await newsletter.unsubscribeAll({ capability })
 
 Unsubscribe changes Subscription consent state. It does **not** globally suppress the Contact.
 
+A distinct, purpose-bound capability lets a trusted server expose only public audience keys and statuses through a read-only preferences POST:
+
+```ts
+const capability = await newsletter.createManagePreferencesCapability({
+  email: 'person@example.com'
+})
+const subscriptions = capability == null
+  ? null
+  : await newsletter.listPreferences({ capability })
+// [{ audience: 'default', status: 'ACTIVE', unsubscribeCapability: '...' }, ...]
+// or null for an invalid/stale link
+```
+
+Do not issue this capability from a public email-only endpoint. Render a safe GET landing page, then submit the capability by POST to fetch preferences. Listing does not change consent or expose the Contact email or subject. The result includes per-audience unsubscribe capabilities: treat those as bearer credentials, not public display data.
+
 ## External application subjects
 
 A Contact may optionally link to an application-owned entity:
@@ -330,7 +347,7 @@ A Contact may optionally link to an application-owned entity:
 await newsletter.linkSubject({
   email: 'person@example.com',
   subject: {
-    namespace: 'tipplabor-user',
+    namespace: 'app-user',
     id: '550e8400-e29b-41d4-a716-446655440000'
   }
 })
@@ -460,9 +477,141 @@ Only confirmation-token digests, never raw confirmation tokens, belong in `newsl
 
 Deleting a Contact cascades to its Subscriptions, token records, and lifecycle events, so intentional erasure removes historical evidence too. Events are otherwise append-only; the schema does not use an immutable-event trigger that would block erasure. Plan operational retention, exports, and erasure with that behavior in mind.
 
+## Nuxt 4 / Nitro
+
+Install the package in a Nuxt 4 application:
+
+```bash
+pnpm add better-newsletter
+```
+
+```ts
+// nuxt.config.ts
+import BetterNewsletter from 'better-newsletter/nuxt'
+
+export default defineNuxtConfig({
+  modules: [BetterNewsletter],
+  betterNewsletter: {
+    defaultAudience: 'default',
+    consent: { version: 'privacy-2026-09', source: 'landing-page' },
+    audiences: {
+      default: { public: true },
+      'product-news': { public: true },
+      'weekly-analysis': { public: true }
+    }
+  }
+})
+```
+
+The default `server/better-newsletter.config.ts` is a **server-only** configuration factory; `useBetterNewsletter(event)` is a server-only Promise-returning accessor for trusted handlers. The factory returns an application-owned `origin`, storage, mailer and capabilities. Do not import either from browser code. Keep long-lived adapters (database pool or memory storage) outside the factory instead of recreating them on every request. The Nuxt helper automatically uses the platform's `waitUntil` when available; otherwise its `subscribe()` and `resendConfirmation()` Promises await pending delivery work before resolving. Custom handlers do **not** need to call `flushBetterNewsletter()` after awaiting either method; an awaited fallback can increase response time without changing the neutral result.
+
+```ts
+// server/better-newsletter.config.ts
+import { memoryCapabilities, memoryStorage } from 'better-newsletter/memory'
+import { defineBetterNewsletterConfig } from 'better-newsletter/nuxt/server'
+
+const storage = memoryStorage()
+const capabilities = memoryCapabilities()
+const appOrigin = new URL(process.env.APP_ORIGIN ?? 'http://localhost:3000').origin
+
+export default defineBetterNewsletterConfig(async () => ({
+  origin: appOrigin,
+  storage,
+  capabilities,
+  mailer: {
+    async sendConfirmation(input) {
+      // Implement server-side delivery using a link to
+      // new URL(`/newsletter/confirm?token=${encodeURIComponent(input.token)}`, appOrigin).
+      // Never log or persist raw tokens; see playground/ for a local-only inbox.
+      return { accepted: false, failure: 'TEMPORARY' }
+    }
+  }
+}))
+```
+
+This placeholder mailer deliberately does **not** deliver. Replace it with a production mailer before accepting real subscriptions. Configure `APP_ORIGIN` to your application's trusted, fixed public origin; never construct confirmation links from an arbitrary request `Host` or forwarded host header. Server-only `newsletterUrl(appOrigin, '/newsletter/confirm', token)` from `better-newsletter/nuxt/server` constructs a confirmation landing-page URL with a URL-encoded token.
+
+### Module options and public routes
+
+| Option | Meaning |
+| --- | --- |
+| `defaultAudience` | Audience used when none is supplied (default: `default`). |
+| `audiences` | Map of audience keys to `{ public: boolean }`. Only explicitly public audiences should be accepted by public endpoints. |
+| `consent` | Version and source stored with explicit public consent (defaults: `{ version: 'v1', source: 'signup-form' }`). |
+| `configFile` | Server config path, default `server/better-newsletter.config.ts`. |
+| `routes` | Override a POST route path with a string or disable it with `false`. |
+
+The built-in lifecycle actions and authorized preferences read are **POST only**:
+
+| Route | Request body |
+| --- | --- |
+| `/api/newsletter/subscribe` | `{ email, audience?, audiences?, consent: true, consentVersion: string, website?: string }` (`website` is a honeypot) |
+| `/api/newsletter/resend-confirmation` | `{ email, audience? }` |
+| `/api/newsletter/confirm` | `{ token }` |
+| `/api/newsletter/unsubscribe` | `{ capability }` |
+| `/api/newsletter/unsubscribe-all` | `{ capability }` |
+| `/api/newsletter/preferences` | `{ capability }` (read-only; returns `{ subscriptions: { audience, status, unsubscribeCapability }[] \| null }`) |
+
+For example, `routes: { resendConfirmation: '/api/mail/resend', preferences: false }` moves one endpoint and omits another. The route keys are `subscribe`, `resendConfirmation`, `confirm`, `unsubscribe`, `unsubscribeAll` and `preferences`. If you disable a route, implement its POST behavior yourself or omit that UI feature. Do not put secrets, storage, or provider credentials in `nuxt.config.ts` public runtime config or browser bundles.
+
+The module supplies API endpoints, **not** consent forms, mail copy, confirmation pages, unsubscribe/preferences pages, or authentication. Build your own UI. GET confirmation/unsubscribe links should render landing pages with explicit POST buttons; GET preferences pages should likewise make no authorized read until an explicit POST. Never issue unsubscribe or preferences capabilities to an anonymous caller based solely on an email address. Generate links in trusted server code (for example, after authenticating the user or while sending their mail).
+
+Public signup is anonymous and requires explicit versioned consent: the UI must obtain consent before POSTing `consent: true` and the `consentVersion` configured in `nuxt.config.ts`. The module uses the trusted configured source; it does not trust a source, locale, or subject in public JSON. Do not trust a claimed user ID from query parameters or headers. Use `await useBetterNewsletter(event)` in a protected server handler and call `linkSubject()` only after your application's **verified** session has supplied the identity; linking does not create consent. Likewise, `suppressContact`, `unsuppressContact`, imports and unsubscribe-capability issuance are trusted server operations, not public-by-email endpoints.
+
+Protect subscribe and resend with the optional `website` honeypot or `abuseGuard` and production rate limiting. Plan separate limits for action, audience, normalized address and trusted client IP/network (plus global budgets); a single per-address limit cannot stop many-address abuse. Resolve proxy IPs only through configured, trusted infrastructure and use HMAC-derived opaque keys rather than raw address/IP in rate-limit storage. The core accepts `rateLimiter`, `rateLimitKeyProvider` and `rateLimits`; the Nuxt factory can supply these alongside its mailer and storage. For an additional client-identity dimension, configure both `trustedClientIdentity(event)` (from verified infrastructure, not arbitrary forwarded headers) and `clientRateLimit: { secret, limiter, policies? }` in the server factory.
+
+The server-only config can also map untrusted request metadata into `securityContext(event, body)` for subscribe and resend. For example, add these properties to the object returned by `defineBetterNewsletterConfig` (where `verifyCaptchaToken` is your app's server-side CAPTCHA verifier):
+
+```ts
+securityContext: (_event, body) => ({
+  captchaToken: typeof body.captchaToken === 'string' ? body.captchaToken : null
+}),
+abuseGuard: {
+  async verify({ context }) {
+    const token = (context as { captchaToken?: unknown } | undefined)?.captchaToken
+    return { allowed: typeof token === 'string' && await verifyCaptchaToken(token) }
+  }
+}
+```
+
+The handler passes this transient context to the core `abuseGuard` and `rateLimitKeyProvider`; it does not itself persist raw IPs or CAPTCHA tokens. Never trust a client-supplied IP or session claim in `body`. If you add a trusted network identity from `event`, hash/HMAC it before writing any rate-limit key; do not include raw IPs or CAPTCHA tokens in contact metadata, events or logs.
+
+For production, replace memory adapters with `kyselyStorage(db)` and `kyselyRateLimiter(db)` from `better-newsletter/kysely` (apply `migrations/001_newsletter.sql` first), `createSecureCapabilities({ hmacSecret })`, `createHmacRateLimitKeyProvider({ secret })`, and `resendMailer({ apiKey, from, renderConfirmation })` from `better-newsletter/resend`. Configure a verified sender, durable PostgreSQL connection, stable server-side signing/rate-limit secrets, a trusted origin for URLs, and runtime-safe background delivery (`waitUntil`, an awaited fallback or a durable worker). See the adapter sections above for integration details; the example deliberately uses none of these external services.
+
+### Consumer example and maintainer playground
+
+To learn the essential Nuxt integration, start with [`examples/basic/`](examples/basic/README.md) in the [consumer examples](examples/README.md): a small, copyable signup, confirmation and unsubscribe flow. Contributors testing lifecycle edge cases should use [`playground/`](playground/README.md), the full maintainer development app with three audiences, a fake inbox, preferences, suppression and delivery-failure/expiry controls. Both import only public package APIs and remain outside the npm artifact. From this repository checkout:
+
+```bash
+pnpm install --frozen-lockfile
+pnpm build
+pnpm --dir examples/basic dev
+```
+
+To run the maintainer playground instead:
+
+```bash
+pnpm --dir playground dev
+```
+
+The root pnpm install also installs both consumers through the minimal workspace configuration. Their temporary `link:` dependencies resolve the local package through its public exports. After building the library, run `pnpm --dir examples/basic typecheck` and `pnpm --dir examples/basic build` to validate the small example, or `pnpm --dir playground typecheck` and `pnpm --dir playground build` to validate the full app. The active StackBlitz demo will be enabled after the package is available from npm; no active link is provided before publication.
+
+For an artifact-level smoke test instead of the playground's `link:..` dependency, pack the **root** package with `pnpm pack --pack-destination playground` (the `prepack` hook builds it); install the resulting `.tgz` in the playground with `pnpm --dir playground add ./better-newsletter-<version>.tgz`, then run its build. This checks the published `dist` exports, not merely the source checkout. Restore `link:..` and remove the local test tarball afterward.
+
 ## Development
 
 This repository uses pnpm.
+
+Repository layout:
+
+| Path | Role |
+| --- | --- |
+| `src/` | Library and Nuxt module implementation. |
+| `playground/` | Full maintainer development/debugging Nuxt app, excluded from the npm artifact. |
+| `examples/basic/` | Minimal, copyable consumer integration example, excluded from the npm artifact. |
+| `test/` | Automated tests; `test/fixtures/` contains automated consumers, not documentation examples. |
+| `migrations/` | SQL migrations shipped with the package. |
+| `dist/` | Generated package output, not committed to Git. |
 
 ```bash
 pnpm install --frozen-lockfile
@@ -482,35 +631,6 @@ Set `DATABASE_URL` to a disposable PostgreSQL database to run the integration
 tests (the test user needs `CREATE SCHEMA`). The tests create and remove their
 own isolated schema; without `DATABASE_URL`, they are skipped. CI provisions a
 temporary PostgreSQL service and runs them on every check.
-
-## Design references
-
-### Tipplabor
-
-Tipplabor is the primary behavioral reference. Its existing newsletter implementation already exercises real DOI, re-subscribe, neutral public responses, provider-send result recording, unsubscribe and concurrency edge cases:
-
-- https://github.com/t4sj4n/tipplabor/issues/65
-- https://github.com/t4sj4n/tipplabor/blob/staging/frontend/server/repositories/newsletter-opt-in-repository.ts
-- https://github.com/t4sj4n/tipplabor/blob/staging/frontend/shared/utils/newsletter.ts
-
-The goal is to generalize proven behavior and tests, **not** to copy Tipplabor-specific routes, tables, UI text, account models, launch logic or Cloudflare assumptions.
-
-### listmonk
-
-[listmonk](https://github.com/knadh/listmonk) is a non-normative architectural reference for separating subscriber-wide state from per-list subscription state and for preference-management edge cases.
-
-listmonk is AGPLv3. This MIT project does **not** copy or port listmonk implementation code.
-
-## Issue boundaries
-
-Issue #2 implements the framework-neutral lifecycle and consent model. The following remain separate:
-
-- #3: cryptographic token/capability security, abuse protection and cleanup (implemented here);
-- #4: Kysely/PostgreSQL persistence (implemented here);
-- #5: Resend delivery adapter (implemented here);
-- #6: Nuxt/Nitro integration;
-- #7: provider bounce/complaint feedback;
-- #8: privacy export and erasure lifecycle.
 
 ## License
 

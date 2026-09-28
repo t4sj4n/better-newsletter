@@ -266,7 +266,7 @@ function capabilityPayload(target: UnsubscribeCapabilityTarget): string {
   }
   return [
     'bn2',
-    target.scope === 'SUBSCRIPTION' ? 'u' : 'a',
+    target.scope === 'SUBSCRIPTION' ? 'u' : target.scope === 'MANAGE' ? 'm' : 'a',
     stringToBase64Url(target.contactId),
     stringToBase64Url(
       target.scope === 'SUBSCRIPTION' ? target.subscriptionId : target.contactId
@@ -283,7 +283,7 @@ function parseCapability(capability: string): {
   const parts = capability.split('.')
   if (parts.length !== 6 || parts[0] !== 'bn2') return null
   const code = parts[1]
-  if (code !== 'u' && code !== 'a') return null
+  if (code !== 'u' && code !== 'a' && code !== 'm') return null
 
   const contactId = base64UrlToString(parts[2]!)
   const targetId = base64UrlToString(parts[3]!)
@@ -293,7 +293,7 @@ function parseCapability(capability: string): {
     || targetId == null || targetId.length === 0
     || !/^[1-9][0-9]*$/u.test(parts[4]!)
     || !Number.isSafeInteger(generation)
-    || (code === 'a' && targetId !== contactId)
+    || (code !== 'u' && targetId !== contactId)
   ) {
     return null
   }
@@ -301,7 +301,7 @@ function parseCapability(capability: string): {
   return {
     target: code === 'u'
       ? { scope: 'SUBSCRIPTION', contactId, subscriptionId: targetId, lifecycleGeneration: generation }
-      : { scope: 'ALL', contactId, capabilityGeneration: generation },
+      : { scope: code === 'm' ? 'MANAGE' : 'ALL', contactId, capabilityGeneration: generation },
     payload: parts.slice(0, 5).join('.'),
     signature: parts[5]!
   }
@@ -380,6 +380,10 @@ export function createSecureCapabilities(
 
     async issueUnsubscribeAllCapability(input) {
       return issueSignedCapability({ scope: 'ALL', ...input })
+    },
+
+    async issueManagePreferencesCapability(input) {
+      return issueSignedCapability({ scope: 'MANAGE', ...input })
     },
 
     async resolveUnsubscribeCapability(capability): Promise<UnsubscribeCapabilityTarget | null> {

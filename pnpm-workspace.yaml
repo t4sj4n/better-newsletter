@@ -1,0 +1,6 @@
+packages:
+  - .
+  - playground
+  - examples/basic
+
+autoInstallPeers: true

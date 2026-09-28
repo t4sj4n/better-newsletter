@@ -36,6 +36,18 @@
       "types": "./dist/kysely.d.ts",
       "import": "./dist/kysely.js"
     },
+    "./nuxt": {
+      "types": "./dist/nuxt.d.ts",
+      "import": "./dist/nuxt.js"
+    },
+    "./nuxt/server": {
+      "types": "./dist/nuxt/server.d.ts",
+      "import": "./dist/nuxt/server.js"
+    },
+    "./nuxt/client": {
+      "types": "./dist/nuxt/client.d.ts",
+      "import": "./dist/nuxt/client.js"
+    },
     "./package.json": "./package.json",
     "./security": {
       "types": "./dist/security.d.ts",
@@ -44,17 +56,22 @@
   },
   "scripts": {
     "build": "tsc -p tsconfig.build.json",
+    "prepack": "pnpm build",
     "typecheck": "tsc -p tsconfig.json",
     "lint": "eslint . --max-warnings=0",
     "test": "vitest run",
-    "check": "pnpm lint && pnpm typecheck && pnpm test && pnpm build"
+    "check": "pnpm lint && pnpm typecheck && pnpm build && pnpm test"
   },
   "devDependencies": {
     "@eslint/js": "^9.35.0",
+    "@nuxt/kit": "^4.5.2",
     "@types/pg": "^8.23.1",
     "eslint": "^9.35.0",
+    "h3": "^1.15.11",
     "kysely": "^0.28.17",
+    "nuxt": "^4.5.2",
     "pg": "^8.23.0",
+    "publint": "^0.3.24",
     "resend": "^6.30.0",
     "typescript": "^5.9.2",
     "typescript-eslint": "^8.42.0",
@@ -62,11 +79,23 @@
   },
   "types": "./dist/index.d.ts",
   "peerDependencies": {
+    "@nuxt/kit": "^4.5.2",
+    "h3": "^1.15.11",
     "kysely": "^0.28.17",
+    "nuxt": "^4.5.2",
     "resend": "^6.30.0"
   },
   "peerDependenciesMeta": {
+    "@nuxt/kit": {
+      "optional": true
+    },
+    "h3": {
+      "optional": true
+    },
     "kysely": {
+      "optional": true
+    },
+    "nuxt": {
       "optional": true
     },
     "resend": {

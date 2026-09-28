@@ -1,0 +1,421 @@
+import { createServer, IncomingMessage, ServerResponse, type Server } from 'node:http'
+import { Socket } from 'node:net'
+import { createApp, createEvent, defineEventHandler, toNodeListener } from 'h3'
+import { afterEach, describe, expect, it, vi } from 'vitest'
+import {
+  CONTACT_STATUSES,
+  NEWSLETTER_EVENT_TYPES,
+  SUBSCRIPTION_STATUSES,
+  createHmacRateLimitKeyProvider
+} from '../src/index.js'
+import { memoryCapabilities, memoryRateLimiter, memoryStorage } from '../src/memory.js'
+import { handleNewsletterRequest } from '../src/nuxt/handler.js'
+import { newsletterUrl, useBetterNewsletter, type BetterNewsletterServerConfig } from '../src/nuxt/server.js'
+import type { BetterNewsletterModuleOptions, NewsletterRoute } from '../src/nuxt.js'
+
+const options: Pick<BetterNewsletterModuleOptions, 'defaultAudience' | 'audiences' | 'consent'> = {
+  defaultAudience: 'default',
+  audiences: { default: { public: true }, product: { public: true }, private: { public: false } },
+  consent: { version: '2026-01', source: 'test-form' }
+}
+
+let server: Server | undefined
+afterEach(async () => {
+  if (server) await new Promise<void>((resolve, reject) =>
+    server!.close(error => error ? reject(error) : resolve())
+  )
+  server = undefined
+})
+
+async function fixture(config: BetterNewsletterServerConfig) {
+  const app = createApp()
+  for (const action of ['unsubscribeAll', 'unsubscribe', 'subscribe', 'resendConfirmation', 'confirm', 'preferences'] as NewsletterRoute[]) {
+    app.use(`/${action}`, defineEventHandler(event =>
+      handleNewsletterRequest(event, action, options, config)
+    ))
+  }
+  server = createServer(toNodeListener(app))
+  await new Promise<void>(resolve => server!.listen(0, '127.0.0.1', resolve))
+  const address = server.address()
+  if (address == null || typeof address === 'string') throw new Error('Missing test address.')
+  const base = `http://127.0.0.1:${address.port}`
+  return {
+    request: async (action: string, body: object, method = 'POST', headers: Record<string, string> = {}) => {
+      const response = await fetch(`${base}/${action}`, {
+        method,
+        ...(method === 'POST' ? {
+          headers: { 'content-type': 'application/json', ...headers },
+          body: JSON.stringify(body)
+        } : {})
+      })
+      return { status: response.status, body: await response.json() as Record<string, unknown> }
+    },
+    base
+  }
+}
+
+function configuration() {
+  const storage = memoryStorage()
+  const sent: string[] = []
+  const config: BetterNewsletterServerConfig = {
+    origin: 'https://newsletter.example',
+    storage,
+    capabilities: memoryCapabilities(),
+    mailer: {
+      async sendConfirmation(input) {
+        sent.push(input.token)
+        return { accepted: true }
+      }
+    }
+  }
+  return { config, storage, sent }
+}
+
+describe('Nuxt server integration', () => {
+  it('rejects malformed requests, missing consent, and non-public audiences before storage', async () => {
+    const { config, storage } = configuration()
+    const http = await fixture(config)
+    for (const body of [
+      { email: 'person@example.com', consent: false, consentVersion: '2026-01' },
+      { email: 'person@example.com', consent: true, consentVersion: 'old' },
+      { email: 'person@example.com', consent: true, consentVersion: '2026-01', audience: 'private' },
+      { email: 'person@example.com', consent: true, consentVersion: '2026-01', audience: 'unknown' },
+      { email: 'invalid', consent: true, consentVersion: '2026-01' }
+    ]) {
+      expect((await http.request('subscribe', body)).status).toBe(400)
+    }
+    expect(await storage.transaction(tx => tx.getContactByEmail('person@example.com'))).toBeNull()
+    expect((await http.request('subscribe', {
+      email: 'person@example.com', consent: true, consentVersion: '2026-01',
+      website: 'honeypot'
+    })).body).toEqual({ accepted: true })
+    expect(await storage.transaction(tx => tx.getContactByEmail('person@example.com'))).toBeNull()
+  })
+
+  it('uses explicit POST for mutation and preserves neutral public responses', async () => {
+    const { config, storage, sent } = configuration()
+    const http = await fixture(config)
+    expect((await http.request('confirm', {}, 'GET')).status).toBe(405)
+    expect((await http.request('unsubscribe', {}, 'GET')).status).toBe(405)
+    const subscribe = {
+      email: 'person@example.com', consent: true, consentVersion: '2026-01',
+      audiences: ['default', 'product']
+    }
+    expect(await http.request('subscribe', subscribe)).toEqual({ status: 200, body: { accepted: true } })
+    expect(sent).toHaveLength(2)
+    expect((await http.request('resendConfirmation', { email: 'unknown@example.com' })).body)
+      .toEqual({ accepted: true })
+    expect((await http.request('resendConfirmation', { email: 'person@example.com' })).body)
+      .toEqual({ accepted: true })
+    expect((await http.request('confirm', { token: sent[0] })).body).toEqual({ confirmed: true })
+    const contact = await storage.transaction(tx => tx.getContactByEmail('person@example.com'))
+    expect(contact).not.toBeNull()
+    const subscriptions = await storage.transaction(tx => tx.listSubscriptions(contact!.id))
+    expect(subscriptions.map(item => item.status)).toContain(SUBSCRIPTION_STATUSES.ACTIVE)
+    expect(subscriptions.map(item => item.status)).toContain(SUBSCRIPTION_STATUSES.PENDING_CONFIRMATION)
+    expect((await http.request('confirm', { token: sent[1] })).body).toEqual({ confirmed: true })
+  })
+
+  it('restricts preference listing to dedicated signed capabilities and supports per-audience/all opt-out', async () => {
+    const { config } = configuration()
+    const http = await fixture(config)
+    await http.request('subscribe', {
+      email: 'person@example.com', consent: true, consentVersion: '2026-01', audiences: ['default', 'product']
+    })
+    const event = { context: {} } as Parameters<typeof useBetterNewsletter>[0]
+    const service = await useBetterNewsletter(event, config)
+    expect((await http.request('preferences', { capability: 'invalid' })).body)
+      .toEqual({ subscriptions: null })
+    const manage = await service.createManagePreferencesCapability({ email: 'person@example.com' })
+    const all = await service.createUnsubscribeCapability({ email: 'person@example.com', all: true })
+    expect(manage).toBeTruthy()
+    expect((await http.request('preferences', { capability: all })).body)
+      .toEqual({ subscriptions: null })
+    const listed = (await http.request('preferences', { capability: manage })).body.subscriptions as
+      { audience: string; unsubscribeCapability: string }[]
+    expect(listed).toHaveLength(2)
+    expect((await http.request('unsubscribe', { capability: listed[0]!.unsubscribeCapability })).body)
+      .toEqual({ unsubscribed: true })
+    expect((await service.getSubscription({ email: 'person@example.com', audience: listed[1]!.audience }))?.status)
+      .toBe(SUBSCRIPTION_STATUSES.PENDING_CONFIRMATION)
+    const target = await config.capabilities.resolveUnsubscribeCapability(all!)
+    expect(target).toMatchObject({ scope: 'ALL' })
+    expect((await service.getContact({ email: 'person@example.com' }))?.capabilityGeneration)
+      .toBe(target?.scope === 'ALL' ? target.capabilityGeneration : -1)
+    expect((await http.request('unsubscribeAll', { capability: all })).body)
+      .toEqual({ unsubscribed: true })
+    expect((await service.listSubscriptions({ email: 'person@example.com' }))
+      .every(item => item.status === SUBSCRIPTION_STATUSES.UNSUBSCRIBED)).toBe(true)
+  })
+
+  it('awaits delivery without platform waitUntil and attaches work when supported', async () => {
+    const { config, sent } = configuration()
+    let release: (() => void) | undefined
+    const blocked = new Promise<void>(resolve => { release = resolve })
+    config.mailer.sendConfirmation = async input => {
+      await blocked
+      sent.push(input.token)
+      return { accepted: true }
+    }
+    const http = await fixture(config)
+    let settled = false
+    const request = http.request('subscribe', {
+      email: 'person@example.com', consent: true, consentVersion: '2026-01'
+    }).then(result => { settled = true; return result })
+    await new Promise(resolve => setTimeout(resolve, 60))
+    expect(settled).toBe(false)
+    release!()
+    expect((await request).body).toEqual({ accepted: true })
+    expect(sent).toHaveLength(1)
+  })
+
+  it('attaches work to platform waitUntil and reclaims an expired lease after an interrupted delivery', async () => {
+    const { config } = configuration()
+    let now = Date.parse('2026-09-28T08:00:00Z')
+    let deliveries = 0
+    const host: BetterNewsletterServerConfig = {
+      ...config,
+      clock: { now: () => new Date(now) },
+      logger: { error: vi.fn() },
+      mailer: {
+        async sendConfirmation() {
+          deliveries += 1
+          if (deliveries === 1) throw new Error('Simulated interrupted provider response.')
+          return { accepted: true }
+        }
+      }
+    }
+    async function request(send: (service: Awaited<ReturnType<typeof useBetterNewsletter>>) => Promise<unknown>) {
+      const pending: Promise<unknown>[] = []
+      const incoming = new IncomingMessage(new Socket())
+      const event = createEvent(incoming, new ServerResponse(incoming))
+      event.context.waitUntil = (task: Promise<unknown>) => { pending.push(task) }
+      const service = await useBetterNewsletter(event, host)
+      await send(service)
+      expect(pending).toHaveLength(1)
+      await Promise.all(pending)
+      return service
+    }
+    const service = await request(service =>
+      service.subscribe({ email: 'person@example.com', consent: { granted: true, version: '2026-01' } })
+    )
+    expect(deliveries).toBe(1)
+    expect((await service.getSubscription({ email: 'person@example.com' }))?.status)
+      .toBe(SUBSCRIPTION_STATUSES.PENDING_CONFIRMATION)
+    now += 5 * 60_000 + 1
+    await request(service => service.resendConfirmation({ email: 'person@example.com' }))
+    expect(deliveries).toBe(2)
+    expect((await service.listEvents({ email: 'person@example.com' }))
+      .some(item => item.type === NEWSLETTER_EVENT_TYPES.CONFIRMATION_SENT)).toBe(true)
+  })
+
+  it('awaits fallback delivery in custom handlers without requiring an explicit flush', async () => {
+    const { config } = configuration()
+    let release: (() => void) | undefined
+    const blocked = new Promise<void>(resolve => { release = resolve })
+    const send = vi.fn(async () => {
+      await blocked
+      return { accepted: true as const }
+    })
+    const incoming = new IncomingMessage(new Socket())
+    const event = createEvent(incoming, new ServerResponse(incoming))
+    const service = await useBetterNewsletter(event, { ...config, mailer: { sendConfirmation: send } })
+    let settled = false
+    const request = service.subscribe({
+      email: 'person@example.com',
+      consent: { granted: true, version: '2026-01' }
+    }).then(() => { settled = true })
+    await vi.waitFor(() => expect(send).toHaveBeenCalledTimes(1))
+    expect(settled).toBe(false)
+    release!()
+    await request
+    expect(settled).toBe(true)
+  })
+
+  it('composes independent opaque email and trusted-client limits; ignores forwarded headers by default', async () => {
+    const { config } = configuration()
+    const emailLimiter = memoryRateLimiter()
+    const clientLimiter = memoryRateLimiter()
+    const consumed = vi.spyOn(clientLimiter, 'consume')
+    const identity = vi.fn(() => 'trusted-client')
+    const guarded: BetterNewsletterServerConfig = {
+      ...config,
+      rateLimiter: emailLimiter,
+      rateLimitKeyProvider: createHmacRateLimitKeyProvider({ secret: 'opaque-email-key-0123456789abcdef0123456789' }),
+      rateLimits: { subscribe: { limit: 2, windowMs: 60_000 }, resendConfirmation: { limit: 2, windowMs: 60_000 } },
+      trustedClientIdentity: identity,
+      clientRateLimit: {
+        secret: 'opaque-client-key-0123456789abcdef0123456789',
+        limiter: clientLimiter,
+        policies: { subscribe: { limit: 1, windowMs: 60_000 }, resendConfirmation: { limit: 1, windowMs: 60_000 } }
+      }
+    }
+    const http = await fixture(guarded)
+    const body = (email: string) => ({ email, consent: true, consentVersion: '2026-01' })
+    expect((await http.request('subscribe', body('a@example.com'))).body).toEqual({ accepted: true })
+    expect((await http.request('subscribe', body('b@example.com'), 'POST', {
+      'x-forwarded-for': 'spoofed-client'
+    })).body).toEqual({ accepted: true })
+    expect(consumed).toHaveBeenCalledTimes(2)
+    expect(consumed.mock.calls[1]?.[0].key).toBe(consumed.mock.calls[0]?.[0].key)
+    expect(consumed.mock.calls[0]?.[0].key).toMatch(/^[0-9a-f]{64}$/u)
+    expect(consumed.mock.calls[0]?.[0].key).not.toContain('trusted-client')
+    expect(identity).toHaveBeenCalledTimes(2)
+    expect((await http.request('resendConfirmation', { email: 'a@example.com' })).body)
+      .toEqual({ accepted: true })
+    expect(consumed.mock.calls[2]?.[0].action).toBe('resend-confirmation')
+  })
+
+  it('enforces an email bucket across independent trusted clients', async () => {
+    const { config } = configuration()
+    let client = 'trusted-a'
+    const limiter = memoryRateLimiter()
+    const guarded: BetterNewsletterServerConfig = {
+      ...config,
+      rateLimiter: limiter,
+      rateLimitKeyProvider: createHmacRateLimitKeyProvider({
+        secret: 'opaque-email-key-0123456789abcdef0123456789'
+      }),
+      rateLimits: { subscribe: { limit: 1, windowMs: 60_000 } },
+      trustedClientIdentity: () => client,
+      clientRateLimit: {
+        secret: 'opaque-client-key-0123456789abcdef0123456789',
+        limiter: memoryRateLimiter(),
+        policies: { subscribe: { limit: 10, windowMs: 60_000 } }
+      }
+    }
+    const http = await fixture(guarded)
+    const body = { email: 'person@example.com', consent: true, consentVersion: '2026-01' }
+    expect((await http.request('subscribe', body)).body).toEqual({ accepted: true })
+    client = 'trusted-b'
+    expect((await http.request('subscribe', body)).body).toEqual({ accepted: true })
+    const service = await useBetterNewsletter({ context: {} } as Parameters<typeof useBetterNewsletter>[0], config)
+    expect((await service.listEvents({ email: 'person@example.com' }))
+      .filter(item => item.type === NEWSLETTER_EVENT_TYPES.SIGNED_UP)).toHaveLength(1)
+  })
+
+  it('passes application-owned CAPTCHA context to the generic guard without storing it', async () => {
+    const { config, storage } = configuration()
+    const verify = vi.fn(async (input: { context?: unknown }) => ({
+      allowed: (input.context as { captcha?: string } | undefined)?.captcha === 'valid'
+    }))
+    const guarded: BetterNewsletterServerConfig = {
+      ...config,
+      abuseGuard: { verify },
+      securityContext: (_event, body) => ({ captcha: body.captcha })
+    }
+    const http = await fixture(guarded)
+    const body = { email: 'person@example.com', consent: true, consentVersion: '2026-01' }
+    expect((await http.request('subscribe', { ...body, captcha: 'invalid' })).body)
+      .toEqual({ accepted: true })
+    expect(await storage.transaction(tx => tx.getContactByEmail(body.email))).toBeNull()
+    expect((await http.request('subscribe', { ...body, captcha: 'valid' })).body)
+      .toEqual({ accepted: true })
+    expect(verify).toHaveBeenCalledWith(expect.objectContaining({
+      action: 'subscribe', context: { captcha: 'valid' }
+    }))
+    const contact = await storage.transaction(tx => tx.getContactByEmail(body.email))
+    expect(contact).not.toBeNull()
+    expect(JSON.stringify(contact)).not.toContain('captcha')
+  })
+
+  it.each(['abuse', 'email limit', 'guard error'])(
+    'does not subscribe any audience when a later audience fails its %s check',
+    async failure => {
+      const { config, storage, sent } = configuration()
+      const verify = vi.fn(async (input: { audienceKey: string }) => {
+        if (input.audienceKey === 'product' && failure === 'guard error') {
+          throw new Error('Guard unavailable')
+        }
+        return { allowed: failure !== 'abuse' || input.audienceKey !== 'product' }
+      })
+      const consume = vi.fn(async () => ({ allowed: consume.mock.calls.length < 2 }))
+      const http = await fixture({
+        ...config,
+        abuseGuard: { verify },
+        ...(failure === 'email limit' ? {
+          rateLimiter: { consume },
+          rateLimitKeyProvider: { createKey: async input => input.audienceKey }
+        } : {}),
+      })
+      const result = await http.request('subscribe', {
+        email: 'person@example.com', consent: true, consentVersion: '2026-01',
+        audiences: ['default', 'product']
+      })
+      if (failure === 'guard error') expect(result.status).toBe(500)
+      else expect(result).toEqual({ status: 200, body: { accepted: true } })
+      expect(verify.mock.calls.map(([input]) => input.audienceKey)).toEqual(['default', 'product'])
+      expect(await storage.transaction(tx => tx.getContactByEmail('person@example.com'))).toBeNull()
+      expect(sent).toHaveLength(0)
+    }
+  )
+
+  it('consumes a shared client limit once for a multi-audience request', async () => {
+    const { config, sent } = configuration()
+    const clientLimiter = memoryRateLimiter()
+    const clientConsume = vi.spyOn(clientLimiter, 'consume')
+    const audienceConsume = vi.fn(async (input: { key: string }) => ({ allowed: input.key.length > 0 }))
+    const http = await fixture({
+      ...config,
+      rateLimiter: { consume: audienceConsume },
+      rateLimitKeyProvider: { createKey: async input => input.audienceKey },
+      trustedClientIdentity: () => 'trusted-client',
+      clientRateLimit: {
+        secret: 'opaque-client-key-0123456789abcdef0123456789',
+        limiter: clientLimiter,
+        policies: { subscribe: { limit: 1, windowMs: 60_000 } }
+      }
+    })
+
+    expect(await http.request('subscribe', {
+      email: 'person@example.com', consent: true, consentVersion: '2026-01',
+      audiences: ['default', 'product']
+    })).toEqual({ status: 200, body: { accepted: true } })
+    expect(clientConsume).toHaveBeenCalledTimes(1)
+    expect(audienceConsume.mock.calls.map(([input]) => input.key)).toEqual(['default', 'product'])
+    expect(sent).toHaveLength(2)
+  })
+
+  it('checks every audience exactly once before creating subscriptions', async () => {
+    const { config, storage, sent } = configuration()
+    const verify = vi.fn(async () => {
+      expect(await storage.transaction(tx => tx.getContactByEmail('person@example.com'))).toBeNull()
+      expect(sent).toHaveLength(0)
+      return { allowed: true }
+    })
+    const consume = vi.fn(async () => ({ allowed: true }))
+    const http = await fixture({
+      ...config,
+      abuseGuard: { verify },
+      rateLimiter: { consume },
+      rateLimitKeyProvider: { createKey: async input => input.audienceKey }
+    })
+    expect(await http.request('subscribe', {
+      email: 'person@example.com', consent: true, consentVersion: '2026-01',
+      audiences: ['default', 'product']
+    })).toEqual({ status: 200, body: { accepted: true } })
+    expect(verify).toHaveBeenCalledTimes(2)
+    expect(consume).toHaveBeenCalledTimes(2)
+    expect(sent).toHaveLength(2)
+    const contact = await storage.transaction(tx => tx.getContactByEmail('person@example.com'))
+    expect(await storage.transaction(tx => tx.listSubscriptions(contact!.id))).toHaveLength(2)
+  })
+
+  it('uses a trusted origin for links and leaves subject linking to application code', async () => {
+    const { config } = configuration()
+    expect(newsletterUrl(config.origin, '/confirm', 'a&b'))
+      .toBe('https://newsletter.example/confirm?token=a%26b')
+    expect(() => newsletterUrl(config.origin, '//evil.example', 'token')).toThrow()
+    const http = await fixture(config)
+    await http.request('subscribe', { email: 'person@example.com', consent: true, consentVersion: '2026-01' })
+    const service = await useBetterNewsletter({ context: {} } as Parameters<typeof useBetterNewsletter>[0], config)
+    expect((await service.getContact({ email: 'person@example.com' }))?.subject).toBeNull()
+    await service.linkSubject({ email: 'person@example.com', subject: { namespace: 'app', id: 'opaque-1' } })
+    expect((await service.getContact({ email: 'person@example.com' }))?.subject)
+      .toEqual({ namespace: 'app', id: 'opaque-1' })
+    expect((await service.listEvents({ email: 'person@example.com' }))
+      .some(item => item.type === NEWSLETTER_EVENT_TYPES.CONFIRMED)).toBe(false)
+    expect((await service.getContact({ email: 'person@example.com' }))?.status)
+      .toBe(CONTACT_STATUSES.ENABLED)
+  })
+})

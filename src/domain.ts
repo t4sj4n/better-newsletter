@@ -46,6 +46,7 @@ export interface ExternalSubject {
 
 export interface Contact {
   readonly id: string
+  readonly capabilityGeneration: number
   readonly email: string
   readonly status: ContactStatus
   readonly subject: ExternalSubject | null
@@ -65,15 +66,23 @@ export interface ConsentEvidence {
 
 export interface Subscription {
   readonly id: string
+  readonly lifecycleGeneration: number
   readonly contactId: string
   readonly audienceKey: string
   readonly status: SubscriptionStatus
   readonly consent: ConsentEvidence
+  readonly confirmationDelivery: ConfirmationDelivery | null
   readonly confirmationSentAt?: Date | null
   readonly confirmedAt?: Date | null
   readonly unsubscribedAt?: Date | null
   readonly createdAt: Date
   readonly updatedAt: Date
+}
+
+export interface ConfirmationDelivery {
+  readonly id: string
+  readonly attemptId: string | null
+  readonly leaseExpiresAt: Date | null
 }
 
 export interface NewsletterEvent {

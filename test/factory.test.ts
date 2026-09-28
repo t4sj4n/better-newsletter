@@ -100,4 +100,16 @@ describe('createNewsletter', () => {
         .toBe(NEWSLETTER_ERROR_CODES.INVALID_CONFIGURATION)
     }
   })
+
+  it.each([0, -1, 1.5, Infinity, Number.MAX_SAFE_INTEGER + 1])(
+    'rejects an invalid confirmation delivery lease: %s',
+    deliveryLeaseMs => {
+      expect(() => createNewsletter({
+        storage: memoryStorage(),
+        capabilities: memoryCapabilities(),
+        mailer,
+        confirmation: { deliveryLeaseMs }
+      })).toThrow('confirmation.deliveryLeaseMs must be a positive safe integer.')
+    }
+  )
 })

@@ -74,6 +74,7 @@ export interface ConfirmationTokenRecord {
   readonly purpose: 'CONFIRMATION'
   readonly contactId: string
   readonly subscriptionId: string
+  readonly lifecycleGeneration: number
   readonly createdAt: Date
   readonly expiresAt: Date
   readonly consumedAt?: Date | null
@@ -81,6 +82,10 @@ export interface ConfirmationTokenRecord {
 }
 
 export interface ConfirmationTokenStore {
+  /**
+   * Atomically apply retention within subscriptionId + lifecycleGeneration.
+   * Keep newest records first, using insertion order to break timestamp ties.
+   */
   replace(input: {
     readonly record: ConfirmationTokenRecord
     readonly strategy: ConfirmationReplacementStrategy
@@ -100,6 +105,7 @@ export interface ConfirmationTokenStore {
 
   revokeBySubscription(input: {
     readonly subscriptionId: string
+    readonly lifecycleGeneration: number
     readonly now: Date
   }): Promise<number>
 
@@ -108,34 +114,9 @@ export interface ConfirmationTokenStore {
   }): Promise<number>
 }
 
-export interface CapabilityNonceRecord {
-  readonly purpose: Exclude<CapabilityPurpose, 'CONFIRMATION'>
-  readonly targetId: string
-  readonly contactId: string
-  readonly subscriptionId?: string
-  readonly nonce: string
-  readonly updatedAt: Date
-}
-
-export interface CapabilityNonceStore {
-  get(
-    purpose: CapabilityNonceRecord['purpose'],
-    targetId: string
-  ): Promise<CapabilityNonceRecord | null>
-
-  set(record: CapabilityNonceRecord): Promise<void>
-
-  delete(
-    purpose: CapabilityNonceRecord['purpose'],
-    targetId: string
-  ): Promise<void>
-}
-
 export interface SecureCapabilitiesOptions {
   readonly confirmationStore: ConfirmationTokenStore
-  readonly nonceStore: CapabilityNonceStore
   readonly hmacSecret: string | Uint8Array
-  readonly nonceGenerator?: TokenGenerator
 }
 
 export interface HmacRateLimitKeyProviderOptions {
@@ -265,110 +246,69 @@ export async function sha256Digest(value: string): Promise<string> {
   return bytesToHex(new Uint8Array(digest))
 }
 
-const capabilityCode = {
-  UNSUBSCRIBE: 'u',
-  UNSUBSCRIBE_ALL: 'a',
-  MANAGE_PREFERENCES: 'm'
-} as const
-
-const capabilityPurposeByCode = {
-  u: CAPABILITY_PURPOSES.UNSUBSCRIBE,
-  a: CAPABILITY_PURPOSES.UNSUBSCRIBE_ALL,
-  m: CAPABILITY_PURPOSES.MANAGE_PREFERENCES
-} as const
-
-function capabilityPayload(
-  purpose: CapabilityNonceRecord['purpose'],
-  targetId: string,
-  nonce: string
-): string {
+function capabilityPayload(target: UnsubscribeCapabilityTarget): string {
+  const generation = target.scope === 'SUBSCRIPTION'
+    ? target.lifecycleGeneration
+    : target.capabilityGeneration
+  if (!Number.isSafeInteger(generation) || generation < 1) {
+    throw new NewsletterError(
+      NEWSLETTER_ERROR_CODES.INVALID_CONFIGURATION,
+      'Capability generations must be positive safe integers.'
+    )
+  }
   return [
-    'bn1',
-    capabilityCode[purpose],
-    stringToBase64Url(targetId),
-    stringToBase64Url(nonce)
+    'bn2',
+    target.scope === 'SUBSCRIPTION' ? 'u' : 'a',
+    stringToBase64Url(target.contactId),
+    stringToBase64Url(
+      target.scope === 'SUBSCRIPTION' ? target.subscriptionId : target.contactId
+    ),
+    String(generation)
   ].join('.')
 }
 
 function parseCapability(capability: string): {
-  purpose: CapabilityNonceRecord['purpose']
-  targetId: string
-  nonce: string
+  target: UnsubscribeCapabilityTarget
   payload: string
   signature: string
 } | null {
   const parts = capability.split('.')
-  if (parts.length !== 5 || parts[0] !== 'bn1') return null
+  if (parts.length !== 6 || parts[0] !== 'bn2') return null
+  const code = parts[1]
+  if (code !== 'u' && code !== 'a') return null
 
-  const code = parts[1] as keyof typeof capabilityPurposeByCode
-  const purpose = capabilityPurposeByCode[code]
-  if (purpose == null) return null
-
-  const targetId = base64UrlToString(parts[2]!)
-  const nonce = base64UrlToString(parts[3]!)
-  if (targetId == null || nonce == null || targetId.length === 0 || nonce.length === 0) {
+  const contactId = base64UrlToString(parts[2]!)
+  const targetId = base64UrlToString(parts[3]!)
+  const generation = Number(parts[4])
+  if (
+    contactId == null || contactId.length === 0
+    || targetId == null || targetId.length === 0
+    || !/^[1-9][0-9]*$/u.test(parts[4]!)
+    || !Number.isSafeInteger(generation)
+    || (code === 'a' && targetId !== contactId)
+  ) {
     return null
   }
 
   return {
-    purpose,
-    targetId,
-    nonce,
-    payload: parts.slice(0, 4).join('.'),
-    signature: parts[4]!
+    target: code === 'u'
+      ? { scope: 'SUBSCRIPTION', contactId, subscriptionId: targetId, lifecycleGeneration: generation }
+      : { scope: 'ALL', contactId, capabilityGeneration: generation },
+    payload: parts.slice(0, 5).join('.'),
+    signature: parts[5]!
   }
 }
 
 export function createSecureCapabilities(
   options: SecureCapabilitiesOptions
 ): NewsletterCapabilities {
-  const nonceGenerator = options.nonceGenerator ?? secureTokenGenerator
   const hmacKey = importHmacKey(options.hmacSecret, ['sign', 'verify'])
 
-  const getOrCreateNonce = async (
-    purpose: CapabilityNonceRecord['purpose'],
-    targetId: string,
-    target: { contactId: string; subscriptionId?: string }
-  ): Promise<CapabilityNonceRecord> => {
-    const existing = await options.nonceStore.get(purpose, targetId)
-    if (existing != null) return existing
-
-    const now = new Date()
-    const record: CapabilityNonceRecord = {
-      purpose,
-      targetId,
-      contactId: target.contactId,
-      ...(target.subscriptionId !== undefined
-        ? { subscriptionId: target.subscriptionId }
-        : {}),
-      nonce: await nonceGenerator.generate(),
-      updatedAt: now
-    }
-    await options.nonceStore.set(record)
-    return record
-  }
-
   const issueSignedCapability = async (
-    purpose: CapabilityNonceRecord['purpose'],
-    targetId: string,
-    target: { contactId: string; subscriptionId?: string }
+    target: UnsubscribeCapabilityTarget
   ): Promise<string> => {
-    const record = await getOrCreateNonce(purpose, targetId, target)
-    const payload = capabilityPayload(purpose, targetId, record.nonce)
+    const payload = capabilityPayload(target)
     return `${payload}.${await signHmac(await hmacKey, payload)}`
-  }
-
-  const rotateNonce = async (
-    purpose: CapabilityNonceRecord['purpose'],
-    targetId: string
-  ): Promise<void> => {
-    const existing = await options.nonceStore.get(purpose, targetId)
-    if (existing == null) return
-    await options.nonceStore.set({
-      ...existing,
-      nonce: await nonceGenerator.generate(),
-      updatedAt: new Date()
-    })
   }
 
   return {
@@ -380,6 +320,7 @@ export function createSecureCapabilities(
           purpose: CAPABILITY_PURPOSES.CONFIRMATION,
           contactId: input.contactId,
           subscriptionId: input.subscriptionId,
+          lifecycleGeneration: input.lifecycleGeneration,
           createdAt: input.issuedAt,
           expiresAt: input.expiresAt,
           consumedAt: null,
@@ -399,7 +340,8 @@ export function createSecureCapabilities(
       if (record == null) return null
       return {
         contactId: record.contactId,
-        subscriptionId: record.subscriptionId
+        subscriptionId: record.subscriptionId,
+        lifecycleGeneration: record.lifecycleGeneration
       }
     },
 
@@ -411,77 +353,37 @@ export function createSecureCapabilities(
       if (record == null) return null
       return {
         contactId: record.contactId,
-        subscriptionId: record.subscriptionId
+        subscriptionId: record.subscriptionId,
+        lifecycleGeneration: record.lifecycleGeneration
       }
     },
 
-    async revokeConfirmations(subscriptionId) {
+    async revokeConfirmations(subscriptionId, lifecycleGeneration) {
       await options.confirmationStore.revokeBySubscription({
         subscriptionId,
+        lifecycleGeneration,
         now: new Date()
       })
     },
 
     async issueUnsubscribeCapability(input) {
-      return issueSignedCapability(
-        CAPABILITY_PURPOSES.UNSUBSCRIBE,
-        input.subscriptionId,
-        input
-      )
+      return issueSignedCapability({ scope: 'SUBSCRIPTION', ...input })
     },
 
     async issueUnsubscribeAllCapability(input) {
-      return issueSignedCapability(
-        CAPABILITY_PURPOSES.UNSUBSCRIBE_ALL,
-        input.contactId,
-        input
-      )
+      return issueSignedCapability({ scope: 'ALL', ...input })
     },
 
     async resolveUnsubscribeCapability(capability): Promise<UnsubscribeCapabilityTarget | null> {
       const parsed = parseCapability(capability)
-      if (
-        parsed == null
-        || (
-          parsed.purpose !== CAPABILITY_PURPOSES.UNSUBSCRIBE
-          && parsed.purpose !== CAPABILITY_PURPOSES.UNSUBSCRIBE_ALL
-        )
-      ) {
-        return null
-      }
-
-      const record = await options.nonceStore.get(parsed.purpose, parsed.targetId)
-      if (record == null || record.nonce !== parsed.nonce) return null
+      if (parsed == null) return null
 
       const valid = await verifyHmac(
         await hmacKey,
         parsed.payload,
         parsed.signature
       )
-      if (!valid) return null
-
-      if (parsed.purpose === CAPABILITY_PURPOSES.UNSUBSCRIBE) {
-        if (record.subscriptionId == null) return null
-        return {
-          scope: 'SUBSCRIPTION',
-          contactId: record.contactId,
-          subscriptionId: record.subscriptionId
-        }
-      }
-
-      return {
-        scope: 'ALL',
-        contactId: record.contactId
-      }
-    },
-
-    async revokeUnsubscribeCapabilities(subscriptionId) {
-      await rotateNonce(CAPABILITY_PURPOSES.UNSUBSCRIBE, subscriptionId)
-      await rotateNonce(CAPABILITY_PURPOSES.MANAGE_PREFERENCES, subscriptionId)
-    },
-
-    async revokeUnsubscribeAllCapability(contactId) {
-      await rotateNonce(CAPABILITY_PURPOSES.UNSUBSCRIBE_ALL, contactId)
+      return valid ? parsed.target : null
     },
 
     async cleanupConfirmations(input) {

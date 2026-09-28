@@ -1,7 +1,6 @@
-import type {
-  NewsletterCapabilities,
-  UnsubscribeCapabilityTarget
-} from './capabilities.js'
+import type { NewsletterCapabilities } from './capabilities.js'
+import { createSecureCapabilities } from './security.js'
+import { memoryConfirmationTokenStore } from './memory-security.js'
 import type {
   Contact,
   NewsletterEvent,
@@ -158,131 +157,21 @@ export function memoryStorage(): MemoryNewsletterStorage {
   return new MemoryNewsletterStorage()
 }
 
-interface StoredConfirmation {
-  readonly contactId: string
-  readonly subscriptionId: string
-  readonly expiresAt: Date
-}
-
-/** Test/development capability adapter. It stores raw opaque values in memory and is not production security. */
-export class MemoryNewsletterCapabilities implements NewsletterCapabilities {
-  private readonly confirmations = new Map<string, StoredConfirmation>()
-  private readonly confirmationBySubscription = new Map<string, string>()
-  private readonly unsubscribe = new Map<string, UnsubscribeCapabilityTarget>()
-  private readonly unsubscribeBySubscription = new Map<string, string>()
-  private readonly unsubscribeAllByContact = new Map<string, string>()
-
-  async replaceConfirmation(input: {
-    readonly token: string
-    readonly contactId: string
-    readonly subscriptionId: string
-    readonly expiresAt: Date
-  }): Promise<void> {
-    await this.revokeConfirmations(input.subscriptionId)
-    this.confirmations.set(input.token, {
-      contactId: input.contactId,
-      subscriptionId: input.subscriptionId,
-      expiresAt: clone(input.expiresAt)
-    })
-    this.confirmationBySubscription.set(input.subscriptionId, input.token)
-  }
-
-  async resolveConfirmation(token: string, now: Date) {
-    const stored = this.confirmations.get(token)
-    if (stored == null || stored.expiresAt.getTime() <= now.getTime()) return null
-    return {
-      contactId: stored.contactId,
-      subscriptionId: stored.subscriptionId
-    }
-  }
-
-  async consumeConfirmation(token: string, now: Date) {
-    const stored = this.confirmations.get(token)
-    if (stored == null) return null
-
-    this.confirmations.delete(token)
-    if (this.confirmationBySubscription.get(stored.subscriptionId) === token) {
-      this.confirmationBySubscription.delete(stored.subscriptionId)
-    }
-
-    if (stored.expiresAt.getTime() <= now.getTime()) return null
-    return {
-      contactId: stored.contactId,
-      subscriptionId: stored.subscriptionId
-    }
-  }
-
-  async revokeConfirmations(subscriptionId: string): Promise<void> {
-    const token = this.confirmationBySubscription.get(subscriptionId)
-    if (token != null) this.confirmations.delete(token)
-    this.confirmationBySubscription.delete(subscriptionId)
-  }
-
-  async replaceUnsubscribeCapability(input: {
-    readonly capability: string
-    readonly contactId: string
-    readonly subscriptionId: string
-  }): Promise<void> {
-    await this.revokeUnsubscribeCapabilities(input.subscriptionId)
-    this.unsubscribe.set(input.capability, {
-      scope: 'SUBSCRIPTION',
-      contactId: input.contactId,
-      subscriptionId: input.subscriptionId
-    })
-    this.unsubscribeBySubscription.set(
-      input.subscriptionId,
-      input.capability
-    )
-  }
-
-  async replaceUnsubscribeAllCapability(input: {
-    readonly capability: string
-    readonly contactId: string
-  }): Promise<void> {
-    const previous = this.unsubscribeAllByContact.get(input.contactId)
-    if (previous != null) this.unsubscribe.delete(previous)
-    this.unsubscribe.set(input.capability, {
-      scope: 'ALL',
-      contactId: input.contactId
-    })
-    this.unsubscribeAllByContact.set(input.contactId, input.capability)
-  }
-
-  async resolveUnsubscribeCapability(capability: string) {
-    return clone(this.unsubscribe.get(capability) ?? null)
-  }
-
-  async revokeUnsubscribeCapabilities(subscriptionId: string): Promise<void> {
-    const capability = this.unsubscribeBySubscription.get(subscriptionId)
-    if (capability != null) this.unsubscribe.delete(capability)
-    this.unsubscribeBySubscription.delete(subscriptionId)
-  }
-
-  async revokeUnsubscribeAllCapability(contactId: string): Promise<void> {
-    const capability = this.unsubscribeAllByContact.get(contactId)
-    if (capability != null) this.unsubscribe.delete(capability)
-    this.unsubscribeAllByContact.delete(contactId)
-  }
-
-  async cleanupConfirmations(): Promise<number> {
-    return 0
-  }
-}
-
 /**
- * Creates an isolated capability adapter for tests and development.
- * Stores raw opaque values in memory and provides no production token security.
+ * Creates secure capabilities with an ephemeral signing key and in-memory
+ * confirmation digests. Neither the key nor the records survive a restart.
  */
-export function memoryCapabilities(): MemoryNewsletterCapabilities {
-  return new MemoryNewsletterCapabilities()
+export function memoryCapabilities(): NewsletterCapabilities {
+  return createSecureCapabilities({
+    confirmationStore: memoryConfirmationTokenStore(),
+    hmacSecret: crypto.getRandomValues(new Uint8Array(32))
+  })
 }
 
 
 export {
-  MemoryCapabilityNonceStore,
   MemoryConfirmationTokenStore,
   MemoryRateLimiter,
-  memoryCapabilityNonceStore,
   memoryConfirmationTokenStore,
   memoryRateLimiter
 } from './memory-security.js'

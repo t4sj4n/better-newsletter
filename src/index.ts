@@ -1,6 +1,7 @@
 export {
   createNewsletter,
   DEFAULT_CONFIRMATION_EXPIRES_IN_MS,
+  DEFAULT_CONFIRMATION_DELIVERY_LEASE_MS,
   systemClock,
   systemIdGenerator
 } from './create-newsletter.js'
@@ -29,6 +30,7 @@ export {
 
 export type {
   ConsentEvidence,
+  ConfirmationDelivery,
   Contact,
   ContactStatus,
   ExternalSubject,
@@ -112,8 +114,6 @@ export {
 
 export type {
   AbuseGuard,
-  CapabilityNonceRecord,
-  CapabilityNonceStore,
   CapabilityPurpose,
   ConfirmationReplacementStrategy,
   ConfirmationTokenRecord,

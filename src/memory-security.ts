@@ -1,7 +1,5 @@
 import type { Clock } from './config.js'
 import type {
-  CapabilityNonceRecord,
-  CapabilityNonceStore,
   ConfirmationTokenRecord,
   ConfirmationTokenStore,
   RateLimiter
@@ -27,8 +25,10 @@ export class MemoryConfirmationTokenStore implements ConfirmationTokenStore {
       let expiredCount = 0
 
       const active = [...this.records.values()]
+        .reverse()
         .filter(record =>
           record.subscriptionId === input.record.subscriptionId
+          && record.lifecycleGeneration === input.record.lifecycleGeneration
           && record.consumedAt == null
           && record.revokedAt == null
         )
@@ -123,6 +123,7 @@ export class MemoryConfirmationTokenStore implements ConfirmationTokenStore {
       for (const [digest, record] of this.records) {
         if (
           record.subscriptionId === input.subscriptionId
+          && record.lifecycleGeneration === input.lifecycleGeneration
           && record.consumedAt == null
           && record.revokedAt == null
         ) {
@@ -161,46 +162,6 @@ export class MemoryConfirmationTokenStore implements ConfirmationTokenStore {
 
 export function memoryConfirmationTokenStore(): MemoryConfirmationTokenStore {
   return new MemoryConfirmationTokenStore()
-}
-
-export class MemoryCapabilityNonceStore implements CapabilityNonceStore {
-  private readonly records = new Map<string, CapabilityNonceRecord>()
-
-  private key(
-    purpose: CapabilityNonceRecord['purpose'],
-    targetId: string
-  ): string {
-    return `${purpose}\u0000${targetId}`
-  }
-
-  async get(
-    purpose: CapabilityNonceRecord['purpose'],
-    targetId: string
-  ): Promise<CapabilityNonceRecord | null> {
-    return clone(this.records.get(this.key(purpose, targetId)) ?? null)
-  }
-
-  async set(record: CapabilityNonceRecord): Promise<void> {
-    this.records.set(
-      this.key(record.purpose, record.targetId),
-      clone(record)
-    )
-  }
-
-  async delete(
-    purpose: CapabilityNonceRecord['purpose'],
-    targetId: string
-  ): Promise<void> {
-    this.records.delete(this.key(purpose, targetId))
-  }
-
-  snapshot(): readonly CapabilityNonceRecord[] {
-    return [...this.records.values()].map(clone)
-  }
-}
-
-export function memoryCapabilityNonceStore(): MemoryCapabilityNonceStore {
-  return new MemoryCapabilityNonceStore()
 }
 
 interface RateLimitBucket {

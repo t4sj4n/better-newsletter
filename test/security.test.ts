@@ -1,6 +1,5 @@
 import { describe, expect, it, vi } from 'vitest'
 import {
-  CAPABILITY_PURPOSES,
   CONFIRMATION_REPLACEMENT_STRATEGIES,
   NEWSLETTER_ERROR_CODES,
   SUBSCRIPTION_STATUSES,
@@ -11,7 +10,6 @@ import {
   sha256Digest
 } from '../src/index.js'
 import {
-  memoryCapabilityNonceStore,
   memoryConfirmationTokenStore,
   memoryRateLimiter,
   memoryStorage
@@ -22,20 +20,12 @@ const now = new Date('2026-09-28T10:00:00.000Z')
 
 function secureCapabilities() {
   const confirmationStore = memoryConfirmationTokenStore()
-  const nonceStore = memoryCapabilityNonceStore()
   const capabilities = createSecureCapabilities({
     confirmationStore,
-    nonceStore,
-    hmacSecret: secret,
-    nonceGenerator: {
-      generate: (() => {
-        let nonce = 0
-        return () => `nonce-${++nonce}`
-      })()
-    }
+    hmacSecret: secret
   })
 
-  return { capabilities, confirmationStore, nonceStore }
+  return { capabilities, confirmationStore }
 }
 
 describe('secure token primitives', () => {
@@ -56,6 +46,7 @@ describe('secure token primitives', () => {
       token: rawToken,
       contactId: 'contact-1',
       subscriptionId: 'subscription-1',
+      lifecycleGeneration: 1,
       issuedAt: now,
       expiresAt: new Date(now.getTime() + 60_000),
       replacementStrategy: CONFIRMATION_REPLACEMENT_STRATEGIES.REPLACE_PREVIOUS,
@@ -83,6 +74,7 @@ describe('secure token primitives', () => {
       token: 'expired-token',
       contactId: 'contact-1',
       subscriptionId: 'subscription-1',
+      lifecycleGeneration: 1,
       issuedAt: now,
       expiresAt: new Date(now.getTime() + 1_000),
       replacementStrategy: CONFIRMATION_REPLACEMENT_STRATEGIES.REPLACE_PREVIOUS,
@@ -104,6 +96,7 @@ describe('secure token primitives', () => {
         token,
         contactId: 'contact-1',
         subscriptionId: 'subscription-1',
+        lifecycleGeneration: 1,
         issuedAt,
         expiresAt: new Date(now.getTime() + 60_000),
         replacementStrategy:
@@ -122,15 +115,17 @@ describe('secure token primitives', () => {
       .resolves.toMatchObject({ subscriptionId: 'subscription-1' })
   })
 
-  it('issues purpose-bound HMAC unsubscribe capabilities and rotates nonces', async () => {
-    const { capabilities, nonceStore } = secureCapabilities()
+  it('signs unsubscribe purpose, target and generation without a nonce store', async () => {
+    const { capabilities } = secureCapabilities()
 
-    const single = await capabilities.issueUnsubscribeCapability!({
+    const single = await capabilities.issueUnsubscribeCapability({
       contactId: 'contact-1',
-      subscriptionId: 'subscription-1'
+      subscriptionId: 'subscription-1',
+      lifecycleGeneration: 1
     })
-    const all = await capabilities.issueUnsubscribeAllCapability!({
-      contactId: 'contact-1'
+    const all = await capabilities.issueUnsubscribeAllCapability({
+      contactId: 'contact-1',
+      capabilityGeneration: 1
     })
 
     expect(single).not.toContain('contact-1')
@@ -140,45 +135,65 @@ describe('secure token primitives', () => {
       .resolves.toEqual({
         scope: 'SUBSCRIPTION',
         contactId: 'contact-1',
-        subscriptionId: 'subscription-1'
+        subscriptionId: 'subscription-1',
+        lifecycleGeneration: 1
       })
     await expect(capabilities.resolveUnsubscribeCapability(all))
-      .resolves.toEqual({ scope: 'ALL', contactId: 'contact-1' })
+      .resolves.toEqual({ scope: 'ALL', contactId: 'contact-1', capabilityGeneration: 1 })
 
-    const records = nonceStore.snapshot()
-    expect(records.some(record =>
-      record.purpose === CAPABILITY_PURPOSES.UNSUBSCRIBE
-    )).toBe(true)
-    expect(records.some(record =>
-      record.purpose === CAPABILITY_PURPOSES.UNSUBSCRIBE_ALL
-    )).toBe(true)
+    for (const [index, value] of [
+      [1, 'a'], [2, btoa('contact-2')], [3, btoa('subscription-2')], [4, '2']
+    ] as const) {
+      const parts = single.split('.')
+      parts[index] = value.replaceAll('=', '')
+      await expect(capabilities.resolveUnsubscribeCapability(parts.join('.')))
+        .resolves.toBeNull()
+    }
 
-    const tampered = `${single.slice(0, -1)}x`
-    await expect(capabilities.resolveUnsubscribeCapability(tampered))
-      .resolves.toBeNull()
-
-    await capabilities.revokeUnsubscribeCapabilities('subscription-1')
-    await expect(capabilities.resolveUnsubscribeCapability(single))
-      .resolves.toBeNull()
-
-    const replacement = await capabilities.issueUnsubscribeCapability!({
+    const replacement = await capabilities.issueUnsubscribeCapability({
       contactId: 'contact-1',
-      subscriptionId: 'subscription-1'
+      subscriptionId: 'subscription-1',
+      lifecycleGeneration: 2
     })
     expect(replacement).not.toBe(single)
+  })
+
+  it('scopes confirmation replacement and revocation to the supplied lifecycle generation', async () => {
+    const { capabilities } = secureCapabilities()
+    for (const [token, lifecycleGeneration] of [
+      ['old', 1], ['current', 2], ['delayed-old', 1]
+    ] as const) {
+      await capabilities.replaceConfirmation({
+        token,
+        contactId: 'contact-1',
+        subscriptionId: 'subscription-1',
+        lifecycleGeneration,
+        issuedAt: now,
+        expiresAt: new Date(now.getTime() + 60_000),
+        replacementStrategy: CONFIRMATION_REPLACEMENT_STRATEGIES.REPLACE_PREVIOUS,
+        maxActiveTokens: 1
+      })
+    }
+    await capabilities.revokeConfirmations('subscription-1', 1)
+    await expect(capabilities.resolveConfirmation('old', now)).resolves.toBeNull()
+    await expect(capabilities.resolveConfirmation('delayed-old', now)).resolves.toBeNull()
+    await expect(capabilities.resolveConfirmation('current', now))
+      .resolves.toMatchObject({ subscriptionId: 'subscription-1', lifecycleGeneration: 2 })
   })
 
   it('keeps confirmation and unsubscribe purposes separate', async () => {
     const { capabilities } = secureCapabilities()
 
-    const unsubscribe = await capabilities.issueUnsubscribeCapability!({
+    const unsubscribe = await capabilities.issueUnsubscribeCapability({
       contactId: 'contact-1',
-      subscriptionId: 'subscription-1'
+      subscriptionId: 'subscription-1',
+      lifecycleGeneration: 1
     })
     await capabilities.replaceConfirmation({
       token: 'confirmation-token',
       contactId: 'contact-1',
       subscriptionId: 'subscription-1',
+      lifecycleGeneration: 1,
       issuedAt: now,
       expiresAt: new Date(now.getTime() + 60_000),
       replacementStrategy: CONFIRMATION_REPLACEMENT_STRATEGIES.REPLACE_PREVIOUS,
@@ -198,6 +213,7 @@ describe('secure token primitives', () => {
       token: 'cleanup-token',
       contactId: 'contact-1',
       subscriptionId: 'subscription-1',
+      lifecycleGeneration: 1,
       issuedAt: now,
       expiresAt: new Date(now.getTime() + 1_000),
       replacementStrategy: CONFIRMATION_REPLACEMENT_STRATEGIES.REPLACE_PREVIOUS,
@@ -335,7 +351,6 @@ describe('secure lifecycle integration', () => {
     }
     const capabilities = createSecureCapabilities({
       confirmationStore: memoryConfirmationTokenStore(),
-      nonceStore: memoryCapabilityNonceStore(),
       hmacSecret: secret
     })
     const newsletter = createNewsletter({
@@ -367,9 +382,7 @@ describe('secure lifecycle integration', () => {
     const confirmationStore = memoryConfirmationTokenStore()
     const capabilities = createSecureCapabilities({
       confirmationStore,
-      nonceStore: memoryCapabilityNonceStore(),
-      hmacSecret: secret,
-      nonceGenerator: secureTokenGenerator
+      hmacSecret: secret
     })
     const newsletter = createNewsletter({
       storage: memoryStorage(),

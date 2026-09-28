@@ -1,5 +1,6 @@
 import type {
   ConsentEvidence,
+  ConfirmationDelivery,
   Contact,
   ContactStatus,
   ExternalSubject,
@@ -11,6 +12,7 @@ import type {
 
 export interface CreateContactInput {
   readonly id: string
+  readonly capabilityGeneration: number
   readonly email: string
   readonly status: ContactStatus
   readonly subject: ExternalSubject | null
@@ -24,6 +26,7 @@ export interface CreateContactInput {
 export type ContactPatch = Partial<Pick<
   Contact,
   | 'status'
+  | 'capabilityGeneration'
   | 'subject'
   | 'metadata'
   | 'suppressedAt'
@@ -33,10 +36,12 @@ export type ContactPatch = Partial<Pick<
 
 export interface CreateSubscriptionInput {
   readonly id: string
+  readonly lifecycleGeneration: number
   readonly contactId: string
   readonly audienceKey: string
   readonly status: SubscriptionStatus
   readonly consent: ConsentEvidence
+  readonly confirmationDelivery: ConfirmationDelivery | null
   readonly confirmationSentAt?: Date | null
   readonly confirmedAt?: Date | null
   readonly unsubscribedAt?: Date | null
@@ -47,6 +52,8 @@ export interface CreateSubscriptionInput {
 export type SubscriptionPatch = Partial<Pick<
   Subscription,
   | 'status'
+  | 'lifecycleGeneration'
+  | 'confirmationDelivery'
   | 'consent'
   | 'confirmationSentAt'
   | 'confirmedAt'
@@ -78,8 +85,9 @@ export interface NewsletterStorageTransaction {
 
 /**
  * A production adapter must provide transaction semantics strong enough to
- * serialize conflicting Contact + audience lifecycle transitions. Database
- * adapters should enforce uniqueness independently as a second line of defense.
+ * serialize conflicting contact-wide and subscription lifecycle transitions,
+ * including generation checks and confirmation-delivery claims. Database
+ * adapters must enforce uniqueness and roll back state and events together.
  */
 export interface NewsletterStorage {
   transaction<T>(

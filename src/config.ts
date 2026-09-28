@@ -29,6 +29,7 @@ export interface ConfirmationOptions {
   readonly replacementStrategy?: ConfirmationReplacementStrategy
   readonly maxActiveTokens?: number
   readonly cleanupRetentionMs?: number
+  readonly deliveryLeaseMs?: number
 }
 
 export interface NewsletterRateLimits {
@@ -67,6 +68,7 @@ export interface NewsletterCore extends NewsletterService {
     readonly replacementStrategy: ConfirmationReplacementStrategy
     readonly maxActiveTokens: number
     readonly cleanupRetentionMs: number
+    readonly deliveryLeaseMs: number
   }
 
   getDeliveryEligibility(

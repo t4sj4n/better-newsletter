@@ -198,10 +198,69 @@ describe.skipIf(!databaseUrl)('PostgreSQL integration', () => {
           createdAt: now,
           updatedAt: now
         })
+
+        const ineligible = [
+          {
+            id: 'pending',
+            status: SUBSCRIPTION_STATUSES.PENDING_CONFIRMATION,
+            confirmedAt: null,
+            unsubscribedAt: null
+          },
+          {
+            id: 'unsubscribed',
+            status: SUBSCRIPTION_STATUSES.UNSUBSCRIBED,
+            confirmedAt: now,
+            unsubscribedAt: now
+          },
+          {
+            id: 'unconfirmed',
+            status: SUBSCRIPTION_STATUSES.ACTIVE,
+            confirmedAt: null,
+            unsubscribedAt: null
+          },
+          {
+            id: 'ended',
+            status: SUBSCRIPTION_STATUSES.ACTIVE,
+            confirmedAt: now,
+            unsubscribedAt: now
+          }
+        ] as const
+
+        for (const candidate of ineligible) {
+          const other = await transaction.createContact({
+            id: `${candidate.id}-contact`,
+            capabilityGeneration: 1,
+            email: `${candidate.id}@example.com`,
+            status: CONTACT_STATUSES.ENABLED,
+            subject: null,
+            metadata: {},
+            createdAt: now,
+            updatedAt: now
+          })
+          await transaction.createSubscription({
+            id: `${candidate.id}-subscription`,
+            lifecycleGeneration: 1,
+            contactId: other.id,
+            audienceKey: 'default',
+            status: candidate.status,
+            consent: {
+              version: 'v1',
+              source: 'import',
+              locale: 'en',
+              consentedAt: now
+            },
+            confirmationDelivery: null,
+            confirmationSentAt: now,
+            confirmedAt: candidate.confirmedAt,
+            unsubscribedAt: candidate.unsubscribedAt,
+            createdAt: now,
+            updatedAt: now
+          })
+        }
       })
 
       const eligible = await listEligibleSubscriptions(db, 'default')
-      expect(eligible).toHaveLength(1)
+      expect(eligible.map(row => row.contact.email)).toEqual(['eligible@example.com'])
       expect(eligible[0]?.contact).toMatchObject({
         email: 'eligible@example.com',
         metadata: { tier: 'pro' }

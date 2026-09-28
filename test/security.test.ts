@@ -358,14 +358,20 @@ describe('secure lifecycle integration', () => {
     })
     await vi.waitFor(() => expect(messages).toHaveLength(2))
 
-    for (const message of messages) {
-      await newsletter.confirm({ token: message.token })
-    }
+    const defaultMessage = messages.find(
+      message => message.audience === 'default'
+    )!
+    const oldProductToken = messages.find(
+      message => message.audience === 'product-news'
+    )!.token
+    await newsletter.confirm({ token: defaultMessage.token })
 
     const productCapability = await newsletter.createUnsubscribeCapability({
       email: 'person@example.com',
       audience: 'product-news'
     })
+    await expect(newsletter.unsubscribeAll({ capability: productCapability! }))
+      .resolves.toEqual({ unsubscribed: false })
     await newsletter.unsubscribe({ capability: productCapability! })
 
     const subscriptions = await newsletter.listSubscriptions({
@@ -384,5 +390,7 @@ describe('secure lifecycle integration', () => {
     })
     await expect(newsletter.unsubscribe({ capability: staleCapability }))
       .resolves.toEqual({ unsubscribed: false })
+    await expect(newsletter.confirm({ token: oldProductToken }))
+      .resolves.toEqual({ confirmed: false })
   })
 })

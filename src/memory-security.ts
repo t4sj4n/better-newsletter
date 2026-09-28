@@ -72,6 +72,21 @@ export class MemoryConfirmationTokenStore implements ConfirmationTokenStore {
     })
   }
 
+  async resolve(
+    input: Parameters<ConfirmationTokenStore['resolve']>[0]
+  ): Promise<ConfirmationTokenRecord | null> {
+    const record = this.records.get(input.digest)
+    if (
+      record == null
+      || record.consumedAt != null
+      || record.revokedAt != null
+      || record.expiresAt.getTime() <= input.now.getTime()
+    ) {
+      return null
+    }
+    return clone(record)
+  }
+
   consume(input: Parameters<ConfirmationTokenStore['consume']>[0]) {
     return this.atomic(() => {
       const record = this.records.get(input.digest)

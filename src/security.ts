@@ -143,6 +143,12 @@ export interface HmacRateLimitKeyProviderOptions {
   }) => string
 }
 
+function toArrayBuffer(bytes: Uint8Array): ArrayBuffer {
+  const copy = new Uint8Array(bytes.byteLength)
+  copy.set(bytes)
+  return copy.buffer
+}
+
 function bytesToHex(bytes: Uint8Array): string {
   let output = ''
   for (const byte of bytes) output += byte.toString(16).padStart(2, '0')
@@ -208,7 +214,7 @@ async function importHmacKey(
 ): Promise<CryptoKey> {
   return crypto.subtle.importKey(
     'raw',
-    secretBytes(secret),
+    toArrayBuffer(secretBytes(secret)),
     { name: 'HMAC', hash: 'SHA-256' },
     false,
     [...usages]
@@ -234,7 +240,7 @@ async function verifyHmac(
   return crypto.subtle.verify(
     'HMAC',
     key,
-    signatureBytes,
+    toArrayBuffer(signatureBytes),
     textEncoder.encode(payload)
   )
 }

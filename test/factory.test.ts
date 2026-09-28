@@ -6,19 +6,31 @@ import {
   NEWSLETTER_ERROR_CODES,
   NewsletterError
 } from '../src/index.js'
+import { memoryCapabilities, memoryStorage } from '../src/memory.js'
+
+const mailer = {
+  async sendConfirmation() {
+    return { accepted: true }
+  }
+}
+
+const tokenGenerator = { generate: () => 'token' }
 
 describe('createNewsletter', () => {
   it('constructs the core with provider-neutral test doubles', () => {
-    const storage = { name: 'test-storage' }
-    const mailer = { name: 'test-mailer' }
+    const storage = memoryStorage()
+    const capabilities = memoryCapabilities()
 
     const newsletter = createNewsletter({
       storage,
-      mailer
+      capabilities,
+      mailer,
+      tokenGenerator
     })
 
     expect(newsletter.storage).toBe(storage)
     expect(newsletter.mailer).toBe(mailer)
+    expect(newsletter.capabilities).toBe(capabilities)
     expect(newsletter.defaultAudience).toBe(DEFAULT_AUDIENCE_KEY)
     expect(newsletter.confirmation.expiresInMs)
       .toBe(DEFAULT_CONFIRMATION_EXPIRES_IN_MS)
@@ -27,13 +39,16 @@ describe('createNewsletter', () => {
 
   it('accepts injected deterministic dependencies', () => {
     const now = new Date('2026-09-28T08:00:00.000Z')
-    const tokenGenerator = { generate: () => 'deterministic-token' }
+    const deterministicTokenGenerator = { generate: () => 'deterministic-token' }
+    const idGenerator = { generate: () => 'deterministic-id' }
 
     const newsletter = createNewsletter({
-      storage: {},
-      mailer: {},
+      storage: memoryStorage(),
+      capabilities: memoryCapabilities(),
+      mailer,
       clock: { now: () => now },
-      tokenGenerator,
+      tokenGenerator: deterministicTokenGenerator,
+      idGenerator,
       defaultAudience: 'product-news',
       confirmation: {
         expiresInMs: 60_000
@@ -41,15 +56,18 @@ describe('createNewsletter', () => {
     })
 
     expect(newsletter.clock.now()).toBe(now)
-    expect(newsletter.tokenGenerator).toBe(tokenGenerator)
+    expect(newsletter.tokenGenerator).toBe(deterministicTokenGenerator)
+    expect(newsletter.idGenerator).toBe(idGenerator)
     expect(newsletter.defaultAudience).toBe('product-news')
     expect(newsletter.confirmation.expiresInMs).toBe(60_000)
   })
 
   it('rejects invalid confirmation configuration', () => {
     expect(() => createNewsletter({
-      storage: {},
-      mailer: {},
+      storage: memoryStorage(),
+      capabilities: memoryCapabilities(),
+      mailer,
+      tokenGenerator,
       confirmation: {
         expiresInMs: 0
       }
@@ -57,8 +75,10 @@ describe('createNewsletter', () => {
 
     try {
       createNewsletter({
-        storage: {},
-        mailer: {},
+        storage: memoryStorage(),
+        capabilities: memoryCapabilities(),
+        mailer,
+        tokenGenerator,
         confirmation: {
           expiresInMs: 0
         }

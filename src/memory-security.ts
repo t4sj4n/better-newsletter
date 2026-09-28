@@ -10,8 +10,15 @@ function clone<T>(value: T): T {
 }
 
 export class MemoryConfirmationTokenStore implements ConfirmationTokenStore {
-  private readonly records = new Map<string, ConfirmationTokenRecord>()
   private queue: Promise<void> = Promise.resolve()
+
+  /**
+   * @param records Backing map keyed by digest. Memory storage passes its
+   * transaction state so token writes roll back with lifecycle state.
+   */
+  constructor(
+    private readonly records: Map<string, ConfirmationTokenRecord> = new Map()
+  ) {}
 
   private atomic<T>(operation: () => Promise<T> | T): Promise<T> {
     const run = this.queue.then(operation)

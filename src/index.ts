@@ -1,23 +1,31 @@
 export {
   createNewsletter,
-  DEFAULT_CONFIRMATION_EXPIRES_IN_MS,
+  DEFAULT_CONFIRMATION_CLEANUP_RETENTION_MS,
   DEFAULT_CONFIRMATION_DELIVERY_LEASE_MS,
+  DEFAULT_CONFIRMATION_EXPIRES_IN_MS,
+  DEFAULT_MAX_ACTIVE_CONFIRMATION_TOKENS,
+  DEFAULT_RESEND_RATE_LIMIT,
+  DEFAULT_SUBSCRIBE_RATE_LIMIT,
+  DEFAULT_TRANSACTION_MAX_ATTEMPTS,
   systemClock,
   systemIdGenerator
 } from './create-newsletter.js'
 
 export type {
+  BackgroundTaskRunner,
   Clock,
   ConfirmationOptions,
   IdGenerator,
   NewsletterConfig,
   NewsletterCore,
+  NewsletterLogger,
   NewsletterRateLimits,
   TokenGenerator
 } from './config.js'
 
 export type {
   ConfirmationCapabilityTarget,
+  ConfirmationReplacementResult,
   NewsletterCapabilities,
   UnsubscribeCapabilityTarget
 } from './capabilities.js'
@@ -55,15 +63,20 @@ export type {
 
 export {
   NEWSLETTER_ERROR_CODES,
-  NewsletterError
+  NewsletterError,
+  StorageConflictError
 } from './errors.js'
 
 export type {
-  NewsletterErrorCode
+  NewsletterErrorCode,
+  NewsletterErrorOptions
 } from './errors.js'
+
+export { MAIL_DELIVERY_FAILURES } from './mailer.js'
 
 export type {
   ConfirmationMailInput,
+  MailDeliveryFailure,
   MailDeliveryResult,
   NewsletterMailer
 } from './mailer.js'

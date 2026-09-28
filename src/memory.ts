@@ -1,11 +1,12 @@
 import type { NewsletterCapabilities } from './capabilities.js'
-import { createSecureCapabilities } from './security.js'
-import { memoryConfirmationTokenStore } from './memory-security.js'
+import { createSecureCapabilities, type ConfirmationTokenRecord } from './security.js'
+import { MemoryConfirmationTokenStore } from './memory-security.js'
 import type {
   Contact,
   NewsletterEvent,
   Subscription
 } from './domain.js'
+import { StorageConflictError } from './errors.js'
 import type {
   ContactPatch,
   CreateContactInput,
@@ -21,6 +22,7 @@ interface MemoryState {
   subscriptions: Map<string, Subscription>
   subscriptionByContactAudience: Map<string, string>
   events: NewsletterEvent[]
+  confirmationTokens: Map<string, ConfirmationTokenRecord>
 }
 
 /** Deep-copies supported values so callers cannot mutate stored state by reference. */
@@ -39,7 +41,8 @@ export class MemoryNewsletterStorage implements NewsletterStorage {
     contactByEmail: new Map(),
     subscriptions: new Map(),
     subscriptionByContactAudience: new Map(),
-    events: []
+    events: [],
+    confirmationTokens: new Map()
   }
 
   private queue: Promise<void> = Promise.resolve()
@@ -96,16 +99,24 @@ export class MemoryNewsletterStorage implements NewsletterStorage {
       listEvents: async contactId =>
         this.state.events
           .filter(event => event.contactId === contactId)
-          .map(clone)
+          .map(clone),
+      confirmationTokens: new MemoryConfirmationTokenStore(
+        this.state.confirmationTokens
+      )
     }
+  }
+
+  /** Returns committed confirmation-token records, e.g. to assert digests in tests. */
+  confirmationTokenSnapshot(): readonly ConfirmationTokenRecord[] {
+    return [...this.state.confirmationTokens.values()].map(clone)
   }
 
   private createContact(input: CreateContactInput): Contact {
     if (this.state.contacts.has(input.id)) {
-      throw new Error(`Contact id already exists: ${input.id}`)
+      throw new StorageConflictError(`Contact id already exists: ${input.id}`)
     }
     if (this.state.contactByEmail.has(input.email)) {
-      throw new Error(`Contact e-mail already exists: ${input.email}`)
+      throw new StorageConflictError('Contact e-mail already exists.')
     }
 
     const contact: Contact = clone(input)
@@ -125,12 +136,12 @@ export class MemoryNewsletterStorage implements NewsletterStorage {
 
   private createSubscription(input: CreateSubscriptionInput): Subscription {
     if (this.state.subscriptions.has(input.id)) {
-      throw new Error(`Subscription id already exists: ${input.id}`)
+      throw new StorageConflictError(`Subscription id already exists: ${input.id}`)
     }
 
     const key = subscriptionKey(input.contactId, input.audienceKey)
     if (this.state.subscriptionByContactAudience.has(key)) {
-      throw new Error(`Subscription already exists: ${key}`)
+      throw new StorageConflictError('Subscription already exists for this contact and audience.')
     }
 
     const subscription: Subscription = clone(input)
@@ -158,12 +169,12 @@ export function memoryStorage(): MemoryNewsletterStorage {
 }
 
 /**
- * Creates secure capabilities with an ephemeral signing key and in-memory
- * confirmation digests. Neither the key nor the records survive a restart.
+ * Creates secure capabilities with an ephemeral signing key. Confirmation
+ * digests live in the storage transaction's token store. The key does not
+ * survive a restart.
  */
 export function memoryCapabilities(): NewsletterCapabilities {
   return createSecureCapabilities({
-    confirmationStore: memoryConfirmationTokenStore(),
     hmacSecret: crypto.getRandomValues(new Uint8Array(32))
   })
 }

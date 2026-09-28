@@ -112,4 +112,16 @@ describe('createNewsletter', () => {
       })).toThrow('confirmation.deliveryLeaseMs must be a positive safe integer.')
     }
   )
+
+  it.each([0, -1, 1.5, Infinity])(
+    'rejects invalid transactionMaxAttempts: %s',
+    transactionMaxAttempts => {
+      expect(() => createNewsletter({
+        storage: memoryStorage(),
+        capabilities: memoryCapabilities(),
+        mailer,
+        transactionMaxAttempts
+      })).toThrow('transactionMaxAttempts must be a positive safe integer.')
+    }
+  )
 })

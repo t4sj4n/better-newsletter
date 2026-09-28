@@ -1,7 +1,9 @@
 import { describe, expect, it, vi } from 'vitest'
 import {
   CONFIRMATION_REPLACEMENT_STRATEGIES,
+  MAIL_DELIVERY_FAILURES,
   NEWSLETTER_EVENT_TYPES,
+  StorageConflictError,
   SUBSCRIPTION_STATUSES,
   createNewsletter,
   createSecureCapabilities,
@@ -9,7 +11,7 @@ import {
   type ConfirmationOptions,
   type NewsletterStorage
 } from '../src/index.js'
-import { memoryConfirmationTokenStore, memoryStorage } from '../src/memory.js'
+import { memoryStorage } from '../src/memory.js'
 
 const email = 'person@example.com'
 const signup = { email, consent: { granted: true, version: 'v1' } }
@@ -21,11 +23,30 @@ function gate() {
   return { promise, release }
 }
 
+/** Holds the first transaction until `resume` is released. */
+function delayedStorage(
+  storage: NewsletterStorage,
+  reached: ReturnType<typeof gate>,
+  resume: ReturnType<typeof gate>
+): NewsletterStorage {
+  let first = true
+  return {
+    async transaction(operation) {
+      if (first) {
+        first = false
+        reached.release()
+        await resume.promise
+      }
+      return storage.transaction(operation)
+    }
+  }
+}
+
 function setup(confirmation: ConfirmationOptions = {}) {
   let nowMs = Date.parse('2026-09-28T10:00:00.000Z')
   let token = 0
   const storage = memoryStorage()
-  const confirmationStore = memoryConfirmationTokenStore()
+  const background = new WeakMap<object, Promise<void>[]>()
   const messages: ConfirmationMailInput[] = []
   const mailer = {
     sendConfirmation: vi.fn(async (input: ConfirmationMailInput) => {
@@ -33,15 +54,26 @@ function setup(confirmation: ConfirmationOptions = {}) {
       return { accepted: true }
     })
   }
-  const createInstance = (instanceStorage: NewsletterStorage = storage) => createNewsletter({
-    storage: instanceStorage,
-    capabilities: createSecureCapabilities({ confirmationStore, hmacSecret: secret }),
-    mailer,
-    tokenGenerator: { generate: (): string | Promise<string> => `token-${++token}` },
-    clock: { now: () => new Date(nowMs) },
-    confirmation: { deliveryLeaseMs: 1_000, ...confirmation }
-  })
+  const createInstance = (instanceStorage: NewsletterStorage = storage) => {
+    const tasks: Promise<void>[] = []
+    const instance = createNewsletter({
+      storage: instanceStorage,
+      capabilities: createSecureCapabilities({ hmacSecret: secret }),
+      mailer,
+      tokenGenerator: { generate: (): string | Promise<string> => `token-${++token}` },
+      clock: { now: () => new Date(nowMs) },
+      confirmation: { deliveryLeaseMs: 1_000, ...confirmation },
+      runBackground: task => { tasks.push(task) }
+    })
+    background.set(instance, tasks)
+    return instance
+  }
   const newsletter = createInstance()
+  /** Awaits background delivery started by one service instance. */
+  const settle = async (instance: object = newsletter) => {
+    const tasks = background.get(instance)!
+    while (tasks.length > 0) await Promise.all(tasks.splice(0))
+  }
   const waitForEvents = async (type: string, count: number) => {
     await vi.waitFor(async () => {
       const events = await newsletter.listEvents({ email })
@@ -49,7 +81,8 @@ function setup(confirmation: ConfirmationOptions = {}) {
     })
   }
   return {
-    newsletter, createInstance, storage, confirmationStore, mailer, messages, waitForEvents,
+    newsletter, createInstance, storage, mailer, messages, waitForEvents, settle,
+    tokens: () => storage.confirmationTokenSnapshot(),
     advance: (ms: number) => { nowMs += ms }
   }
 }
@@ -58,25 +91,20 @@ describe('generation-bound lifecycle concurrency', () => {
   it.each(['confirm', 'unsubscribe', 'unsubscribeAll'] as const)(
     'rejects an old resolved %s target after another instance starts a new cycle',
     async action => {
-      const { newsletter, createInstance, messages, waitForEvents } = setup()
+      const { newsletter, createInstance, storage, messages, waitForEvents } = setup()
       await newsletter.subscribe(signup)
       await waitForEvents(NEWSLETTER_EVENT_TYPES.CONFIRMATION_SENT, 1)
       const single = (await newsletter.createUnsubscribeCapability({ email }))!
       const all = (await newsletter.createUnsubscribeCapability({ email, all: true }))!
-      const reader = createInstance()
       const resolved = gate()
       const resume = gate()
+      // Confirmation resolves inside its transaction, so delay the whole
+      // request; signed unsubscribe targets resolve before any transaction.
+      const reader = createInstance(action === 'confirm'
+        ? delayedStorage(storage, resolved, resume)
+        : storage)
 
-      if (action === 'confirm') {
-        const original = reader.capabilities.resolveConfirmation
-        vi.spyOn(reader.capabilities, 'resolveConfirmation').mockImplementationOnce(async (...args) => {
-          const target = await original(...args)
-          expect(target?.lifecycleGeneration).toBe(1)
-          resolved.release()
-          await resume.promise
-          return target
-        })
-      } else {
+      if (action !== 'confirm') {
         const original = reader.capabilities.resolveUnsubscribeCapability
         vi.spyOn(reader.capabilities, 'resolveUnsubscribeCapability').mockImplementationOnce(async value => {
           const target = await original(value)
@@ -196,22 +224,15 @@ describe('generation-bound lifecycle concurrency', () => {
   it.each(['expiry', 'replacement'] as const)(
     'rechecks token validity inside the transition after delayed resolution and %s',
     async invalidation => {
-      const { newsletter, createInstance, messages, advance, waitForEvents } = setup({
+      const { newsletter, createInstance, storage, messages, advance, waitForEvents, settle } = setup({
         expiresInMs: 1_000,
         replacementStrategy: CONFIRMATION_REPLACEMENT_STRATEGIES.REPLACE_PREVIOUS
       })
       await newsletter.subscribe(signup)
       await waitForEvents(NEWSLETTER_EVENT_TYPES.CONFIRMATION_SENT, 1)
-      const reader = createInstance()
       const resolved = gate()
       const resume = gate()
-      const original = reader.capabilities.resolveConfirmation
-      vi.spyOn(reader.capabilities, 'resolveConfirmation').mockImplementationOnce(async (...args) => {
-        const target = await original(...args)
-        resolved.release()
-        await resume.promise
-        return target
-      })
+      const reader = createInstance(delayedStorage(storage, resolved, resume))
       const confirming = reader.confirm({ token: messages[0]!.token })
       try {
         await resolved.promise
@@ -219,6 +240,8 @@ describe('generation-bound lifecycle concurrency', () => {
           advance(1_000)
         } else {
           await newsletter.resendConfirmation({ email })
+          await settle()
+          expect(messages).toHaveLength(2)
         }
       } finally {
         resume.release()
@@ -242,7 +265,7 @@ describe('generation-bound lifecycle concurrency', () => {
   })
 
   it('does not let delayed old token setup replace or mark new-generation delivery', async () => {
-    const { newsletter, createInstance, confirmationStore, messages, waitForEvents } = setup()
+    const { newsletter, createInstance, tokens, messages, waitForEvents, settle } = setup()
     await newsletter.subscribe(signup)
     await waitForEvents(NEWSLETTER_EVENT_TYPES.CONFIRMATION_SENT, 1)
     const started = gate()
@@ -265,15 +288,17 @@ describe('generation-bound lifecycle concurrency', () => {
       resume.release()
     }
     await resend
-    expect(confirmationStore.snapshot()).toHaveLength(2)
+    await settle()
+    expect(tokens()).toHaveLength(2)
     expect(messages).toHaveLength(2)
     expect(messages[1]!.subscription.lifecycleGeneration).toBe(2)
+    expect(messages[1]!.lifecycleGeneration).toBe(2)
     await expect(other.confirm({ token: messages[1]!.token }))
       .resolves.toEqual({ confirmed: true })
   })
 
   it('fences stale same-generation setup before it can replace a newer delivered token', async () => {
-    const { newsletter, createInstance, messages, advance, waitForEvents } = setup({
+    const { newsletter, createInstance, messages, advance, waitForEvents, settle } = setup({
       replacementStrategy: CONFIRMATION_REPLACEMENT_STRATEGIES.REPLACE_PREVIOUS
     })
     await newsletter.subscribe(signup)
@@ -292,39 +317,14 @@ describe('generation-bound lifecycle concurrency', () => {
       await started.promise
       advance(1_001)
       await other.resendConfirmation({ email })
+      await settle(other)
       expect(messages).toHaveLength(2)
     } finally {
       resume.release()
     }
     await oldResend
+    await settle()
     expect(messages).toHaveLength(2)
-    await expect(other.confirm({ token: messages[1]!.token }))
-      .resolves.toEqual({ confirmed: true })
-  })
-
-  it('scopes delayed confirmation revocation to the old generation', async () => {
-    const { newsletter, createInstance, messages, waitForEvents } = setup()
-    await newsletter.subscribe(signup)
-    await waitForEvents(NEWSLETTER_EVENT_TYPES.CONFIRMATION_SENT, 1)
-    const oldCapability = (await newsletter.createUnsubscribeCapability({ email }))!
-    const started = gate()
-    const resume = gate()
-    const revoke = newsletter.capabilities.revokeConfirmations
-    vi.spyOn(newsletter.capabilities, 'revokeConfirmations').mockImplementationOnce(async (...args) => {
-      started.release()
-      await resume.promise
-      return revoke(...args)
-    })
-    const unsubscribe = newsletter.unsubscribe({ capability: oldCapability })
-    const other = createInstance()
-    try {
-      await started.promise
-      await other.subscribe(signup)
-      await waitForEvents(NEWSLETTER_EVENT_TYPES.CONFIRMATION_SENT, 2)
-    } finally {
-      resume.release()
-    }
-    await unsubscribe
     await expect(other.confirm({ token: messages[1]!.token }))
       .resolves.toEqual({ confirmed: true })
   })
@@ -357,8 +357,8 @@ describe('generation-bound lifecycle concurrency', () => {
   })
 })
 
-describe('post-commit capability cleanup', () => {
-  it('keeps a successful confirmation authoritative when token cleanup fails', async () => {
+describe('transactional capability state', () => {
+  it('rolls back confirmation when token consumption fails', async () => {
     const { newsletter, messages, waitForEvents } = setup()
     await newsletter.subscribe(signup)
     await waitForEvents(NEWSLETTER_EVENT_TYPES.CONFIRMATION_SENT, 1)
@@ -367,25 +367,58 @@ describe('post-commit capability cleanup', () => {
       .mockRejectedValueOnce(new Error('token store unavailable'))
 
     await expect(newsletter.confirm({ token: messages[0]!.token }))
-      .resolves.toEqual({ confirmed: true })
+      .rejects.toThrow('token store unavailable')
     expect((await newsletter.getSubscription({ email }))?.status)
-      .toBe(SUBSCRIPTION_STATUSES.ACTIVE)
+      .toBe(SUBSCRIPTION_STATUSES.PENDING_CONFIRMATION)
+    await expect(newsletter.confirm({ token: messages[0]!.token }))
+      .resolves.toEqual({ confirmed: true })
   })
 
-  it('keeps a successful unsubscribe authoritative when token revocation fails', async () => {
-    const { newsletter, messages, waitForEvents } = setup()
+  it('rolls back unsubscribe when token revocation fails', async () => {
+    const { newsletter, waitForEvents, tokens } = setup()
     await newsletter.subscribe(signup)
     await waitForEvents(NEWSLETTER_EVENT_TYPES.CONFIRMATION_SENT, 1)
-    await newsletter.confirm({ token: messages[0]!.token })
     const capability = (await newsletter.createUnsubscribeCapability({ email }))!
 
     vi.spyOn(newsletter.capabilities, 'revokeConfirmations')
       .mockRejectedValueOnce(new Error('token store unavailable'))
 
     await expect(newsletter.unsubscribe({ capability }))
-      .resolves.toEqual({ unsubscribed: true })
+      .rejects.toThrow('token store unavailable')
     expect((await newsletter.getSubscription({ email }))?.status)
-      .toBe(SUBSCRIPTION_STATUSES.UNSUBSCRIBED)
+      .toBe(SUBSCRIPTION_STATUSES.PENDING_CONFIRMATION)
+    expect(tokens().filter(record => record.revokedAt == null)).toHaveLength(1)
+
+    await expect(newsletter.unsubscribe({ capability }))
+      .resolves.toEqual({ unsubscribed: true })
+    expect(tokens().filter(record => record.revokedAt == null)).toHaveLength(0)
+  })
+
+  it('does not keep replaced tokens revoked when token setup rolls back', async () => {
+    const { newsletter, createInstance, storage, messages, tokens, advance, waitForEvents } = setup({
+      replacementStrategy: CONFIRMATION_REPLACEMENT_STRATEGIES.REPLACE_PREVIOUS
+    })
+    await newsletter.subscribe(signup)
+    await waitForEvents(NEWSLETTER_EVENT_TYPES.CONFIRMATION_SENT, 1)
+    const failing = createInstance({
+      transaction: operation => storage.transaction(transaction => operation({
+        ...transaction,
+        async appendEvent(event) {
+          if (event.type === NEWSLETTER_EVENT_TYPES.CONFIRMATION_REPLACED) {
+            throw new Error('rollback')
+          }
+          await transaction.appendEvent(event)
+        }
+      }))
+    })
+
+    advance(1)
+    await failing.resendConfirmation({ email })
+    await waitForEvents(NEWSLETTER_EVENT_TYPES.CONFIRMATION_SEND_FAILED, 1)
+    expect(messages).toHaveLength(1)
+    expect(tokens()).toHaveLength(1)
+    await expect(newsletter.confirm({ token: messages[0]!.token }))
+      .resolves.toEqual({ confirmed: true })
   })
 })
 
@@ -438,7 +471,7 @@ describe('durable confirmation retries', () => {
   )
 
   it('keeps ambiguous provider tokens usable while bounding retained retry tokens', async () => {
-    const { newsletter, confirmationStore, messages, mailer, waitForEvents } = setup()
+    const { newsletter, tokens, messages, mailer, waitForEvents } = setup()
     mailer.sendConfirmation.mockImplementation(async input => {
       messages.push(input)
       throw new Error('delivery may have succeeded')
@@ -447,7 +480,7 @@ describe('durable confirmation retries', () => {
       await newsletter.subscribe(signup)
       await waitForEvents(NEWSLETTER_EVENT_TYPES.CONFIRMATION_SEND_FAILED, attempt)
     }
-    expect(confirmationStore.snapshot().filter(record =>
+    expect(tokens().filter(record =>
       record.consumedAt == null && record.revokedAt == null
     )).toHaveLength(2)
     await expect(newsletter.confirm({ token: messages[0]!.token }))
@@ -457,7 +490,7 @@ describe('durable confirmation retries', () => {
   })
 
   it('reclaims expired delivery leases and fences late completion of an older attempt', async () => {
-    const { newsletter, createInstance, mailer, messages, advance, waitForEvents } = setup()
+    const { newsletter, createInstance, mailer, messages, advance, waitForEvents, settle } = setup()
     const oldSend = gate()
     const newSend = gate()
     mailer.sendConfirmation
@@ -480,6 +513,7 @@ describe('durable confirmation retries', () => {
       advance(999)
       await Promise.all([other.subscribe(signup), other.subscribe(signup)])
       await other.resendConfirmation({ email })
+      await settle(other)
       expect(messages).toHaveLength(1)
       advance(1)
       await other.subscribe(signup)
@@ -545,5 +579,278 @@ describe('durable confirmation retries', () => {
     await expect(failing.confirm({ token: messages[0]!.token })).rejects.toThrow('commit failed')
     await expect(newsletter.confirm({ token: messages[0]!.token }))
       .resolves.toEqual({ confirmed: true })
+  })
+})
+
+describe('storage conflicts', () => {
+  it('re-runs a signup whose stale read lost a unique-constraint race', async () => {
+    const { newsletter, createInstance, storage, waitForEvents } = setup()
+    await newsletter.subscribe(signup)
+    await waitForEvents(NEWSLETTER_EVENT_TYPES.CONFIRMATION_SENT, 1)
+    const staleAll = (await newsletter.createUnsubscribeCapability({ email, all: true }))!
+    let staleReads = 1
+    const racing = createInstance({
+      transaction: operation => storage.transaction(transaction => operation({
+        ...transaction,
+        // Simulates a read that missed a concurrently committed contact.
+        async getContactByEmail(value) {
+          if (staleReads > 0) {
+            staleReads -= 1
+            return null
+          }
+          return transaction.getContactByEmail(value)
+        }
+      }))
+    })
+
+    await expect(racing.subscribe({ ...signup, audience: 'product-news' }))
+      .resolves.toEqual({ accepted: true })
+    expect(staleReads).toBe(0)
+    expect(await newsletter.listSubscriptions({ email })).toHaveLength(2)
+    expect(await newsletter.getContact({ email }))
+      .toMatchObject({ capabilityGeneration: 2 })
+    await expect(newsletter.unsubscribeAll({ capability: staleAll }))
+      .resolves.toEqual({ unsubscribed: false })
+  })
+
+  it.each([undefined, 1, 5])('gives up after the configured attempts: %s', async maxAttempts => {
+    let calls = 0
+    const newsletter = createNewsletter({
+      storage: {
+        async transaction() {
+          calls += 1
+          throw new StorageConflictError('serialization failure')
+        }
+      },
+      capabilities: createSecureCapabilities({ hmacSecret: secret }),
+      mailer: { async sendConfirmation() { return { accepted: true } } },
+      ...(maxAttempts !== undefined ? { transactionMaxAttempts: maxAttempts } : {})
+    })
+
+    await expect(newsletter.subscribe(signup)).rejects.toBeInstanceOf(StorageConflictError)
+    expect(calls).toBe(maxAttempts ?? 3)
+  })
+
+  it('does not retry non-conflict storage errors', async () => {
+    let calls = 0
+    const newsletter = createNewsletter({
+      storage: {
+        async transaction() {
+          calls += 1
+          throw new Error('connection lost')
+        }
+      },
+      capabilities: createSecureCapabilities({ hmacSecret: secret }),
+      mailer: { async sendConfirmation() { return { accepted: true } } }
+    })
+
+    await expect(newsletter.subscribe(signup)).rejects.toThrow('connection lost')
+    expect(calls).toBe(1)
+  })
+
+  it('reads the contact before subscriptions in every transaction', async () => {
+    const { createInstance, storage, messages, advance } = setup()
+    const violations: string[] = []
+    const ordered = createInstance({
+      transaction: operation => storage.transaction(transaction => {
+        let subscriptionRead = false
+        const readContact = (name: string) => {
+          if (subscriptionRead) violations.push(name)
+        }
+        return operation({
+          ...transaction,
+          async getContactById(id) {
+            readContact('getContactById')
+            return transaction.getContactById(id)
+          },
+          async getContactByEmail(value) {
+            readContact('getContactByEmail')
+            return transaction.getContactByEmail(value)
+          },
+          async getSubscriptionById(id) {
+            subscriptionRead = true
+            return transaction.getSubscriptionById(id)
+          },
+          async getSubscription(contactId, audienceKey) {
+            subscriptionRead = true
+            return transaction.getSubscription(contactId, audienceKey)
+          },
+          async listSubscriptions(contactId) {
+            subscriptionRead = true
+            return transaction.listSubscriptions(contactId)
+          }
+        })
+      })
+    })
+    const settleOrdered = async () => {
+      await vi.waitFor(async () => {
+        const events = await ordered.listEvents({ email })
+        const requested = events.filter(event =>
+          event.type === NEWSLETTER_EVENT_TYPES.CONFIRMATION_REQUESTED).length
+        const completed = events.filter(event =>
+          event.type === NEWSLETTER_EVENT_TYPES.CONFIRMATION_SENT
+          || event.type === NEWSLETTER_EVENT_TYPES.CONFIRMATION_SEND_FAILED).length
+        expect(completed).toBe(requested)
+      })
+    }
+
+    await ordered.subscribe(signup)
+    await settleOrdered()
+    advance(1)
+    await ordered.resendConfirmation({ email })
+    await settleOrdered()
+    await ordered.confirm({ token: messages.at(-1)!.token })
+    await ordered.subscribe({ ...signup, audience: 'product-news' })
+    await settleOrdered()
+    const single = (await ordered.createUnsubscribeCapability({ email }))!
+    await ordered.unsubscribe({ capability: single })
+    const all = (await ordered.createUnsubscribeCapability({ email, all: true }))!
+    await ordered.unsubscribeAll({ capability: all })
+    await ordered.suppressContact({ email, reason: 'BOUNCE' })
+    await ordered.unsuppressContact({ email })
+    await ordered.importSubscription({
+      email,
+      audience: 'legacy',
+      status: SUBSCRIPTION_STATUSES.ACTIVE,
+      consent: { version: 'legacy', consentedAt: new Date(0) },
+      confirmedAt: new Date(1)
+    })
+
+    expect(messages.length).toBeGreaterThanOrEqual(3)
+    expect(violations).toEqual([])
+  })
+})
+
+describe('delivery outcomes', () => {
+  it('passes the claimed delivery and attempt IDs to the mailer', async () => {
+    const { newsletter, messages, waitForEvents, settle } = setup()
+    await newsletter.subscribe(signup)
+    await waitForEvents(NEWSLETTER_EVENT_TYPES.CONFIRMATION_SENT, 1)
+    await newsletter.resendConfirmation({ email })
+    await settle()
+
+    const requested = (await newsletter.listEvents({ email }))
+      .filter(event => event.type === NEWSLETTER_EVENT_TYPES.CONFIRMATION_REQUESTED)
+      .map(event => event.metadata.attemptId)
+    expect(messages).toHaveLength(2)
+    expect(messages.map(message => message.attemptId)).toEqual(requested)
+    expect(messages.map(message => message.subscription.confirmationDelivery?.attemptId))
+      .toEqual(requested)
+    expect(messages.map(message => message.subscription.confirmationDelivery?.id))
+      .toEqual(messages.map(message => message.deliveryId))
+    expect(messages[0]!.deliveryId).not.toBe(messages[1]!.deliveryId)
+    expect(messages[0]).toMatchObject({ audienceKey: 'default', lifecycleGeneration: 1 })
+  })
+
+  it('holds an ambiguous claim until its lease expires and then retries the same work', async () => {
+    const { newsletter, mailer, messages, advance, settle } = setup()
+    mailer.sendConfirmation.mockImplementationOnce(async input => {
+      messages.push(input)
+      return { accepted: false, failure: MAIL_DELIVERY_FAILURES.AMBIGUOUS }
+    })
+    await newsletter.subscribe(signup)
+    await settle()
+
+    expect((await newsletter.getSubscription({ email }))?.confirmationDelivery)
+      .toMatchObject({ attemptId: messages[0]!.attemptId, leaseExpiresAt: expect.any(Date) })
+    expect((await newsletter.listEvents({ email })).at(-1)).toMatchObject({
+      type: NEWSLETTER_EVENT_TYPES.CONFIRMATION_SEND_FAILED,
+      metadata: { failure: MAIL_DELIVERY_FAILURES.AMBIGUOUS, stage: 'DELIVERY' }
+    })
+
+    await newsletter.resendConfirmation({ email })
+    await settle()
+    expect(messages).toHaveLength(1)
+
+    advance(1_000)
+    await newsletter.resendConfirmation({ email })
+    await settle()
+    expect(messages).toHaveLength(2)
+    expect(messages[1]!.deliveryId).toBe(messages[0]!.deliveryId)
+    expect(messages[1]!.attemptId).not.toBe(messages[0]!.attemptId)
+    expect(messages[1]!.token).not.toBe(messages[0]!.token)
+    await expect(newsletter.confirm({ token: messages[0]!.token }))
+      .resolves.toEqual({ confirmed: true })
+  })
+
+  it('drops permanently rejected work until an explicit resend', async () => {
+    const { newsletter, mailer, messages, settle } = setup()
+    mailer.sendConfirmation.mockImplementationOnce(async input => {
+      messages.push(input)
+      return { accepted: false, failure: MAIL_DELIVERY_FAILURES.PERMANENT, reason: 'invalid-recipient' }
+    })
+    await newsletter.subscribe(signup)
+    await settle()
+
+    expect((await newsletter.getSubscription({ email }))?.confirmationDelivery).toBeNull()
+    expect((await newsletter.listEvents({ email })).at(-1)).toMatchObject({
+      type: NEWSLETTER_EVENT_TYPES.CONFIRMATION_SEND_FAILED,
+      metadata: { failure: MAIL_DELIVERY_FAILURES.PERMANENT, reason: 'invalid-recipient' }
+    })
+
+    await newsletter.subscribe(signup)
+    await settle()
+    expect(messages).toHaveLength(1)
+
+    await newsletter.resendConfirmation({ email })
+    await settle()
+    expect(messages).toHaveLength(2)
+    expect(messages[1]!.deliveryId).not.toBe(messages[0]!.deliveryId)
+  })
+
+  it('releases the claim when the contact is suppressed before token setup', async () => {
+    const { newsletter, messages, settle } = setup()
+    const started = gate()
+    const resume = gate()
+    const generate = newsletter.tokenGenerator.generate
+    vi.spyOn(newsletter.tokenGenerator, 'generate').mockImplementationOnce(async () => {
+      started.release()
+      await resume.promise
+      return generate()
+    })
+
+    await newsletter.subscribe(signup)
+    await started.promise
+    await newsletter.suppressContact({ email, reason: 'COMPLAINT' })
+    resume.release()
+    await settle()
+
+    expect(messages).toHaveLength(0)
+    expect((await newsletter.getSubscription({ email }))?.confirmationDelivery)
+      .toMatchObject({ attemptId: null, leaseExpiresAt: null })
+    expect((await newsletter.listEvents({ email })).at(-1)).toMatchObject({
+      type: NEWSLETTER_EVENT_TYPES.CONFIRMATION_SEND_FAILED,
+      metadata: { stage: 'ELIGIBILITY' }
+    })
+
+    await newsletter.unsuppressContact({ email })
+    await newsletter.resendConfirmation({ email })
+    await settle()
+    expect(messages).toHaveLength(1)
+  })
+
+  it('answers resend before delivery finishes', async () => {
+    const { newsletter, mailer, messages, waitForEvents, settle } = setup()
+    await newsletter.subscribe(signup)
+    await waitForEvents(NEWSLETTER_EVENT_TYPES.CONFIRMATION_SENT, 1)
+    const send = gate()
+    mailer.sendConfirmation.mockImplementationOnce(async input => {
+      messages.push(input)
+      await send.promise
+      return { accepted: true }
+    })
+
+    try {
+      await expect(newsletter.resendConfirmation({ email }))
+        .resolves.toEqual({ accepted: true })
+      await vi.waitFor(() => expect(messages).toHaveLength(2))
+      expect((await newsletter.listEvents({ email }))
+        .filter(event => event.type === NEWSLETTER_EVENT_TYPES.CONFIRMATION_SENT))
+        .toHaveLength(1)
+    } finally {
+      send.release()
+    }
+    await settle()
+    await waitForEvents(NEWSLETTER_EVENT_TYPES.CONFIRMATION_SENT, 2)
   })
 })

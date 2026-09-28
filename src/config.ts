@@ -32,6 +32,13 @@ export interface ConfirmationOptions {
   readonly deliveryLeaseMs?: number
 }
 
+/** Receives background work, e.g. to pass it to a runtime's `waitUntil()`. */
+export type BackgroundTaskRunner = (task: Promise<void>) => void
+
+export interface NewsletterLogger {
+  error(message: string, error?: unknown): void
+}
+
 export interface NewsletterRateLimits {
   readonly subscribe?: RateLimitPolicy
   readonly resendConfirmation?: RateLimitPolicy
@@ -50,6 +57,15 @@ export interface NewsletterConfig {
   readonly rateLimiter?: RateLimiter
   readonly rateLimitKeyProvider?: RateLimitKeyProvider
   readonly rateLimits?: NewsletterRateLimits
+  /**
+   * Background tasks never reject; failures are reported through `logger`.
+   * Without a runner, tasks run detached in the current process.
+   */
+  readonly runBackground?: BackgroundTaskRunner
+  /** Defaults to `console`. */
+  readonly logger?: NewsletterLogger
+  /** Attempts per transaction when storage reports a conflict. Defaults to 3. */
+  readonly transactionMaxAttempts?: number
 }
 
 export interface NewsletterCore extends NewsletterService {
@@ -63,6 +79,8 @@ export interface NewsletterCore extends NewsletterService {
   readonly abuseGuard: AbuseGuard | undefined
   readonly rateLimiter: RateLimiter | undefined
   readonly rateLimitKeyProvider: RateLimitKeyProvider | undefined
+  readonly logger: NewsletterLogger
+  readonly transactionMaxAttempts: number
   readonly confirmation: {
     readonly expiresInMs: number
     readonly replacementStrategy: ConfirmationReplacementStrategy

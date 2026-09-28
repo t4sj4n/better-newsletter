@@ -115,7 +115,6 @@ export interface ConfirmationTokenStore {
 }
 
 export interface SecureCapabilitiesOptions {
-  readonly confirmationStore: ConfirmationTokenStore
   readonly hmacSecret: string | Uint8Array
 }
 
@@ -194,17 +193,26 @@ function secretBytes(secret: string | Uint8Array): Uint8Array {
   return bytes
 }
 
-async function importHmacKey(
+/**
+ * Validates the secret synchronously so misconfiguration throws from the
+ * factory instead of surfacing later as an unhandled rejection.
+ */
+function importHmacKey(
   secret: string | Uint8Array,
   usages: readonly KeyUsage[]
 ): Promise<CryptoKey> {
-  return crypto.subtle.importKey(
+  const bytes = secretBytes(secret)
+  const key = crypto.subtle.importKey(
     'raw',
-    toArrayBuffer(secretBytes(secret)),
+    toArrayBuffer(bytes),
     { name: 'HMAC', hash: 'SHA-256' },
     false,
     [...usages]
   )
+  // Consumers await the key and still observe a failure; this only prevents
+  // an unhandled rejection before the first use.
+  key.catch(() => undefined)
+  return key
 }
 
 async function signHmac(key: CryptoKey, payload: string): Promise<string> {
@@ -312,9 +320,9 @@ export function createSecureCapabilities(
   }
 
   return {
-    async replaceConfirmation(input) {
+    async replaceConfirmation(input, store) {
       const digest = await sha256Digest(input.token)
-      return options.confirmationStore.replace({
+      return store.replace({
         record: {
           digest,
           purpose: CAPABILITY_PURPOSES.CONFIRMATION,
@@ -332,8 +340,8 @@ export function createSecureCapabilities(
       })
     },
 
-    async resolveConfirmation(token, now) {
-      const record = await options.confirmationStore.resolve({
+    async resolveConfirmation(token, now, store) {
+      const record = await store.resolve({
         digest: await sha256Digest(token),
         now
       })
@@ -345,8 +353,8 @@ export function createSecureCapabilities(
       }
     },
 
-    async consumeConfirmation(token, now) {
-      const record = await options.confirmationStore.consume({
+    async consumeConfirmation(token, now, store) {
+      const record = await store.consume({
         digest: await sha256Digest(token),
         now
       })
@@ -358,11 +366,11 @@ export function createSecureCapabilities(
       }
     },
 
-    async revokeConfirmations(subscriptionId, lifecycleGeneration) {
-      await options.confirmationStore.revokeBySubscription({
+    async revokeConfirmations(subscriptionId, lifecycleGeneration, now, store) {
+      await store.revokeBySubscription({
         subscriptionId,
         lifecycleGeneration,
-        now: new Date()
+        now
       })
     },
 
@@ -386,8 +394,8 @@ export function createSecureCapabilities(
       return valid ? parsed.target : null
     },
 
-    async cleanupConfirmations(input) {
-      return options.confirmationStore.cleanup({
+    async cleanupConfirmations(input, store) {
+      return store.cleanup({
         deleteBefore: input.deleteBefore
       })
     }

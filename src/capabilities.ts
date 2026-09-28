@@ -1,4 +1,7 @@
-import type { ConfirmationReplacementStrategy } from './security.js'
+import type {
+  ConfirmationReplacementStrategy,
+  ConfirmationTokenStore
+} from './security.js'
 
 export interface ConfirmationCapabilityTarget {
   readonly contactId: string
@@ -29,6 +32,9 @@ export type UnsubscribeCapabilityTarget =
  * must avoid persisting raw bearer tokens and must make confirmation
  * consumption atomic. Resolved targets are not authorization by themselves:
  * the core must match their generation against persisted state transactionally.
+ *
+ * Confirmation methods receive the token store of the current lifecycle
+ * transaction and must not write anywhere else, so they stay retry-safe.
  */
 export interface NewsletterCapabilities {
   replaceConfirmation(input: {
@@ -40,21 +46,25 @@ export interface NewsletterCapabilities {
     readonly expiresAt: Date
     readonly replacementStrategy: ConfirmationReplacementStrategy
     readonly maxActiveTokens: number
-  }): Promise<ConfirmationReplacementResult | void>
+  }, store: ConfirmationTokenStore): Promise<ConfirmationReplacementResult | void>
 
   resolveConfirmation(
     token: string,
-    now: Date
+    now: Date,
+    store: ConfirmationTokenStore
   ): Promise<ConfirmationCapabilityTarget | null>
 
   consumeConfirmation(
     token: string,
-    now: Date
+    now: Date,
+    store: ConfirmationTokenStore
   ): Promise<ConfirmationCapabilityTarget | null>
 
   revokeConfirmations(
     subscriptionId: string,
-    lifecycleGeneration: number
+    lifecycleGeneration: number,
+    now: Date,
+    store: ConfirmationTokenStore
   ): Promise<void>
 
   /**
@@ -77,5 +87,5 @@ export interface NewsletterCapabilities {
 
   cleanupConfirmations(input: {
     readonly deleteBefore: Date
-  }): Promise<number>
+  }, store: ConfirmationTokenStore): Promise<number>
 }

@@ -20,10 +20,7 @@ const now = new Date('2026-09-28T10:00:00.000Z')
 
 function secureCapabilities() {
   const confirmationStore = memoryConfirmationTokenStore()
-  const capabilities = createSecureCapabilities({
-    confirmationStore,
-    hmacSecret: secret
-  })
+  const capabilities = createSecureCapabilities({ hmacSecret: secret })
 
   return { capabilities, confirmationStore }
 }
@@ -51,7 +48,7 @@ describe('secure token primitives', () => {
       expiresAt: new Date(now.getTime() + 60_000),
       replacementStrategy: CONFIRMATION_REPLACEMENT_STRATEGIES.REPLACE_PREVIOUS,
       maxActiveTokens: 1
-    })
+    }, confirmationStore)
 
     const stored = confirmationStore.snapshot()
     expect(stored).toHaveLength(1)
@@ -59,8 +56,8 @@ describe('secure token primitives', () => {
     expect(JSON.stringify(stored)).not.toContain(rawToken)
 
     const results = await Promise.all([
-      capabilities.consumeConfirmation(rawToken, now),
-      capabilities.consumeConfirmation(rawToken, now)
+      capabilities.consumeConfirmation(rawToken, now, confirmationStore),
+      capabilities.consumeConfirmation(rawToken, now, confirmationStore)
     ])
 
     expect(results.filter(Boolean)).toHaveLength(1)
@@ -68,7 +65,7 @@ describe('secure token primitives', () => {
   })
 
   it('rejects expired confirmation tokens', async () => {
-    const { capabilities } = secureCapabilities()
+    const { capabilities, confirmationStore } = secureCapabilities()
 
     await capabilities.replaceConfirmation({
       token: 'expired-token',
@@ -79,11 +76,12 @@ describe('secure token primitives', () => {
       expiresAt: new Date(now.getTime() + 1_000),
       replacementStrategy: CONFIRMATION_REPLACEMENT_STRATEGIES.REPLACE_PREVIOUS,
       maxActiveTokens: 1
-    })
+    }, confirmationStore)
 
     await expect(capabilities.consumeConfirmation(
       'expired-token',
-      new Date(now.getTime() + 1_001)
+      new Date(now.getTime() + 1_001),
+      confirmationStore
     )).resolves.toBeNull()
   })
 
@@ -102,16 +100,16 @@ describe('secure token primitives', () => {
         replacementStrategy:
           CONFIRMATION_REPLACEMENT_STRATEGIES.RETAIN_PREVIOUS_UNTIL_EXPIRY,
         maxActiveTokens: 2
-      })
+      }, confirmationStore)
     }
 
     const active = confirmationStore.snapshot().filter(record =>
       record.consumedAt == null && record.revokedAt == null
     )
     expect(active).toHaveLength(2)
-    await expect(capabilities.consumeConfirmation('token-1', now))
+    await expect(capabilities.consumeConfirmation('token-1', now, confirmationStore))
       .resolves.toBeNull()
-    await expect(capabilities.consumeConfirmation('token-2', now))
+    await expect(capabilities.consumeConfirmation('token-2', now, confirmationStore))
       .resolves.toMatchObject({ subscriptionId: 'subscription-1' })
   })
 
@@ -159,7 +157,7 @@ describe('secure token primitives', () => {
   })
 
   it('scopes confirmation replacement and revocation to the supplied lifecycle generation', async () => {
-    const { capabilities } = secureCapabilities()
+    const { capabilities, confirmationStore } = secureCapabilities()
     for (const [token, lifecycleGeneration] of [
       ['old', 1], ['current', 2], ['delayed-old', 1]
     ] as const) {
@@ -172,17 +170,28 @@ describe('secure token primitives', () => {
         expiresAt: new Date(now.getTime() + 60_000),
         replacementStrategy: CONFIRMATION_REPLACEMENT_STRATEGIES.REPLACE_PREVIOUS,
         maxActiveTokens: 1
-      })
+      }, confirmationStore)
     }
-    await capabilities.revokeConfirmations('subscription-1', 1)
-    await expect(capabilities.resolveConfirmation('old', now)).resolves.toBeNull()
-    await expect(capabilities.resolveConfirmation('delayed-old', now)).resolves.toBeNull()
-    await expect(capabilities.resolveConfirmation('current', now))
+    await capabilities.revokeConfirmations('subscription-1', 1, now, confirmationStore)
+    await expect(capabilities.resolveConfirmation('old', now, confirmationStore)).resolves.toBeNull()
+    await expect(capabilities.resolveConfirmation('delayed-old', now, confirmationStore)).resolves.toBeNull()
+    await expect(capabilities.resolveConfirmation('current', now, confirmationStore))
       .resolves.toMatchObject({ subscriptionId: 'subscription-1', lifecycleGeneration: 2 })
   })
 
+  it.each([
+    ['a short string secret', 'too-short'],
+    ['a missing environment secret', undefined as unknown as string],
+    ['a short byte secret', new Uint8Array(31)]
+  ])('rejects %s synchronously instead of with an unhandled rejection', (_, value) => {
+    expect(() => createSecureCapabilities({ hmacSecret: value }))
+      .toThrow(expect.objectContaining({ code: NEWSLETTER_ERROR_CODES.INVALID_CONFIGURATION }))
+    expect(() => createHmacRateLimitKeyProvider({ secret: value }))
+      .toThrow(expect.objectContaining({ code: NEWSLETTER_ERROR_CODES.INVALID_CONFIGURATION }))
+  })
+
   it('keeps confirmation and unsubscribe purposes separate', async () => {
-    const { capabilities } = secureCapabilities()
+    const { capabilities, confirmationStore } = secureCapabilities()
 
     const unsubscribe = await capabilities.issueUnsubscribeCapability({
       contactId: 'contact-1',
@@ -198,9 +207,9 @@ describe('secure token primitives', () => {
       expiresAt: new Date(now.getTime() + 60_000),
       replacementStrategy: CONFIRMATION_REPLACEMENT_STRATEGIES.REPLACE_PREVIOUS,
       maxActiveTokens: 1
-    })
+    }, confirmationStore)
 
-    await expect(capabilities.consumeConfirmation(unsubscribe, now))
+    await expect(capabilities.consumeConfirmation(unsubscribe, now, confirmationStore))
       .resolves.toBeNull()
     await expect(capabilities.resolveUnsubscribeCapability('confirmation-token'))
       .resolves.toBeNull()
@@ -218,15 +227,15 @@ describe('secure token primitives', () => {
       expiresAt: new Date(now.getTime() + 1_000),
       replacementStrategy: CONFIRMATION_REPLACEMENT_STRATEGIES.REPLACE_PREVIOUS,
       maxActiveTokens: 1
-    })
-    await capabilities.consumeConfirmation('cleanup-token', now)
+    }, confirmationStore)
+    await capabilities.consumeConfirmation('cleanup-token', now, confirmationStore)
 
     await expect(capabilities.cleanupConfirmations({
       deleteBefore: new Date(now.getTime() - 1)
-    })).resolves.toBe(0)
+    }, confirmationStore)).resolves.toBe(0)
     await expect(capabilities.cleanupConfirmations({
       deleteBefore: new Date(now.getTime() + 1)
-    })).resolves.toBe(1)
+    }, confirmationStore)).resolves.toBe(1)
     expect(confirmationStore.snapshot()).toHaveLength(0)
   })
 })
@@ -331,6 +340,24 @@ describe('abuse protection', () => {
     expect(limiter.snapshotKeys().join(' '))
       .not.toContain('person@example.com')
   })
+
+  it('exposes the limiter retry delay on rate-limit errors', async () => {
+    const newsletter = createNewsletter({
+      storage: memoryStorage(),
+      capabilities: secureCapabilities().capabilities,
+      mailer: { async sendConfirmation() { return { accepted: true } } },
+      rateLimiter: memoryRateLimiter({ now: () => now }),
+      rateLimitKeyProvider: createHmacRateLimitKeyProvider({ secret }),
+      rateLimits: { resendConfirmation: { limit: 1, windowMs: 60_000 } }
+    })
+
+    await newsletter.resendConfirmation({ email: 'person@example.com' })
+    await expect(newsletter.resendConfirmation({ email: 'person@example.com' }))
+      .rejects.toMatchObject({
+        code: NEWSLETTER_ERROR_CODES.RATE_LIMITED,
+        retryAfterMs: 60_000
+      })
+  })
 })
 
 describe('secure lifecycle integration', () => {
@@ -349,10 +376,7 @@ describe('secure lifecycle integration', () => {
         return baseStorage.transaction(operation)
       }
     }
-    const capabilities = createSecureCapabilities({
-      confirmationStore: memoryConfirmationTokenStore(),
-      hmacSecret: secret
-    })
+    const capabilities = createSecureCapabilities({ hmacSecret: secret })
     const newsletter = createNewsletter({
       storage,
       capabilities,
@@ -379,11 +403,7 @@ describe('secure lifecycle integration', () => {
 
   it('binds unsubscribe capabilities to one audience and invalidates old links after resubscribe', async () => {
     const messages: Array<{ token: string; audience: string }> = []
-    const confirmationStore = memoryConfirmationTokenStore()
-    const capabilities = createSecureCapabilities({
-      confirmationStore,
-      hmacSecret: secret
-    })
+    const capabilities = createSecureCapabilities({ hmacSecret: secret })
     const newsletter = createNewsletter({
       storage: memoryStorage(),
       capabilities,

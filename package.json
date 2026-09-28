@@ -28,6 +28,10 @@
       "types": "./dist/memory.d.ts",
       "import": "./dist/memory.js"
     },
+    "./resend": {
+      "types": "./dist/resend.d.ts",
+      "import": "./dist/resend.js"
+    },
     "./kysely": {
       "types": "./dist/kysely.d.ts",
       "import": "./dist/kysely.js"
@@ -51,16 +55,21 @@
     "eslint": "^9.35.0",
     "kysely": "^0.28.17",
     "pg": "^8.23.0",
+    "resend": "^6.30.0",
     "typescript": "^5.9.2",
     "typescript-eslint": "^8.42.0",
     "vitest": "^3.2.4"
   },
   "types": "./dist/index.d.ts",
   "peerDependencies": {
-    "kysely": "^0.28.17"
+    "kysely": "^0.28.17",
+    "resend": "^6.30.0"
   },
   "peerDependenciesMeta": {
     "kysely": {
+      "optional": true
+    },
+    "resend": {
       "optional": true
     }
   }

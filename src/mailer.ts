@@ -31,10 +31,25 @@ export const MAIL_DELIVERY_FAILURES = {
 export type MailDeliveryFailure =
   typeof MAIL_DELIVERY_FAILURES[keyof typeof MAIL_DELIVERY_FAILURES]
 
+export const MAIL_DELIVERY_REASONS = {
+  INVALID_REQUEST: 'INVALID_REQUEST',
+  AUTH_FAILED: 'AUTH_FAILED',
+  RATE_LIMITED: 'RATE_LIMITED',
+  PROVIDER_UNAVAILABLE: 'PROVIDER_UNAVAILABLE',
+  TIMEOUT: 'TIMEOUT',
+  RENDER_FAILED: 'RENDER_FAILED',
+  TOKEN_SETUP_FAILED: 'TOKEN_SETUP_FAILED',
+  UNKNOWN: 'UNKNOWN'
+} as const
+
+export type MailDeliveryReasonCode =
+  typeof MAIL_DELIVERY_REASONS[keyof typeof MAIL_DELIVERY_REASONS]
+
 /**
  * `accepted: false` without `failure` is treated as `TEMPORARY`. A mailer that
- * throws is also treated as `TEMPORARY`; adapters that cannot tell whether a
- * message left the provider should return `AMBIGUOUS` instead of throwing.
+ * throws during delivery is treated as `AMBIGUOUS`, since the provider may
+ * already have accepted the message. Reasons are bounded codes, not provider
+ * error messages; the core validates them again before persisting evidence.
  */
 export type MailDeliveryResult =
   | {
@@ -45,7 +60,7 @@ export type MailDeliveryResult =
     readonly accepted: false
     readonly failure?: MailDeliveryFailure
     readonly providerMessageId?: string
-    readonly reason?: string
+    readonly reason?: MailDeliveryReasonCode
   }
 
 export interface NewsletterMailer {

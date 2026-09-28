@@ -2,7 +2,7 @@
 
 Framework-agnostic newsletter subscription and consent lifecycle infrastructure for TypeScript.
 
-> **Status:** early development. The core lifecycle, production security primitives, and PostgreSQL/Kysely persistence are implemented; delivery/framework adapters follow in issues #5–#6.
+> **Status:** early development. The core lifecycle, PostgreSQL/Kysely persistence, and Resend confirmation delivery are implemented; framework adapters follow in issue #6.
 
 ## Scope
 
@@ -236,17 +236,53 @@ The mailer receives the `deliveryId` of the work item, the current `attemptId`, 
 
 Accepted delivery atomically sets `confirmationSentAt`, clears the work item, and appends its delivery event. A mailer reports a failed send as `{ accepted: false, failure }`:
 
-- `TEMPORARY` (the default, also used when the mailer throws or token setup fails): the claim is released for an immediate retry.
+- `TEMPORARY` (the default for explicit failures without a category, and for token setup failures): the claim is released for an immediate retry.
 - `PERMANENT`: the work item is dropped; a later `subscribe()` does not retry it, while `resendConfirmation()` starts new work.
-- `AMBIGUOUS`: the provider may have sent the message. The claim is kept until its lease expires, so an immediate retry cannot add another message. The retry after expiry is a new attempt of the same work item.
+- `AMBIGUOUS` (also used when delivery throws): the provider may have sent the message. The claim is kept until its lease expires, so an immediate retry cannot add another message. The retry after expiry is a new attempt of the same work item.
 
-Each failure records `CONFIRMATION_SEND_FAILED` with its `outcome` and `stage`. If the Contact was suppressed after the claim, the claim is released and the event records stage `ELIGIBILITY`. Failures do not discard possibly delivered tokens; the configured bounded retention policy still applies. A subsequent `subscribe()` or `resendConfirmation()` resumes unfinished work without replacing consent or incrementing generations.
+Each failure records `CONFIRMATION_SEND_FAILED` with its `outcome` and `stage`. Optional `reason` is limited to the exported `MAIL_DELIVERY_REASONS` codes (`INVALID_REQUEST`, `AUTH_FAILED`, `RATE_LIMITED`, `PROVIDER_UNAVAILABLE`, `TIMEOUT`, `RENDER_FAILED`, `TOKEN_SETUP_FAILED`, `UNKNOWN`); unexpected values are persisted as `UNKNOWN`, never as raw provider text. If the Contact was suppressed after the claim, the claim is released and the event records stage `ELIGIBILITY`. Failures do not discard possibly delivered tokens; the configured bounded retention policy still applies. A subsequent `subscribe()` or `resendConfirmation()` resumes unfinished work without replacing consent or incrementing generations.
 
 Delivery result events carry `deliveryId`, `attemptId`, `lifecycleGeneration`, `authoritative`, and `outcome` (`ACCEPTED`, `TEMPORARY`, `PERMANENT`, or `AMBIGUOUS`). `CONFIRMATION_SENT` and `CONFIRMATION_SEND_FAILED` always mean `authoritative: true`: the result belongs to the attempt that currently owns the work and was allowed to finalize it. A result from a superseded attempt is recorded as `CONFIRMATION_STALE_RESULT` with `authoritative: false` and never changes Subscription state. An attempt is superseded when its lease was reclaimed by a newer attempt, or when the work ended in the meantime (confirmation, unsubscribe, or a new lifecycle generation).
 
 If a process stops or result persistence fails, the work remains recoverable after its lease expires. Configure `confirmation.deliveryLeaseMs` for the expected provider timeout; it defaults to five minutes. A later attempt gets a new attempt ID. Token replacement runs under the lifecycle transaction's ownership check; completion also checks ownership, so an older worker cannot replace newer tokens, clear newer work, or modify a new consent cycle. Capability adapters must support being called from lifecycle transactions without re-entering the same lifecycle locks. Delivery events identify the lifecycle generation and attempt.
 
 Delivery is **at least once**, not exactly once: an ambiguous provider result or expired lease can lead to another message. The core does not run a scheduler or automatically drain pending work after restart. Hosts must keep asynchronous processing alive or trigger retry through signup/resend.
+
+### Resend confirmation delivery
+
+On Node.js 20.11 or newer, create a **server-only** API key and verify the sender domain in the [Resend dashboard](https://resend.com/domains). The `/resend` export is optional: core-only users do not install or configure Resend. The default adapter uses the documented HTTPS `POST /emails` API through the runtime's `fetch`, so no Resend SDK is required; callers who already use `resend@^6.30.0` can inject their own SDK instance as `client` instead of providing `apiKey`. Keep the API key in server-side environment variables; do not put it in a client bundle.
+
+```ts
+import { createNewsletter, createSecureCapabilities } from 'better-newsletter'
+import { resendMailer } from 'better-newsletter/resend'
+
+const mailer = resendMailer({
+  apiKey: process.env.RESEND_API_KEY!,
+  from: 'Newsletter <news@example.com>', // use a verified sender domain
+  replyTo: 'support@example.com',
+  renderConfirmation: async input => {
+    const url = new URL('/newsletter/confirm', process.env.PUBLIC_APP_ORIGIN!)
+    url.searchParams.set('token', input.token)
+    return {
+      subject: `Confirm ${input.audienceKey} updates`,
+      html: `<p><a href="${url.toString()}">Confirm subscription</a></p>`,
+      text: `Confirm your subscription: ${url.toString()}`
+    }
+  }
+})
+
+const newsletter = createNewsletter({
+  storage,
+  mailer,
+  capabilities: createSecureCapabilities({
+    hmacSecret: process.env.NEWSLETTER_LINK_SECRET!
+  })
+})
+```
+
+The renderer receives the Contact and Subscription (including locale, consent source and metadata), audience key, token, expiry, stable delivery ID, attempt ID and lifecycle generation. It owns all copy and the confirmation URL; the adapter never infers a hostname from request headers. Supply exactly one of `apiKey` or a compatible `client`; `fetch` may be injected for custom transport or tests. The default transport never logs provider response bodies (the standalone Resend SDK may log API errors in non-production environments when you inject it). Resend handles email transport only; local Contact/Subscription state and consent evidence remain authoritative. This adapter does not send campaigns or process bounce/complaint webhooks.
+
+Resend receives a SHA-256 idempotency key derived from the stable work ID, *individual attempt* ID and lifecycle generation, not from the recipient, body or bearer token. Replaying the **same attempt with the same payload** can be deduplicated by Resend for [up to 24 hours](https://resend.com/docs/dashboard/emails/idempotency-keys). New leased attempts carry new tokens and new keys, so Resend cannot guarantee exactly-once delivery across attempts. A 409 for an in-flight idempotent request, a generic 5xx or an unknown transport outcome is `AMBIGUOUS`: the core holds the claim until its lease expires instead of starting a new attempt immediately. A new attempt after lease expiry still uses a fresh key; the adapter cannot promise cross-attempt deduplication. Known API-key errors map to `AUTH_FAILED`; other 403 responses, including sender-domain validation failures, map to `INVALID_REQUEST`. Provider rejection is never recorded as an accepted send. The adapter emits only bounded failure codes and does not log API keys, tokens or rendered bodies or persist provider payloads. The host remains responsible for its privacy policy and provider agreement.
 
 Both `subscribe()` and `resendConfirmation()` answer before delivery finishes, so neither response time nor delivery errors reveal whether an address has pending work. Pass `runBackground` to hand the background work to the runtime, for example to `event.waitUntil()` on serverless platforms. The tasks it receives never reject. Background failures are reported through `logger.error` (default: `console`); failures of the synchronous state transition propagate to the caller.
 
@@ -471,7 +507,7 @@ Issue #2 implements the framework-neutral lifecycle and consent model. The follo
 
 - #3: cryptographic token/capability security, abuse protection and cleanup (implemented here);
 - #4: Kysely/PostgreSQL persistence (implemented here);
-- #5: Resend delivery adapter;
+- #5: Resend delivery adapter (implemented here);
 - #6: Nuxt/Nitro integration;
 - #7: provider bounce/complaint feedback;
 - #8: privacy export and erasure lifecycle.

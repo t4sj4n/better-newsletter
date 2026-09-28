@@ -72,11 +72,12 @@ export type {
   NewsletterErrorOptions
 } from './errors.js'
 
-export { MAIL_DELIVERY_FAILURES } from './mailer.js'
+export { MAIL_DELIVERY_FAILURES, MAIL_DELIVERY_REASONS } from './mailer.js'
 
 export type {
   ConfirmationMailInput,
   MailDeliveryFailure,
+  MailDeliveryReasonCode,
   MailDeliveryResult,
   NewsletterMailer
 } from './mailer.js'

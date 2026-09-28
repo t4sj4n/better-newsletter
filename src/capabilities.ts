@@ -26,6 +26,11 @@ export type UnsubscribeCapabilityTarget =
     readonly contactId: string
     readonly capabilityGeneration: number
   }
+  | {
+    readonly scope: 'MANAGE'
+    readonly contactId: string
+    readonly capabilityGeneration: number
+  }
 
 /**
  * Security-sensitive mechanics live behind this contract. Production adapters
@@ -77,6 +82,10 @@ export interface NewsletterCapabilities {
   }): Promise<string>
 
   issueUnsubscribeAllCapability(input: {
+    readonly contactId: string
+    readonly capabilityGeneration: number
+  }): Promise<string>
+  issueManagePreferencesCapability(input: {
     readonly contactId: string
     readonly capabilityGeneration: number
   }): Promise<string>

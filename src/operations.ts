@@ -50,6 +50,12 @@ export interface CreateUnsubscribeCapabilityInput {
   readonly all?: boolean
 }
 
+export interface PreferenceSubscription {
+  readonly audience: string
+  readonly status: SubscriptionStatus
+  readonly unsubscribeCapability: string
+}
+
 export interface CleanupConfirmationTokensInput {
   readonly retentionMs?: number
 }
@@ -109,6 +115,8 @@ export interface NewsletterService {
   createUnsubscribeCapability(
     input: CreateUnsubscribeCapabilityInput
   ): Promise<string | null>
+  createManagePreferencesCapability(input: ContactLookup): Promise<string | null>
+  listPreferences(input: { readonly capability: string }): Promise<readonly PreferenceSubscription[] | null>
 
   cleanupConfirmationTokens(
     input?: CleanupConfirmationTokensInput

@@ -19,6 +19,7 @@ export type {
   NewsletterConfig,
   NewsletterCore,
   NewsletterLogger,
+  NewsletterRateLimitCheck,
   NewsletterRateLimits,
   TokenGenerator
 } from './config.js'
@@ -99,6 +100,7 @@ export type {
   LinkSubjectInput,
   NewsletterService,
   PublicRequestResult,
+  PreferenceSubscription,
   ResendConfirmationInput,
   SubscribeInput,
   SubscriptionLookup,

@@ -44,6 +44,12 @@ export interface NewsletterRateLimits {
   readonly resendConfirmation?: RateLimitPolicy
 }
 
+export interface NewsletterRateLimitCheck {
+  readonly rateLimiter: RateLimiter
+  readonly keyProvider: RateLimitKeyProvider
+  readonly rateLimits?: NewsletterRateLimits
+}
+
 export interface NewsletterConfig {
   readonly storage: NewsletterStorage
   readonly mailer: NewsletterMailer
@@ -57,6 +63,8 @@ export interface NewsletterConfig {
   readonly rateLimiter?: RateLimiter
   readonly rateLimitKeyProvider?: RateLimitKeyProvider
   readonly rateLimits?: NewsletterRateLimits
+  /** Additional independent, opaque-key limits checked before storage work. */
+  readonly rateLimitChecks?: readonly NewsletterRateLimitCheck[]
   /**
    * Background tasks never reject; failures are reported through `logger`.
    * Without a runner, tasks run detached in the current process.

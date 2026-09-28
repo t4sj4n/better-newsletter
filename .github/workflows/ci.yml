@@ -51,3 +51,9 @@ jobs:
         run: pnpm check
         env:
           DATABASE_URL: postgresql://postgres@localhost:5432/newsletter_test
+
+      - name: Build minimal Nuxt consumer
+        run: pnpm exec nuxt build test/fixtures/nuxt --logLevel=silent
+
+      - name: Smoke test packed package in clean consumers
+        run: node scripts/smoke-pack.mjs

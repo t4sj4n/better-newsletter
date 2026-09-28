@@ -350,11 +350,18 @@ export function createNewsletter(config: NewsletterConfig): NewsletterCore {
       }
     }
 
-    if (config.rateLimiter != null && config.rateLimitKeyProvider != null) {
+    const checks = [
+      ...(config.rateLimitChecks ?? []),
+      ...(config.rateLimiter != null && config.rateLimitKeyProvider != null
+        ? [{ rateLimiter: config.rateLimiter, keyProvider: config.rateLimitKeyProvider, rateLimits: config.rateLimits }]
+        : [])
+    ]
+    for (const check of checks) {
       const policy = action === 'subscribe'
-        ? subscribeRateLimit
-        : resendRateLimit
-      const key = await config.rateLimitKeyProvider.createKey({
+        ? check.rateLimits?.subscribe ?? subscribeRateLimit
+        : check.rateLimits?.resendConfirmation ?? resendRateLimit
+      validateRatePolicy(`rateLimitChecks.${action}`, policy)
+      const key = await check.keyProvider.createKey({
         action,
         email,
         audienceKey,
@@ -366,7 +373,7 @@ export function createNewsletter(config: NewsletterConfig): NewsletterCore {
           'rateLimitKeyProvider returned an empty key.'
         )
       }
-      const result = await config.rateLimiter.consume({
+      const result = await check.rateLimiter.consume({
         key,
         action,
         limit: policy.limit,
@@ -1017,6 +1024,41 @@ export function createNewsletter(config: NewsletterConfig): NewsletterCore {
       }
 
       return config.capabilities.issueUnsubscribeCapability(target)
+    },
+
+    async createManagePreferencesCapability(input) {
+      const contact = await runTransaction(transaction =>
+        resolveContact(transaction, input)
+      )
+      if (contact == null) return null
+      return config.capabilities.issueManagePreferencesCapability({
+        contactId: contact.id,
+        capabilityGeneration: contact.capabilityGeneration
+      })
+    },
+
+    async listPreferences(input) {
+      const target = await config.capabilities.resolveUnsubscribeCapability(
+        input.capability
+      )
+      if (target == null || target.scope !== 'MANAGE') return null
+      const subscriptions = await runTransaction(async transaction => {
+        const contact = await transaction.getContactById(target.contactId)
+        if (contact?.capabilityGeneration !== target.capabilityGeneration) {
+          return null
+        }
+        return transaction.listSubscriptions(contact.id)
+      })
+      if (subscriptions == null) return null
+      return Promise.all(subscriptions.map(async subscription => ({
+        audience: subscription.audienceKey,
+        status: subscription.status,
+        unsubscribeCapability: await config.capabilities.issueUnsubscribeCapability({
+          contactId: target.contactId,
+          subscriptionId: subscription.id,
+          lifecycleGeneration: subscription.lifecycleGeneration
+        })
+      })))
     },
 
     async cleanupConfirmationTokens(input = {}) {

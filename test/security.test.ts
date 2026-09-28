@@ -318,6 +318,50 @@ describe('abuse protection', () => {
 })
 
 describe('secure lifecycle integration', () => {
+  it('does not burn a confirmation token when the state transaction fails', async () => {
+    const messages: string[] = []
+    const baseStorage = memoryStorage()
+    let failNextTransaction = false
+    const storage = {
+      transaction: async <T>(
+        operation: Parameters<typeof baseStorage.transaction<T>>[0]
+      ): Promise<T> => {
+        if (failNextTransaction) {
+          failNextTransaction = false
+          throw new Error('simulated storage failure')
+        }
+        return baseStorage.transaction(operation)
+      }
+    }
+    const capabilities = createSecureCapabilities({
+      confirmationStore: memoryConfirmationTokenStore(),
+      nonceStore: memoryCapabilityNonceStore(),
+      hmacSecret: secret
+    })
+    const newsletter = createNewsletter({
+      storage,
+      capabilities,
+      mailer: {
+        async sendConfirmation(input) {
+          messages.push(input.token)
+          return { accepted: true }
+        }
+      }
+    })
+
+    await newsletter.subscribe({
+      email: 'retry@example.com',
+      consent: { granted: true, version: 'v1' }
+    })
+    await vi.waitFor(() => expect(messages).toHaveLength(1))
+
+    failNextTransaction = true
+    await expect(newsletter.confirm({ token: messages[0]! }))
+      .rejects.toThrow('simulated storage failure')
+    await expect(newsletter.confirm({ token: messages[0]! }))
+      .resolves.toEqual({ confirmed: true })
+  })
+
   it('binds unsubscribe capabilities to one audience and invalidates old links after resubscribe', async () => {
     const messages: Array<{ token: string; audience: string }> = []
     const confirmationStore = memoryConfirmationTokenStore()

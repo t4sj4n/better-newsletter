@@ -187,6 +187,15 @@ export class MemoryNewsletterCapabilities implements NewsletterCapabilities {
     this.confirmationBySubscription.set(input.subscriptionId, input.token)
   }
 
+  async resolveConfirmation(token: string, now: Date) {
+    const stored = this.confirmations.get(token)
+    if (stored == null || stored.expiresAt.getTime() <= now.getTime()) return null
+    return {
+      contactId: stored.contactId,
+      subscriptionId: stored.subscriptionId
+    }
+  }
+
   async consumeConfirmation(token: string, now: Date) {
     const stored = this.confirmations.get(token)
     if (stored == null) return null

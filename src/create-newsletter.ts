@@ -30,9 +30,25 @@ import type {
   ImportSubscriptionInput,
   SubscriptionLookup
 } from './operations.js'
+import {
+  CONFIRMATION_REPLACEMENT_STRATEGIES,
+  secureTokenGenerator,
+  type PublicAbuseAction,
+  type RateLimitPolicy
+} from './security.js'
 import type { NewsletterStorageTransaction } from './storage.js'
 
 export const DEFAULT_CONFIRMATION_EXPIRES_IN_MS = 24 * 60 * 60 * 1000
+export const DEFAULT_CONFIRMATION_CLEANUP_RETENTION_MS = 7 * 24 * 60 * 60 * 1000
+export const DEFAULT_MAX_ACTIVE_CONFIRMATION_TOKENS = 2
+export const DEFAULT_SUBSCRIBE_RATE_LIMIT = Object.freeze({
+  limit: 5,
+  windowMs: 60 * 60 * 1000
+})
+export const DEFAULT_RESEND_RATE_LIMIT = Object.freeze({
+  limit: 3,
+  windowMs: 10 * 60 * 1000
+})
 
 export const systemClock: Clock = {
   now: () => new Date()
@@ -169,6 +185,15 @@ export function createNewsletter(config: NewsletterConfig): NewsletterCore {
   const expiresInMs =
     config.confirmation?.expiresInMs
     ?? DEFAULT_CONFIRMATION_EXPIRES_IN_MS
+  const replacementStrategy =
+    config.confirmation?.replacementStrategy
+    ?? CONFIRMATION_REPLACEMENT_STRATEGIES.RETAIN_PREVIOUS_UNTIL_EXPIRY
+  const maxActiveTokens =
+    config.confirmation?.maxActiveTokens
+    ?? DEFAULT_MAX_ACTIVE_CONFIRMATION_TOKENS
+  const cleanupRetentionMs =
+    config.confirmation?.cleanupRetentionMs
+    ?? DEFAULT_CONFIRMATION_CLEANUP_RETENTION_MS
 
   if (!Number.isSafeInteger(expiresInMs) || expiresInMs <= 0) {
     throw new NewsletterError(
@@ -176,9 +201,101 @@ export function createNewsletter(config: NewsletterConfig): NewsletterCore {
       'confirmation.expiresInMs must be a positive safe integer.'
     )
   }
+  if (!Number.isSafeInteger(maxActiveTokens) || maxActiveTokens <= 0) {
+    throw new NewsletterError(
+      NEWSLETTER_ERROR_CODES.INVALID_CONFIGURATION,
+      'confirmation.maxActiveTokens must be a positive safe integer.'
+    )
+  }
+  if (!Number.isSafeInteger(cleanupRetentionMs) || cleanupRetentionMs < 0) {
+    throw new NewsletterError(
+      NEWSLETTER_ERROR_CODES.INVALID_CONFIGURATION,
+      'confirmation.cleanupRetentionMs must be a non-negative safe integer.'
+    )
+  }
+  if ((config.rateLimiter == null) !== (config.rateLimitKeyProvider == null)) {
+    throw new NewsletterError(
+      NEWSLETTER_ERROR_CODES.INVALID_CONFIGURATION,
+      'rateLimiter and rateLimitKeyProvider must be configured together.'
+    )
+  }
+
+  const validateRatePolicy = (name: string, policy: RateLimitPolicy): void => {
+    if (
+      !Number.isSafeInteger(policy.limit)
+      || policy.limit <= 0
+      || !Number.isSafeInteger(policy.windowMs)
+      || policy.windowMs <= 0
+    ) {
+      throw new NewsletterError(
+        NEWSLETTER_ERROR_CODES.INVALID_CONFIGURATION,
+        `${name} must use positive safe integer limit and windowMs values.`
+      )
+    }
+  }
+
+  const subscribeRateLimit =
+    config.rateLimits?.subscribe ?? DEFAULT_SUBSCRIBE_RATE_LIMIT
+  const resendRateLimit =
+    config.rateLimits?.resendConfirmation ?? DEFAULT_RESEND_RATE_LIMIT
+  validateRatePolicy('rateLimits.subscribe', subscribeRateLimit)
+  validateRatePolicy('rateLimits.resendConfirmation', resendRateLimit)
 
   const clock = config.clock ?? systemClock
   const idGenerator = config.idGenerator ?? systemIdGenerator
+  const tokenGenerator = config.tokenGenerator ?? secureTokenGenerator
+
+  const enforcePublicSecurity = async (
+    action: PublicAbuseAction,
+    email: string,
+    audienceKey: string,
+    context: unknown
+  ): Promise<void> => {
+    if (config.abuseGuard != null) {
+      const result = await config.abuseGuard.verify({
+        action,
+        email,
+        audienceKey,
+        ...(context !== undefined ? { context } : {})
+      })
+      if (!result.allowed) {
+        throw new NewsletterError(
+          NEWSLETTER_ERROR_CODES.ABUSE_REJECTED,
+          'The request was rejected by the configured abuse guard.'
+        )
+      }
+    }
+
+    if (config.rateLimiter != null && config.rateLimitKeyProvider != null) {
+      const policy = action === 'subscribe'
+        ? subscribeRateLimit
+        : resendRateLimit
+      const key = await config.rateLimitKeyProvider.createKey({
+        action,
+        email,
+        audienceKey,
+        ...(context !== undefined ? { context } : {})
+      })
+      if (key.length === 0) {
+        throw new NewsletterError(
+          NEWSLETTER_ERROR_CODES.INVALID_CONFIGURATION,
+          'rateLimitKeyProvider returned an empty key.'
+        )
+      }
+      const result = await config.rateLimiter.consume({
+        key,
+        action,
+        limit: policy.limit,
+        windowMs: policy.windowMs
+      })
+      if (!result.allowed) {
+        throw new NewsletterError(
+          NEWSLETTER_ERROR_CODES.RATE_LIMITED,
+          'The request rate limit was exceeded.'
+        )
+      }
+    }
+  }
 
   const appendEvent = async (
     transaction: NewsletterStorageTransaction,
@@ -218,7 +335,7 @@ export function createNewsletter(config: NewsletterConfig): NewsletterCore {
     contactId: string,
     subscriptionId: string
   ): Promise<void> => {
-    const token = await config.tokenGenerator.generate()
+    const token = await tokenGenerator.generate()
     const requestedAt = clock.now()
     const expiresAt = new Date(requestedAt.getTime() + expiresInMs)
 
@@ -248,12 +365,41 @@ export function createNewsletter(config: NewsletterConfig): NewsletterCore {
 
     if (state == null) return
 
-    await config.capabilities.replaceConfirmation({
+    const replacement = await config.capabilities.replaceConfirmation({
       token,
       contactId,
       subscriptionId,
-      expiresAt
+      issuedAt: requestedAt,
+      expiresAt,
+      replacementStrategy,
+      maxActiveTokens
     })
+
+    if (
+      replacement != null
+      && (replacement.replacedCount > 0 || replacement.expiredCount > 0)
+    ) {
+      await config.storage.transaction(async transaction => {
+        if (replacement.replacedCount > 0) {
+          await appendEvent(transaction, {
+            contactId,
+            subscriptionId,
+            type: NEWSLETTER_EVENT_TYPES.CONFIRMATION_REPLACED,
+            occurredAt: requestedAt,
+            metadata: { count: replacement.replacedCount }
+          })
+        }
+        if (replacement.expiredCount > 0) {
+          await appendEvent(transaction, {
+            contactId,
+            subscriptionId,
+            type: NEWSLETTER_EVENT_TYPES.CONFIRMATION_EXPIRED,
+            occurredAt: requestedAt,
+            metadata: { count: replacement.expiredCount }
+          })
+        }
+      })
+    }
 
     let accepted = false
     let providerMessageId: string | undefined
@@ -301,10 +447,18 @@ export function createNewsletter(config: NewsletterConfig): NewsletterCore {
     mailer: config.mailer,
     capabilities: config.capabilities,
     clock,
-    tokenGenerator: config.tokenGenerator,
+    tokenGenerator,
     idGenerator,
     defaultAudience,
-    confirmation: Object.freeze({ expiresInMs }),
+    abuseGuard: config.abuseGuard,
+    rateLimiter: config.rateLimiter,
+    rateLimitKeyProvider: config.rateLimitKeyProvider,
+    confirmation: Object.freeze({
+      expiresInMs,
+      replacementStrategy,
+      maxActiveTokens,
+      cleanupRetentionMs
+    }),
     getDeliveryEligibility,
 
     async subscribe(input) {
@@ -312,6 +466,12 @@ export function createNewsletter(config: NewsletterConfig): NewsletterCore {
       const audienceKey = assertAudienceKey(input.audience ?? defaultAudience)
       const now = clock.now()
       const consent = consentFromPublicInput(input.consent, now)
+      await enforcePublicSecurity(
+        'subscribe',
+        email,
+        audienceKey,
+        input.securityContext
+      )
 
       const transition = await config.storage.transaction(async transaction => {
         let contact = await transaction.getContactByEmail(email)
@@ -430,6 +590,12 @@ export function createNewsletter(config: NewsletterConfig): NewsletterCore {
     async resendConfirmation(input) {
       const email = normalizeAndValidateEmail(input.email)
       const audienceKey = assertAudienceKey(input.audience ?? defaultAudience)
+      await enforcePublicSecurity(
+        'resend-confirmation',
+        email,
+        audienceKey,
+        input.securityContext
+      )
 
       const target = await config.storage.transaction(async transaction => {
         const contact = await transaction.getContactByEmail(email)
@@ -455,7 +621,10 @@ export function createNewsletter(config: NewsletterConfig): NewsletterCore {
       })
 
       if (target != null) {
-        await requestConfirmation(target.contactId, target.subscriptionId)
+        await requestConfirmation(
+          target.contactId,
+          target.subscriptionId
+        ).catch(() => undefined)
       }
 
       return PUBLIC_ACCEPTED
@@ -598,7 +767,6 @@ export function createNewsletter(config: NewsletterConfig): NewsletterCore {
     async createUnsubscribeCapability(input) {
       const email = normalizeAndValidateEmail(input.email)
       const audienceKey = assertAudienceKey(input.audience ?? defaultAudience)
-      const capability = await config.tokenGenerator.generate()
 
       const target = await config.storage.transaction(async transaction => {
         const contact = await transaction.getContactByEmail(email)
@@ -623,18 +791,57 @@ export function createNewsletter(config: NewsletterConfig): NewsletterCore {
 
       if (target == null) return null
       if (target.scope === 'ALL') {
+        if (config.capabilities.issueUnsubscribeAllCapability != null) {
+          return config.capabilities.issueUnsubscribeAllCapability({
+            contactId: target.contactId
+          })
+        }
+        if (config.capabilities.replaceUnsubscribeAllCapability == null) {
+          throw new NewsletterError(
+            NEWSLETTER_ERROR_CODES.INVALID_CONFIGURATION,
+            'The capability adapter cannot issue unsubscribe-all capabilities.'
+          )
+        }
+        const capability = await tokenGenerator.generate()
         await config.capabilities.replaceUnsubscribeAllCapability({
           capability,
           contactId: target.contactId
         })
-      } else {
-        await config.capabilities.replaceUnsubscribeCapability({
-          capability,
+        return capability
+      }
+
+      if (config.capabilities.issueUnsubscribeCapability != null) {
+        return config.capabilities.issueUnsubscribeCapability({
           contactId: target.contactId,
           subscriptionId: target.subscriptionId
         })
       }
+      if (config.capabilities.replaceUnsubscribeCapability == null) {
+        throw new NewsletterError(
+          NEWSLETTER_ERROR_CODES.INVALID_CONFIGURATION,
+          'The capability adapter cannot issue unsubscribe capabilities.'
+        )
+      }
+      const capability = await tokenGenerator.generate()
+      await config.capabilities.replaceUnsubscribeCapability({
+        capability,
+        contactId: target.contactId,
+        subscriptionId: target.subscriptionId
+      })
       return capability
+    },
+
+    async cleanupConfirmationTokens(input = {}) {
+      const retentionMs = input.retentionMs ?? cleanupRetentionMs
+      if (!Number.isSafeInteger(retentionMs) || retentionMs < 0) {
+        throw new NewsletterError(
+          NEWSLETTER_ERROR_CODES.INVALID_CONFIGURATION,
+          'cleanup retentionMs must be a non-negative safe integer.'
+        )
+      }
+      return config.capabilities.cleanupConfirmations({
+        deleteBefore: new Date(clock.now().getTime() - retentionMs)
+      })
     },
 
     async getContact(input) {

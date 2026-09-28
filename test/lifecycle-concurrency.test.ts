@@ -489,49 +489,125 @@ describe('durable confirmation retries', () => {
       .resolves.toEqual({ confirmed: true })
   })
 
-  it('reclaims expired delivery leases and fences late completion of an older attempt', async () => {
-    const { newsletter, createInstance, mailer, messages, advance, waitForEvents, settle } = setup()
-    const oldSend = gate()
-    const newSend = gate()
-    mailer.sendConfirmation
-      .mockImplementationOnce(async input => {
-        messages.push(input)
-        await oldSend.promise
-        return { accepted: true }
-      })
-      .mockImplementationOnce(async input => {
-        messages.push(input)
-        await newSend.promise
-        return { accepted: true }
-      })
+  it.each([
+    ['accepted', { accepted: true }, 'ACCEPTED'],
+    ['temporary', { accepted: false, failure: MAIL_DELIVERY_FAILURES.TEMPORARY }, 'TEMPORARY'],
+    ['permanent', { accepted: false, failure: MAIL_DELIVERY_FAILURES.PERMANENT }, 'PERMANENT'],
+    ['ambiguous', { accepted: false, failure: MAIL_DELIVERY_FAILURES.AMBIGUOUS }, 'AMBIGUOUS']
+  ] as const)(
+    'reclaims an expired lease and records a late %s result of the older attempt as stale',
+    async (_, oldResult, outcome) => {
+      const { newsletter, createInstance, mailer, messages, advance, settle } = setup()
+      const oldSend = gate()
+      const newSend = gate()
+      mailer.sendConfirmation
+        .mockImplementationOnce(async input => {
+          messages.push(input)
+          await oldSend.promise
+          return oldResult
+        })
+        .mockImplementationOnce(async input => {
+          messages.push(input)
+          await newSend.promise
+          return { accepted: true }
+        })
+      const eventsOf = async (type: string) =>
+        (await newsletter.listEvents({ email })).filter(event => event.type === type)
 
-    await newsletter.subscribe(signup)
-    await vi.waitFor(() => expect(messages).toHaveLength(1))
-    const previous = (await newsletter.getSubscription({ email }))!.confirmationDelivery!
-    const other = createInstance()
-    try {
-      advance(999)
-      await Promise.all([other.subscribe(signup), other.subscribe(signup)])
-      await other.resendConfirmation({ email })
+      await newsletter.subscribe(signup)
+      await vi.waitFor(() => expect(messages).toHaveLength(1))
+      const previous = (await newsletter.getSubscription({ email }))!.confirmationDelivery!
+      const other = createInstance()
+      try {
+        advance(999)
+        await Promise.all([other.subscribe(signup), other.subscribe(signup)])
+        await other.resendConfirmation({ email })
+        await settle(other)
+        expect(messages).toHaveLength(1)
+        advance(1)
+        await other.subscribe(signup)
+        await vi.waitFor(() => expect(messages).toHaveLength(2))
+        const current = (await other.getSubscription({ email }))!.confirmationDelivery!
+        expect(current.id).toBe(previous.id)
+        expect(current.attemptId).not.toBe(previous.attemptId)
+
+        oldSend.release()
+        await settle()
+        expect(await eventsOf(NEWSLETTER_EVENT_TYPES.CONFIRMATION_STALE_RESULT)).toEqual([
+          expect.objectContaining({
+            metadata: expect.objectContaining({
+              deliveryId: previous.id,
+              attemptId: previous.attemptId,
+              lifecycleGeneration: 1,
+              authoritative: false,
+              outcome
+            })
+          })
+        ])
+        expect(await eventsOf(NEWSLETTER_EVENT_TYPES.CONFIRMATION_SENT)).toEqual([])
+        expect(await eventsOf(NEWSLETTER_EVENT_TYPES.CONFIRMATION_SEND_FAILED)).toEqual([])
+        expect(await other.getSubscription({ email })).toMatchObject({
+          confirmationDelivery: current,
+          confirmationSentAt: null
+        })
+      } finally {
+        oldSend.release()
+        newSend.release()
+      }
       await settle(other)
-      expect(messages).toHaveLength(1)
-      advance(1)
-      await other.subscribe(signup)
-      await vi.waitFor(() => expect(messages).toHaveLength(2))
-      const current = (await other.getSubscription({ email }))!.confirmationDelivery!
-      expect(current.id).toBe(previous.id)
-      expect(current.attemptId).not.toBe(previous.attemptId)
-
-      oldSend.release()
-      await waitForEvents(NEWSLETTER_EVENT_TYPES.CONFIRMATION_SENT, 1)
-      expect((await other.getSubscription({ email }))!.confirmationDelivery)
-        .toEqual(current)
-    } finally {
-      oldSend.release()
-      newSend.release()
+      expect(await eventsOf(NEWSLETTER_EVENT_TYPES.CONFIRMATION_SENT)).toEqual([
+        expect.objectContaining({
+          metadata: expect.objectContaining({
+            deliveryId: previous.id,
+            attemptId: messages[1]!.attemptId,
+            lifecycleGeneration: 1,
+            authoritative: true,
+            outcome: 'ACCEPTED'
+          })
+        })
+      ])
+      expect(await eventsOf(NEWSLETTER_EVENT_TYPES.CONFIRMATION_STALE_RESULT)).toHaveLength(1)
+      expect(await other.getSubscription({ email })).toMatchObject({
+        confirmationDelivery: null,
+        confirmationSentAt: expect.any(Date)
+      })
+      await expect(other.confirm({ token: messages[1]!.token }))
+        .resolves.toEqual({ confirmed: true })
     }
-    await waitForEvents(NEWSLETTER_EVENT_TYPES.CONFIRMATION_SENT, 2)
-    expect((await other.getSubscription({ email }))!.confirmationDelivery).toBeNull()
+  )
+
+  it('records a result as stale once the subscription was confirmed meanwhile', async () => {
+    const { newsletter, mailer, messages, advance, waitForEvents, settle } = setup()
+    await newsletter.subscribe(signup)
+    await waitForEvents(NEWSLETTER_EVENT_TYPES.CONFIRMATION_SENT, 1)
+    const send = gate()
+    mailer.sendConfirmation.mockImplementationOnce(async input => {
+      messages.push(input)
+      await send.promise
+      throw new Error('provider timeout')
+    })
+
+    advance(1)
+    await newsletter.resendConfirmation({ email })
+    await vi.waitFor(() => expect(messages).toHaveLength(2))
+    await expect(newsletter.confirm({ token: messages[0]!.token }))
+      .resolves.toEqual({ confirmed: true })
+    send.release()
+    await settle()
+
+    expect((await newsletter.listEvents({ email })).at(-1)).toMatchObject({
+      type: NEWSLETTER_EVENT_TYPES.CONFIRMATION_STALE_RESULT,
+      metadata: {
+        attemptId: messages[1]!.attemptId,
+        authoritative: false,
+        outcome: 'TEMPORARY',
+        stage: 'DELIVERY'
+      }
+    })
+    expect(await newsletter.getSubscription({ email })).toMatchObject({
+      status: SUBSCRIPTION_STATUSES.ACTIVE,
+      confirmationDelivery: null
+    })
   })
 
   it('recovers when delivery succeeds but recording the result rolls back', async () => {
@@ -755,7 +831,7 @@ describe('delivery outcomes', () => {
       .toMatchObject({ attemptId: messages[0]!.attemptId, leaseExpiresAt: expect.any(Date) })
     expect((await newsletter.listEvents({ email })).at(-1)).toMatchObject({
       type: NEWSLETTER_EVENT_TYPES.CONFIRMATION_SEND_FAILED,
-      metadata: { failure: MAIL_DELIVERY_FAILURES.AMBIGUOUS, stage: 'DELIVERY' }
+      metadata: { outcome: MAIL_DELIVERY_FAILURES.AMBIGUOUS, stage: 'DELIVERY', authoritative: true }
     })
 
     await newsletter.resendConfirmation({ email })
@@ -785,7 +861,7 @@ describe('delivery outcomes', () => {
     expect((await newsletter.getSubscription({ email }))?.confirmationDelivery).toBeNull()
     expect((await newsletter.listEvents({ email })).at(-1)).toMatchObject({
       type: NEWSLETTER_EVENT_TYPES.CONFIRMATION_SEND_FAILED,
-      metadata: { failure: MAIL_DELIVERY_FAILURES.PERMANENT, reason: 'invalid-recipient' }
+      metadata: { outcome: MAIL_DELIVERY_FAILURES.PERMANENT, reason: 'invalid-recipient', authoritative: true }
     })
 
     await newsletter.subscribe(signup)
@@ -820,7 +896,7 @@ describe('delivery outcomes', () => {
       .toMatchObject({ attemptId: null, leaseExpiresAt: null })
     expect((await newsletter.listEvents({ email })).at(-1)).toMatchObject({
       type: NEWSLETTER_EVENT_TYPES.CONFIRMATION_SEND_FAILED,
-      metadata: { stage: 'ELIGIBILITY' }
+      metadata: { stage: 'ELIGIBILITY', authoritative: true }
     })
 
     await newsletter.unsuppressContact({ email })

@@ -502,8 +502,10 @@ export function createNewsletter(config: NewsletterConfig): NewsletterCore {
             type: NEWSLETTER_EVENT_TYPES.CONFIRMATION_SEND_FAILED,
             occurredAt: issuedAt,
             metadata: {
-              lifecycleGeneration,
+              deliveryId: claim.deliveryId,
               attemptId,
+              lifecycleGeneration,
+              authoritative: true,
               stage: 'ELIGIBILITY',
               reason: 'CONTACT_SUPPRESSED'
             }
@@ -563,10 +565,14 @@ export function createNewsletter(config: NewsletterConfig): NewsletterCore {
       const current = await transaction.getSubscriptionById(subscriptionId)
       if (current == null) return
 
-      if (
-        current.lifecycleGeneration === lifecycleGeneration
+      // Only the attempt that still owns the current work may finalize it.
+      // A superseded attempt records its result under a distinct event type.
+      const authoritative = current.lifecycleGeneration === lifecycleGeneration
         && current.status === SUBSCRIPTION_STATUSES.PENDING_CONFIRMATION
         && current.confirmationDelivery?.attemptId === attemptId
+
+      if (
+        authoritative
         // An ambiguous send keeps its claim until the lease expires, so an
         // immediate retry cannot add another message while it may be in flight.
         && failure !== MAIL_DELIVERY_FAILURES.AMBIGUOUS
@@ -574,7 +580,7 @@ export function createNewsletter(config: NewsletterConfig): NewsletterCore {
         await transaction.updateSubscription(subscriptionId, {
           ...(failure == null ? { confirmationSentAt: completedAt } : {}),
           confirmationDelivery: failure === MAIL_DELIVERY_FAILURES.TEMPORARY
-            ? { ...current.confirmationDelivery, attemptId: null, leaseExpiresAt: null }
+            ? { ...current.confirmationDelivery!, attemptId: null, leaseExpiresAt: null }
             : null,
           updatedAt: completedAt
         })
@@ -583,14 +589,19 @@ export function createNewsletter(config: NewsletterConfig): NewsletterCore {
       await appendEvent(transaction, {
         contactId,
         subscriptionId,
-        type: failure == null
-          ? NEWSLETTER_EVENT_TYPES.CONFIRMATION_SENT
-          : NEWSLETTER_EVENT_TYPES.CONFIRMATION_SEND_FAILED,
+        type: !authoritative
+          ? NEWSLETTER_EVENT_TYPES.CONFIRMATION_STALE_RESULT
+          : failure == null
+            ? NEWSLETTER_EVENT_TYPES.CONFIRMATION_SENT
+            : NEWSLETTER_EVENT_TYPES.CONFIRMATION_SEND_FAILED,
         occurredAt: completedAt,
         metadata: {
-          lifecycleGeneration,
+          deliveryId: claim.deliveryId,
           attemptId,
-          ...(failure != null ? { stage, failure } : {}),
+          lifecycleGeneration,
+          authoritative,
+          outcome: failure ?? 'ACCEPTED',
+          ...(failure != null ? { stage } : {}),
           ...(result.providerMessageId !== undefined
             ? { providerMessageId: result.providerMessageId }
             : {}),

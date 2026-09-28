@@ -582,6 +582,10 @@ export function registerStorageAdapterConformance(
       await service.suppressContact({ email, reason: 'BOUNCE' })
       expect((await service.getSubscription({ email }))?.status)
         .toBe(SUBSCRIPTION_STATUSES.PENDING_CONFIRMATION)
+      const pendingDigest = await sha256Digest(messages[0]!.token)
+      expect((await harness.inspectConfirmationTokens()).find(
+        token => token.digest === pendingDigest
+      )?.revokedAt).toBeInstanceOf(Date)
       await service.unsuppressContact({ email })
 
       const events = await service.listEvents({ email })

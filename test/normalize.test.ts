@@ -1,6 +1,8 @@
 import { describe, expect, it } from 'vitest'
 import {
   assertAudienceKey,
+  NEWSLETTER_ERROR_CODES,
+  NewsletterError,
   normalizeEmail
 } from '../src/index.js'
 
@@ -15,7 +17,14 @@ describe('normalization', () => {
       .toBe('Product-News')
   })
 
-  it('rejects empty audience keys', () => {
-    expect(() => assertAudienceKey('   ')).toThrow(TypeError)
+  it('rejects empty audience keys with a typed error', () => {
+    try {
+      assertAudienceKey('   ')
+      throw new Error('Expected assertAudienceKey to throw.')
+    } catch (error) {
+      expect(error).toBeInstanceOf(NewsletterError)
+      expect((error as NewsletterError).code)
+        .toBe(NEWSLETTER_ERROR_CODES.INVALID_AUDIENCE)
+    }
   })
 })

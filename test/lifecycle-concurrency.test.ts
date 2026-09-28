@@ -357,6 +357,38 @@ describe('generation-bound lifecycle concurrency', () => {
   })
 })
 
+describe('post-commit capability cleanup', () => {
+  it('keeps a successful confirmation authoritative when token cleanup fails', async () => {
+    const { newsletter, messages, waitForEvents } = setup()
+    await newsletter.subscribe(signup)
+    await waitForEvents(NEWSLETTER_EVENT_TYPES.CONFIRMATION_SENT, 1)
+
+    vi.spyOn(newsletter.capabilities, 'consumeConfirmation')
+      .mockRejectedValueOnce(new Error('token store unavailable'))
+
+    await expect(newsletter.confirm({ token: messages[0]!.token }))
+      .resolves.toEqual({ confirmed: true })
+    expect((await newsletter.getSubscription({ email }))?.status)
+      .toBe(SUBSCRIPTION_STATUSES.ACTIVE)
+  })
+
+  it('keeps a successful unsubscribe authoritative when token revocation fails', async () => {
+    const { newsletter, messages, waitForEvents } = setup()
+    await newsletter.subscribe(signup)
+    await waitForEvents(NEWSLETTER_EVENT_TYPES.CONFIRMATION_SENT, 1)
+    await newsletter.confirm({ token: messages[0]!.token })
+    const capability = (await newsletter.createUnsubscribeCapability({ email }))!
+
+    vi.spyOn(newsletter.capabilities, 'revokeConfirmations')
+      .mockRejectedValueOnce(new Error('token store unavailable'))
+
+    await expect(newsletter.unsubscribe({ capability }))
+      .resolves.toEqual({ unsubscribed: true })
+    expect((await newsletter.getSubscription({ email }))?.status)
+      .toBe(SUBSCRIPTION_STATUSES.UNSUBSCRIBED)
+  })
+})
+
 describe('durable confirmation retries', () => {
   it.each(['token-generation', 'token-persistence', 'provider-rejection', 'provider-timeout'] as const)(
     'resumes failed re-subscription after %s from another service instance',

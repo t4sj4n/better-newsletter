@@ -24,10 +24,12 @@ interface MemoryState {
   events: NewsletterEvent[]
 }
 
+/** Deep-copies supported values so callers cannot mutate stored state by reference. */
 function clone<T>(value: T): T {
   return structuredClone(value)
 }
 
+/** Joins a contact ID and audience key with a null separator for the memory index. */
 function subscriptionKey(contactId: string, audienceKey: string): string {
   return `${contactId}\u0000${audienceKey}`
 }
@@ -151,6 +153,7 @@ export class MemoryNewsletterStorage implements NewsletterStorage {
   }
 }
 
+/** Creates an isolated in-memory store with serialized transactions and rollback. */
 export function memoryStorage(): MemoryNewsletterStorage {
   return new MemoryNewsletterStorage()
 }
@@ -247,6 +250,10 @@ export class MemoryNewsletterCapabilities implements NewsletterCapabilities {
   }
 }
 
+/**
+ * Creates an isolated capability adapter for tests and development.
+ * Stores raw opaque values in memory and provides no production token security.
+ */
 export function memoryCapabilities(): MemoryNewsletterCapabilities {
   return new MemoryNewsletterCapabilities()
 }

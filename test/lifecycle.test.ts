@@ -12,6 +12,10 @@ import {
   memoryStorage
 } from '../src/memory.js'
 
+/**
+ * Creates an isolated lifecycle fixture with deterministic time, IDs, and tokens.
+ * Returns captured mail and controls to advance time or enable mail failures.
+ */
 function setup() {
   let nowMs = Date.parse('2026-09-28T08:00:00.000Z')
   let id = 0

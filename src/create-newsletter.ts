@@ -48,6 +48,10 @@ const NOT_CONFIRMED = Object.freeze({ confirmed: false as const })
 const UNSUBSCRIBED = Object.freeze({ unsubscribed: true as const })
 const NOT_UNSUBSCRIBED = Object.freeze({ unsubscribed: false as const })
 
+/**
+ * Builds consent evidence at the supplied time from explicit public consent.
+ * @throws {NewsletterError} If consent is not granted or its version is blank.
+ */
 function consentFromPublicInput(
   input: {
     readonly granted: boolean
@@ -80,6 +84,7 @@ function consentFromPublicInput(
   }
 }
 
+/** Compares external subjects by namespace and ID, treating two nulls as equal. */
 function subjectEquals(
   left: ExternalSubject | null,
   right: ExternalSubject | null
@@ -87,11 +92,13 @@ function subjectEquals(
   return left?.namespace === right?.namespace && left?.id === right?.id
 }
 
+/** Compares timestamps, treating null and undefined as equivalent missing dates. */
 function dateEquals(left: Date | null | undefined, right: Date | null | undefined): boolean {
   if (left == null || right == null) return left == null && right == null
   return left.getTime() === right.getTime()
 }
 
+/** Compares consent version, source, locale, and the recorded consent timestamp. */
 function consentEquals(left: ConsentEvidence, right: ConsentEvidence): boolean {
   return left.version === right.version
     && left.source === right.source
@@ -99,6 +106,11 @@ function consentEquals(left: ConsentEvidence, right: ConsentEvidence): boolean {
     && left.consentedAt.getTime() === right.consentedAt.getTime()
 }
 
+/**
+ * Requires confirmation dates for active imports and unsubscribe dates for
+ * unsubscribed imports; pending imports must have neither date.
+ * @throws {NewsletterError} If these historical import requirements are unmet.
+ */
 function assertImportShape(input: ImportSubscriptionInput): void {
   if (input.status === SUBSCRIPTION_STATUSES.ACTIVE && input.confirmedAt == null) {
     throw new NewsletterError(
@@ -128,6 +140,7 @@ function assertImportShape(input: ImportSubscriptionInput): void {
   }
 }
 
+/** Checks audience, status, consent, and lifecycle dates for an idempotent import. */
 function importedSubscriptionMatches(
   existing: Subscription,
   input: ImportSubscriptionInput,
@@ -140,6 +153,12 @@ function importedSubscriptionMatches(
     && dateEquals(existing.unsubscribedAt, input.unsubscribedAt)
 }
 
+/**
+ * Creates a frozen newsletter lifecycle service using the supplied adapters.
+ * Defaults to the system clock, UUID IDs, the default audience, and a 24-hour
+ * confirmation lifetime when those options are omitted.
+ * @throws {NewsletterError} If the audience or confirmation lifetime is invalid.
+ */
 export function createNewsletter(config: NewsletterConfig): NewsletterCore {
   const defaultAudience = assertAudienceKey(
     config.defaultAudience ?? DEFAULT_AUDIENCE_KEY

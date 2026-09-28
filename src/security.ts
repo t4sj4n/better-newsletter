@@ -88,6 +88,11 @@ export interface ConfirmationTokenStore {
     readonly now: Date
   }): Promise<ConfirmationReplacementResult>
 
+  resolve(input: {
+    readonly digest: string
+    readonly now: Date
+  }): Promise<ConfirmationTokenRecord | null>
+
   consume(input: {
     readonly digest: string
     readonly now: Date
@@ -384,6 +389,18 @@ export function createSecureCapabilities(
         maxActiveTokens: input.maxActiveTokens,
         now: input.issuedAt
       })
+    },
+
+    async resolveConfirmation(token, now) {
+      const record = await options.confirmationStore.resolve({
+        digest: await sha256Digest(token),
+        now
+      })
+      if (record == null) return null
+      return {
+        contactId: record.contactId,
+        subscriptionId: record.subscriptionId
+      }
     },
 
     async consumeConfirmation(token, now) {

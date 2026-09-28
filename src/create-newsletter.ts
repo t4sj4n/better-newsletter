@@ -631,13 +631,13 @@ export function createNewsletter(config: NewsletterConfig): NewsletterCore {
     },
 
     async confirm(input) {
-      const target = await config.capabilities.consumeConfirmation(
-        input.token,
-        clock.now()
-      )
+      const resolvedAt = clock.now()
+      const target = config.capabilities.resolveConfirmation != null
+        ? await config.capabilities.resolveConfirmation(input.token, resolvedAt)
+        : await config.capabilities.consumeConfirmation(input.token, resolvedAt)
       if (target == null) return NOT_CONFIRMED
 
-      return config.storage.transaction(async transaction => {
+      const result = await config.storage.transaction(async transaction => {
         const contact = await transaction.getContactById(target.contactId)
         const subscription = await transaction.getSubscriptionById(
           target.subscriptionId
@@ -669,6 +669,14 @@ export function createNewsletter(config: NewsletterConfig): NewsletterCore {
         })
         return CONFIRMED
       })
+
+      if (config.capabilities.resolveConfirmation != null) {
+        await config.capabilities.consumeConfirmation(
+          input.token,
+          clock.now()
+        ).catch(() => null)
+      }
+      return result
     },
 
     async unsubscribe(input) {

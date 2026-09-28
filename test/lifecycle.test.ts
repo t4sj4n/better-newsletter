@@ -59,7 +59,7 @@ describe('newsletter lifecycle', () => {
   it('creates a normalized pending subscription and records delivery events', async () => {
     const { newsletter, messages } = setup()
 
-    await expect(newslettter.subscribe({
+    await expect(newsletter.subscribe({
       email: ' Person@Example.COM ',
       consent: consent()
     })).resolves.toEqual({ accepted: true })
@@ -68,7 +68,7 @@ describe('newsletter lifecycle', () => {
     const subscription = await newsletter.getSubscription({
       email: 'person@example.com'
     })
-    const events = await newslettter.listEvents({ email: 'person@example.com' })
+    const events = await newsletter.listEvents({ email: 'person@example.com' })
 
     expect(contact?.email).toBe('person@example.com')
     expect(subscription?.status).toBe(SUBSCRIPTION_STATUSES.PENDING_CONFIRMATION)

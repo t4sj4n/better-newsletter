@@ -28,7 +28,9 @@ interface ResendSendResponse {
   readonly error: {
     readonly name: string
     readonly statusCode: number | null
+    readonly message?: string
   } | null
+  readonly headers?: Readonly<Record<string, string>> | null
 }
 
 export interface ResendEmailClient {
@@ -54,6 +56,13 @@ export interface ResendMailerOptions {
 
 function failedSend(error: NonNullable<ResendSendResponse['error']>): MailDeliveryResult {
   const { name, statusCode } = error
+  if (statusCode != null && statusCode >= 500) {
+    return {
+      accepted: false,
+      failure: MAIL_DELIVERY_FAILURES.AMBIGUOUS,
+      reason: MAIL_DELIVERY_REASONS.PROVIDER_UNAVAILABLE
+    }
+  }
   if (
     name === 'rate_limit_exceeded'
     || name === 'daily_quota_exceeded'
@@ -70,8 +79,9 @@ function failedSend(error: NonNullable<ResendSendResponse['error']>): MailDelive
     name === 'missing_api_key'
     || name === 'invalid_api_key'
     || name === 'restricted_api_key'
+    || name === 'suspended_api_key'
+    || name === 'invalid_permission'
     || statusCode === 401
-    || statusCode === 403
   ) {
     return {
       accepted: false,
@@ -85,15 +95,8 @@ function failedSend(error: NonNullable<ResendSendResponse['error']>): MailDelive
   ) {
     return {
       accepted: false,
-      failure: MAIL_DELIVERY_FAILURES.TEMPORARY,
+      failure: MAIL_DELIVERY_FAILURES.AMBIGUOUS,
       reason: MAIL_DELIVERY_REASONS.UNKNOWN
-    }
-  }
-  if (statusCode != null && statusCode >= 500) {
-    return {
-      accepted: false,
-      failure: MAIL_DELIVERY_FAILURES.TEMPORARY,
-      reason: MAIL_DELIVERY_REASONS.PROVIDER_UNAVAILABLE
     }
   }
   if (

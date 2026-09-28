@@ -1,4 +1,4 @@
-import type { Resend } from 'resend'
+import { Resend } from 'resend'
 import { describe, expect, it, vi } from 'vitest'
 import {
   CONTACT_STATUSES,
@@ -12,7 +12,7 @@ import {
   type MailDeliveryReasonCode
 } from '../src/index.js'
 import { memoryStorage } from '../src/memory.js'
-import { resendMailer } from '../src/resend.js'
+import { resendMailer, type ResendEmailClient } from '../src/resend.js'
 
 const secret = '0123456789abcdef0123456789abcdef'
 const now = new Date('2026-09-28T08:00:00.000Z')
@@ -57,7 +57,7 @@ function confirmationInput(): ConfirmationMailInput {
   }
 }
 
-type SendResponse = Awaited<ReturnType<Resend['emails']['send']>>
+type SendResponse = Awaited<ReturnType<ResendEmailClient['emails']['send']>>
 type ResendError = NonNullable<SendResponse['error']>
 
 function errorResponse(name: ResendError['name'], statusCode: number | null): SendResponse {
@@ -69,7 +69,7 @@ function errorResponse(name: ResendError['name'], statusCode: number | null): Se
 }
 
 function setup() {
-  const send = vi.fn<Resend['emails']['send']>()
+  const send = vi.fn<ResendEmailClient['emails']['send']>()
   const client = { emails: { send } }
   const renderConfirmation = vi.fn((input: ConfirmationMailInput) => ({
     subject: `Confirm ${input.audienceKey}`,
@@ -86,6 +86,15 @@ function setup() {
 }
 
 describe('Resend confirmation mailer', () => {
+  it('accepts an injected SDK client without sending a network request', () => {
+    const sdk: ResendEmailClient = new Resend('re_test_key')
+    expect(resendMailer({
+      client: sdk,
+      from: 'news@example.com',
+      renderConfirmation: () => ({ subject: 'Confirm', text: 'Confirm' })
+    })).toHaveProperty('sendConfirmation', expect.any(Function))
+  })
+
   it('renders host-owned URLs and sends HTML and text with correlation-based idempotency', async () => {
     const { send, renderConfirmation, mailer } = setup()
     send.mockResolvedValue({ data: { id: 'provider-message-1' }, error: null, headers: null })
@@ -120,7 +129,7 @@ describe('Resend confirmation mailer', () => {
   })
 
   it('supports a host text-only renderer without a default template', async () => {
-    const send = vi.fn<Resend['emails']['send']>()
+    const send = vi.fn<ResendEmailClient['emails']['send']>()
       .mockResolvedValue({ data: { id: 'id-2' }, error: null, headers: null })
     const mailer = resendMailer({
       client: { emails: { send } },
@@ -182,6 +191,10 @@ describe('Resend confirmation mailer', () => {
         { status: 503 }
       ))
       .mockResolvedValueOnce(new Response('re_secret raw-confirmation-token', { status: 422 }))
+      .mockResolvedValueOnce(new Response(
+        JSON.stringify({ name: 'concurrent_idempotent_requests', message: 'raw-confirmation-token' }),
+        { status: 409 }
+      ))
       .mockRejectedValueOnce(Object.assign(new Error('re_secret raw-confirmation-token'), {
         name: 'TimeoutError'
       }))
@@ -195,13 +208,18 @@ describe('Resend confirmation mailer', () => {
       })
       await expect(mailer.sendConfirmation(confirmationInput())).resolves.toEqual({
         accepted: false,
-        failure: MAIL_DELIVERY_FAILURES.TEMPORARY,
+        failure: MAIL_DELIVERY_FAILURES.AMBIGUOUS,
         reason: MAIL_DELIVERY_REASONS.PROVIDER_UNAVAILABLE
       })
       await expect(mailer.sendConfirmation(confirmationInput())).resolves.toEqual({
         accepted: false,
         failure: MAIL_DELIVERY_FAILURES.PERMANENT,
         reason: MAIL_DELIVERY_REASONS.INVALID_REQUEST
+      })
+      await expect(mailer.sendConfirmation(confirmationInput())).resolves.toEqual({
+        accepted: false,
+        failure: MAIL_DELIVERY_FAILURES.AMBIGUOUS,
+        reason: MAIL_DELIVERY_REASONS.UNKNOWN
       })
       await expect(mailer.sendConfirmation(confirmationInput())).resolves.toEqual({
         accepted: false,
@@ -216,14 +234,19 @@ describe('Resend confirmation mailer', () => {
 
   it.each([
     ['invalid_api_key', 401, MAIL_DELIVERY_FAILURES.PERMANENT, MAIL_DELIVERY_REASONS.AUTH_FAILED],
-    ['validation_error', 403, MAIL_DELIVERY_FAILURES.PERMANENT, MAIL_DELIVERY_REASONS.AUTH_FAILED],
+    ['restricted_api_key', 403, MAIL_DELIVERY_FAILURES.PERMANENT, MAIL_DELIVERY_REASONS.AUTH_FAILED],
+    ['suspended_api_key', 403, MAIL_DELIVERY_FAILURES.PERMANENT, MAIL_DELIVERY_REASONS.AUTH_FAILED],
+    ['validation_error', 403, MAIL_DELIVERY_FAILURES.PERMANENT, MAIL_DELIVERY_REASONS.INVALID_REQUEST],
+    ['not_found', 403, MAIL_DELIVERY_FAILURES.PERMANENT, MAIL_DELIVERY_REASONS.INVALID_REQUEST],
     ['validation_error', 422, MAIL_DELIVERY_FAILURES.PERMANENT, MAIL_DELIVERY_REASONS.INVALID_REQUEST],
     ['invalid_from_address', null, MAIL_DELIVERY_FAILURES.PERMANENT, MAIL_DELIVERY_REASONS.INVALID_REQUEST],
     ['invalid_idempotent_request', 409, MAIL_DELIVERY_FAILURES.PERMANENT, MAIL_DELIVERY_REASONS.INVALID_REQUEST],
     ['rate_limit_exceeded', 429, MAIL_DELIVERY_FAILURES.TEMPORARY, MAIL_DELIVERY_REASONS.RATE_LIMITED],
     ['daily_quota_exceeded', 429, MAIL_DELIVERY_FAILURES.TEMPORARY, MAIL_DELIVERY_REASONS.RATE_LIMITED],
-    ['concurrent_idempotent_requests', 409, MAIL_DELIVERY_FAILURES.TEMPORARY, MAIL_DELIVERY_REASONS.UNKNOWN],
-    ['application_error', 500, MAIL_DELIVERY_FAILURES.TEMPORARY, MAIL_DELIVERY_REASONS.PROVIDER_UNAVAILABLE],
+    ['concurrent_idempotent_requests', 409, MAIL_DELIVERY_FAILURES.AMBIGUOUS, MAIL_DELIVERY_REASONS.UNKNOWN],
+    ['application_error', 500, MAIL_DELIVERY_FAILURES.AMBIGUOUS, MAIL_DELIVERY_REASONS.PROVIDER_UNAVAILABLE],
+    ['rate_limit_exceeded', 500, MAIL_DELIVERY_FAILURES.AMBIGUOUS, MAIL_DELIVERY_REASONS.PROVIDER_UNAVAILABLE],
+    ['service_unavailable', 503, MAIL_DELIVERY_FAILURES.AMBIGUOUS, MAIL_DELIVERY_REASONS.PROVIDER_UNAVAILABLE],
     ['application_error', null, MAIL_DELIVERY_FAILURES.AMBIGUOUS, MAIL_DELIVERY_REASONS.UNKNOWN]
   ] as const)(
     'maps %s (%s) to a bounded %s/%s result',
@@ -234,6 +257,78 @@ describe('Resend confirmation mailer', () => {
       expect(result).toEqual({ accepted: false, failure, reason })
       expect(JSON.stringify(result)).not.toContain('re_secret')
       expect(JSON.stringify(result)).not.toContain('raw-confirmation-token')
+    }
+  )
+
+  it.each([
+    ['concurrent_idempotent_requests', 409, MAIL_DELIVERY_REASONS.UNKNOWN],
+    ['application_error', 500, MAIL_DELIVERY_REASONS.PROVIDER_UNAVAILABLE],
+    ['service_unavailable', 503, MAIL_DELIVERY_REASONS.PROVIDER_UNAVAILABLE]
+  ] as const)(
+    'holds the delivery lease after %s (%s) instead of immediately sending a second email',
+    async (name, status, reason) => {
+      const { send, mailer } = setup()
+      send
+        .mockResolvedValueOnce(errorResponse(name, status))
+        .mockResolvedValueOnce({
+          data: { id: 'provider-message-2' },
+          error: null,
+          headers: null
+        })
+      let nowMs = now.getTime()
+      const background: Promise<void>[] = []
+      const newsletter = createNewsletter({
+        storage: memoryStorage(),
+        mailer,
+        capabilities: createSecureCapabilities({ hmacSecret: secret }),
+        clock: { now: () => new Date(nowMs) },
+        confirmation: { deliveryLeaseMs: 1_000 },
+        runBackground: task => { background.push(task) }
+      })
+      const settle = async () => {
+        await Promise.all(background.splice(0))
+      }
+
+      await newsletter.subscribe({
+        email: 'person@example.com',
+        audience: 'product',
+        consent: { granted: true, version: 'v1' }
+      })
+      await settle()
+      const pending = await newsletter.getSubscription({
+        email: 'person@example.com',
+        audience: 'product'
+      })
+      expect(pending?.confirmationDelivery).toMatchObject({
+        attemptId: expect.any(String),
+        leaseExpiresAt: new Date(nowMs + 1_000)
+      })
+      expect(pending?.confirmationSentAt).toBeNull()
+      expect((await newsletter.listEvents({ email: 'person@example.com' })).at(-1)).toMatchObject({
+        type: NEWSLETTER_EVENT_TYPES.CONFIRMATION_SEND_FAILED,
+        metadata: {
+          outcome: MAIL_DELIVERY_FAILURES.AMBIGUOUS,
+          reason,
+          authoritative: true
+        }
+      })
+
+      await newsletter.resendConfirmation({ email: 'person@example.com', audience: 'product' })
+      await settle()
+      expect(send).toHaveBeenCalledTimes(1)
+      expect((await newsletter.getSubscription({
+        email: 'person@example.com', audience: 'product'
+      }))?.confirmationDelivery).toEqual(pending?.confirmationDelivery)
+
+      nowMs += 1_000
+      await newsletter.resendConfirmation({ email: 'person@example.com', audience: 'product' })
+      await settle()
+      expect(send).toHaveBeenCalledTimes(2)
+      expect(send.mock.calls[1]?.[1]?.idempotencyKey)
+        .not.toBe(send.mock.calls[0]?.[1]?.idempotencyKey)
+      expect((await newsletter.getSubscription({
+        email: 'person@example.com', audience: 'product'
+      }))?.confirmationSentAt).toBeInstanceOf(Date)
     }
   )
 

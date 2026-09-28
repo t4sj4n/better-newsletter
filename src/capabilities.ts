@@ -50,4 +50,6 @@ export interface NewsletterCapabilities {
   ): Promise<UnsubscribeCapabilityTarget | null>
 
   revokeUnsubscribeCapabilities(subscriptionId: string): Promise<void>
+
+  revokeUnsubscribeAllCapability(contactId: string): Promise<void>
 }

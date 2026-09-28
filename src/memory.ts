@@ -248,6 +248,12 @@ export class MemoryNewsletterCapabilities implements NewsletterCapabilities {
     if (capability != null) this.unsubscribe.delete(capability)
     this.unsubscribeBySubscription.delete(subscriptionId)
   }
+
+  async revokeUnsubscribeAllCapability(contactId: string): Promise<void> {
+    const capability = this.unsubscribeAllByContact.get(contactId)
+    if (capability != null) this.unsubscribe.delete(capability)
+    this.unsubscribeAllByContact.delete(contactId)
+  }
 }
 
 /**

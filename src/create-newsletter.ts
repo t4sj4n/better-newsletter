@@ -107,15 +107,18 @@ function consentEquals(left: ConsentEvidence, right: ConsentEvidence): boolean {
 }
 
 /**
- * Requires confirmation dates for active imports and unsubscribe dates for
- * unsubscribed imports; pending imports must have neither date.
+ * Active imports require confirmation dates and no unsubscribe dates;
+ * unsubscribed imports require unsubscribe dates, and pending imports neither.
  * @throws {NewsletterError} If these historical import requirements are unmet.
  */
 function assertImportShape(input: ImportSubscriptionInput): void {
-  if (input.status === SUBSCRIPTION_STATUSES.ACTIVE && input.confirmedAt == null) {
+  if (
+    input.status === SUBSCRIPTION_STATUSES.ACTIVE
+    && (input.confirmedAt == null || input.unsubscribedAt != null)
+  ) {
     throw new NewsletterError(
       NEWSLETTER_ERROR_CODES.INVALID_IMPORT,
-      'Importing an active subscription requires confirmedAt.'
+      'Importing an active subscription requires confirmedAt and no unsubscribedAt.'
     )
   }
 
@@ -409,13 +412,16 @@ export function createNewsletter(config: NewsletterConfig): NewsletterCore {
         await config.capabilities.revokeUnsubscribeCapabilities(
           transition.subscription.id
         )
+        await config.capabilities.revokeUnsubscribeAllCapability(
+          transition.contact.id
+        )
       }
 
       if (transition.shouldSend) {
-        await requestConfirmation(
+        void requestConfirmation(
           transition.contact.id,
           transition.subscription.id
-        )
+        ).catch(() => undefined)
       }
 
       return PUBLIC_ACCEPTED

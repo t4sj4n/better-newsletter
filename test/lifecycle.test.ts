@@ -1,4 +1,4 @@
-import { describe, expect, it } from 'vitest'
+import { describe, expect, it, vi } from 'vitest'
 import {
   CONTACT_STATUSES,
   NEWSLETTER_ERROR_CODES,
@@ -44,6 +44,15 @@ function setup() {
   return {
     newsletter,
     messages,
+    async waitForMail(count = 1) {
+      await vi.waitFor(async () => {
+        const events = await newsletter.listEvents({ email: 'person@example.com' })
+        expect(events.filter(event =>
+          event.type === NEWSLETTER_EVENT_TYPES.CONFIRMATION_SENT
+          || event.type === NEWSLETTER_EVENT_TYPES.CONFIRMATION_SEND_FAILED
+        )).toHaveLength(count)
+      })
+    },
     advance(ms = 1_000) {
       nowMs += ms
     },
@@ -61,12 +70,13 @@ const consent = (version = 'v1') => ({
 
 describe('newsletter lifecycle', () => {
   it('creates a normalized pending subscription and records delivery events', async () => {
-    const { newsletter, messages } = setup()
+    const { newsletter, messages, waitForMail } = setup()
 
     await expect(newsletter.subscribe({
       email: ' Person@Example.COM ',
       consent: consent()
     })).resolves.toEqual({ accepted: true })
+    await waitForMail()
 
     const contact = await newsletter.getContact({ email: 'person@example.com' })
     const subscription = await newsletter.getSubscription({
@@ -87,7 +97,7 @@ describe('newsletter lifecycle', () => {
   })
 
   it('confirms exactly once and leaves repeated public signups neutral', async () => {
-    const { newsletter, messages } = setup()
+    const { newsletter, messages, waitForMail } = setup()
 
     const first = await newsletter.subscribe({
       email: 'person@example.com',
@@ -98,6 +108,7 @@ describe('newsletter lifecycle', () => {
       consent: consent('v2')
     })
 
+    await waitForMail()
     expect(first).toEqual({ accepted: true })
     expect(pendingRepeat).toEqual(first)
     expect(messages).toHaveLength(1)
@@ -121,12 +132,13 @@ describe('newsletter lifecycle', () => {
   })
 
   it('keeps multiple audiences independent', async () => {
-    const { newsletter, messages } = setup()
+    const { newsletter, messages, waitForMail } = setup()
 
     await newsletter.subscribe({
       email: 'person@example.com',
       consent: consent('default-v1')
     })
+    await waitForMail()
     await newsletter.confirm({ token: messages[0]!.token })
 
     await newsletter.subscribe({
@@ -134,6 +146,7 @@ describe('newsletter lifecycle', () => {
       audience: 'product-news',
       consent: consent('product-v1')
     })
+    await waitForMail(2)
     await newsletter.confirm({ token: messages[1]!.token })
 
     const productCapability = await newsletter.createUnsubscribeCapability({
@@ -154,12 +167,13 @@ describe('newsletter lifecycle', () => {
   })
 
   it('requires fresh consent and DOI after unsubscribe', async () => {
-    const { newsletter, messages, advance } = setup()
+    const { newsletter, messages, advance, waitForMail } = setup()
 
     await newsletter.subscribe({
       email: 'person@example.com',
       consent: consent('v1')
     })
+    await waitForMail()
     await newsletter.confirm({ token: messages[0]!.token })
     const oldCapability = await newsletter.createUnsubscribeCapability({
       email: 'person@example.com'
@@ -171,6 +185,7 @@ describe('newsletter lifecycle', () => {
       email: 'person@example.com',
       consent: consent('v2')
     })
+    await waitForMail(2)
 
     const subscription = await newsletter.getSubscription({
       email: 'person@example.com'
@@ -188,15 +203,17 @@ describe('newsletter lifecycle', () => {
   })
 
   it('unsubscribes all audiences without changing global suppression state', async () => {
-    const { newsletter, messages } = setup()
+    const { newsletter, messages, waitForMail } = setup()
 
     await newsletter.subscribe({ email: 'person@example.com', consent: consent() })
+    await waitForMail()
     await newsletter.confirm({ token: messages[0]!.token })
     await newsletter.subscribe({
       email: 'person@example.com',
       audience: 'product-news',
       consent: consent()
     })
+    await waitForMail(2)
     await newsletter.confirm({ token: messages[1]!.token })
 
     const allCapability = await newsletter.createUnsubscribeCapability({
@@ -217,9 +234,10 @@ describe('newsletter lifecycle', () => {
   })
 
   it('suppresses delivery globally without rewriting subscription consent', async () => {
-    const { newsletter, messages } = setup()
+    const { newsletter, messages, waitForMail } = setup()
 
     await newsletter.subscribe({ email: 'person@example.com', consent: consent() })
+    await waitForMail()
     await newsletter.confirm({ token: messages[0]!.token })
     const before = await newsletter.getSubscription({ email: 'person@example.com' })
 
@@ -246,9 +264,10 @@ describe('newsletter lifecycle', () => {
   })
 
   it('links subjects independently from consent and rejects implicit reassignment', async () => {
-    const { newsletter } = setup()
+    const { newsletter, waitForMail } = setup()
 
     await newsletter.subscribe({ email: 'person@example.com', consent: consent() })
+    await waitForMail()
     const before = await newsletter.getSubscription({ email: 'person@example.com' })
 
     await newsletter.linkSubject({
@@ -293,7 +312,7 @@ describe('newsletter lifecycle', () => {
   })
 
   it('records provider failure without marking confirmation as sent', async () => {
-    const { newsletter, failNextMail } = setup()
+    const { newsletter, failNextMail, waitForMail } = setup()
     failNextMail()
 
     await newsletter.subscribe({
@@ -301,6 +320,7 @@ describe('newsletter lifecycle', () => {
       consent: consent()
     })
 
+    await waitForMail()
     const subscription = await newsletter.getSubscription({
       email: 'person@example.com'
     })
@@ -313,17 +333,114 @@ describe('newsletter lifecycle', () => {
   })
 
   it('serializes concurrent same-address signups in the memory adapter', async () => {
-    const { newsletter, messages } = setup()
+    const { newsletter, messages, waitForMail } = setup()
 
     const results = await Promise.all([
       newsletter.subscribe({ email: 'person@example.com', consent: consent() }),
       newsletter.subscribe({ email: 'PERSON@example.com', consent: consent() })
     ])
 
+    await waitForMail()
     expect(results[0]).toEqual(results[1])
     expect(await newsletter.listSubscriptions({ email: 'person@example.com' }))
       .toHaveLength(1)
     expect(messages).toHaveLength(1)
+  })
+
+  it.each([
+    {},
+    { confirmedAt: null },
+    { confirmedAt: new Date(), unsubscribedAt: new Date() }
+  ])('rejects inconsistent active imports without persisting state: %j', async dates => {
+    const { newsletter, messages } = setup()
+
+    await expect(newsletter.importSubscription({
+      email: 'invalid@example.com',
+      status: SUBSCRIPTION_STATUSES.ACTIVE,
+      consent: { version: 'legacy-v1', consentedAt: new Date() },
+      ...dates
+    })).rejects.toMatchObject({
+      code: NEWSLETTER_ERROR_CODES.INVALID_IMPORT,
+      message: 'Importing an active subscription requires confirmedAt and no unsubscribedAt.'
+    })
+    expect(await newsletter.getContact({ email: 'invalid@example.com' })).toBeNull()
+    expect(await newsletter.listEvents({ email: 'invalid@example.com' })).toEqual([])
+    expect(messages).toHaveLength(0)
+  })
+
+  it('accepts signup before a delayed mailer finishes', async () => {
+    const { newsletter, waitForMail } = setup()
+    let release!: () => void
+    const delayed = new Promise<void>(resolve => { release = resolve })
+    const send = vi.spyOn(newsletter.mailer, 'sendConfirmation')
+      .mockImplementation(async () => {
+        await delayed
+        return { accepted: true }
+      })
+    const accepted = vi.fn()
+    const signup = newsletter.subscribe({
+      email: 'person@example.com', consent: consent()
+    }).then(accepted)
+
+    try {
+      await vi.waitFor(() => {
+        expect(send).toHaveBeenCalledOnce()
+        expect(accepted).toHaveBeenCalledWith({ accepted: true })
+      })
+      expect((await newsletter.getSubscription({ email: 'person@example.com' }))
+        ?.confirmationSentAt).toBeNull()
+    } finally {
+      release()
+      await signup
+      await waitForMail()
+    }
+  })
+
+  it('handles confirmation setup rejection after accepting signup', async () => {
+    const { newsletter, messages } = setup()
+    const replace = vi.spyOn(newsletter.capabilities, 'replaceConfirmation')
+      .mockRejectedValue(new Error('capability store unavailable'))
+
+    await expect(newsletter.subscribe({
+      email: 'person@example.com', consent: consent()
+    })).resolves.toEqual({ accepted: true })
+    await vi.waitFor(() => expect(replace).toHaveBeenCalledOnce())
+    expect(messages).toHaveLength(0)
+    expect((await newsletter.getSubscription({ email: 'person@example.com' }))
+      ?.status).toBe(SUBSCRIPTION_STATUSES.PENDING_CONFIRMATION)
+  })
+
+  it('revokes old unsubscribe-all links only on resubscription', async () => {
+    const { newsletter, messages, waitForMail } = setup()
+    await newsletter.subscribe({ email: 'person@example.com', consent: consent() })
+    await waitForMail()
+    const oldAll = await newsletter.createUnsubscribeCapability({
+      email: 'person@example.com', all: true
+    })
+    const oldSingle = await newsletter.createUnsubscribeCapability({
+      email: 'person@example.com'
+    })
+    await expect(newsletter.unsubscribeAll({ capability: oldAll! }))
+      .resolves.toEqual({ unsubscribed: true })
+    await expect(newsletter.unsubscribeAll({ capability: oldAll! }))
+      .resolves.toEqual({ unsubscribed: true })
+
+    await newsletter.subscribe({ email: 'person@example.com', consent: consent('v2') })
+    await expect(newsletter.unsubscribeAll({ capability: oldAll! }))
+      .resolves.toEqual({ unsubscribed: false })
+    await expect(newsletter.unsubscribe({ capability: oldSingle! }))
+      .resolves.toEqual({ unsubscribed: false })
+    await waitForMail(2)
+    await expect(newsletter.confirm({ token: messages[1]!.token }))
+      .resolves.toEqual({ confirmed: true })
+    await expect(newsletter.unsubscribeAll({ capability: oldAll! }))
+      .resolves.toEqual({ unsubscribed: false })
+
+    const freshAll = await newsletter.createUnsubscribeCapability({
+      email: 'person@example.com', all: true
+    })
+    await expect(newsletter.unsubscribeAll({ capability: freshAll! }))
+      .resolves.toEqual({ unsubscribed: true })
   })
 
   it('requires explicit consent', async () => {

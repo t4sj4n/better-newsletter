@@ -109,7 +109,7 @@ The public result is deliberately neutral:
 { accepted: true }
 ```
 
-It does not reveal whether the address is unknown, pending, active, unsubscribed or suppressed.
+It does not reveal whether the address is unknown, pending, active, unsubscribed or suppressed. Confirmation delivery runs asynchronously; signup acceptance does not wait for mail delivery.
 
 Confirmation is capability-based:
 
@@ -200,7 +200,7 @@ await newsletter.importSubscription({
 })
 ```
 
-Import is a trusted service operation, not a public signup path. Importing `ACTIVE` requires an explicit `confirmedAt`; the library never invents confirmation evidence. Repeating the same import is idempotent, while conflicting historical facts are rejected.
+Import is a trusted service operation, not a public signup path. Importing `ACTIVE` requires an explicit `confirmedAt` and no `unsubscribedAt`; the library never invents confirmation evidence. Repeating the same import is idempotent, while conflicting historical facts are rejected.
 
 ## Lifecycle events
 

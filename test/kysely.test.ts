@@ -652,9 +652,11 @@ describe.skipIf(!databaseUrl)('PostgreSQL Kysely integration', () => {
     const first = kyselyRateLimiter(db, clock)
     const second = kyselyRateLimiter(db, clock)
     expect(key).toMatch(/^[a-f0-9]{64}$/u)
+    const base64urlKey = Buffer.from(key, 'hex').toString('base64url')
+    expect(base64urlKey).not.toMatch(/^[a-f0-9]{64}$/u)
     await expect(first.consume({
-      key: email, action: 'subscribe', limit: 5, windowMs: 60_000
-    })).rejects.toThrow('HMAC digest')
+      key: base64urlKey, action: 'subscribe', limit: 1, windowMs: 60_000
+    })).resolves.toEqual({ allowed: true })
     const attempts = await Promise.all(Array.from({ length: 20 }, (_, index) =>
       (index % 2 === 0 ? first : second).consume({
         key, action: 'subscribe', limit: 5, windowMs: 60_000
@@ -668,11 +670,13 @@ describe.skipIf(!databaseUrl)('PostgreSQL Kysely integration', () => {
     const rows = await pool.query<{ key_hash: string; attempt_count: number }>(
       'SELECT key_hash, attempt_count FROM newsletter_rate_limits ORDER BY action'
     )
-    expect(rows.rows.map(row => row.attempt_count).sort((a, b) => a - b)).toEqual([1, 20])
+    expect(rows.rows.map(row => row.attempt_count).sort((a, b) => a - b)).toEqual([1, 1, 20])
     expect(JSON.stringify(rows.rows)).not.toContain(email)
-    expect(rows.rows.every(row => row.key_hash === key)).toBe(true)
+    expect(rows.rows.map(row => row.key_hash).sort()).toEqual(
+      [key, key, base64urlKey].sort()
+    )
     advance(60_000)
-    await expect(first.cleanup()).resolves.toBe(2)
+    await expect(first.cleanup()).resolves.toBe(3)
     await expect(second.consume({
       key, action: 'subscribe', limit: 5, windowMs: 60_000
     })).resolves.toEqual({ allowed: true })
@@ -680,9 +684,14 @@ describe.skipIf(!databaseUrl)('PostgreSQL Kysely integration', () => {
 
   it('integrates SQL rate limits into signup before writing the contact', async () => {
     const { makeService, clock } = setup()
+    const hmacProvider = createHmacRateLimitKeyProvider({ secret })
     const service = makeService({
       rateLimiter: kyselyRateLimiter(db, clock),
-      rateLimitKeyProvider: createHmacRateLimitKeyProvider({ secret }),
+      rateLimitKeyProvider: {
+        async createKey(input) {
+          return Buffer.from(await hmacProvider.createKey(input), 'hex').toString('base64url')
+        }
+      },
       rateLimits: { subscribe: { limit: 1, windowMs: 60_000 } }
     })
     await service.subscribe({ email, consent: consent() })
@@ -691,6 +700,9 @@ describe.skipIf(!databaseUrl)('PostgreSQL Kysely integration', () => {
     expect((await pool.query<{ count: string }>(
       'SELECT count(*) FROM newsletter_contacts'
     )).rows[0]?.count).toBe('1')
+    expect((await pool.query<{ key_hash: string }>(
+      'SELECT key_hash FROM newsletter_rate_limits'
+    )).rows[0]?.key_hash).toMatch(/^[A-Za-z0-9_-]{43}$/u)
   })
 
   it('cleans old tokens and cascades erasure to subscriptions, tokens and events', async () => {

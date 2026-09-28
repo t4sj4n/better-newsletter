@@ -462,7 +462,7 @@ export interface KyselyRateLimiter {
   cleanup(input?: { readonly now?: Date }): Promise<number>
 }
 
-/** The key must be a HMAC/SHA-256 hex digest, never a raw e-mail or IP address. */
+/** Use a privacy-preserving key provider; the limiter never sees raw request context. */
 export function kyselyRateLimiter<DB>(
   db: Kysely<DB>,
   clock: { now(): Date } = { now: () => new Date() }
@@ -474,9 +474,6 @@ export function kyselyRateLimiter<DB>(
       readonly limit: number
       readonly windowMs: number
     }) {
-      if (!/^[a-f0-9]{64}$/u.test(input.key)) {
-        throw new Error('SQL rate-limit keys must be a 64-character HMAC digest.')
-      }
       if (
         !Number.isSafeInteger(input.windowMs) || input.windowMs <= 0
         || !Number.isSafeInteger(input.limit) || input.limit <= 0

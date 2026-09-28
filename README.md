@@ -2,7 +2,7 @@
 
 Framework-agnostic newsletter subscription and consent lifecycle infrastructure for TypeScript.
 
-> **Status:** early development. The core lifecycle and production security primitives are implemented; persistent PostgreSQL and delivery/framework adapters follow in issues #4–#6.
+> **Status:** early development. The core lifecycle, production security primitives, and PostgreSQL/Kysely persistence are implemented; delivery/framework adapters follow in issues #5–#6.
 
 ## Scope
 
@@ -106,7 +106,7 @@ const newsletter = createNewsletter({
 })
 ```
 
-The host supplies the lifecycle storage contract. Each storage transaction exposes a `confirmationTokens: ConfirmationTokenStore`, and the capabilities receive that store for every confirmation operation. Token replacement, consumption and revocation therefore commit or roll back together with lifecycle state and events. No unsubscribe nonce store is needed. Issue #4 will provide the PostgreSQL/Kysely implementation.
+The host supplies the lifecycle storage contract. Each storage transaction exposes a `confirmationTokens: ConfirmationTokenStore`, and the capabilities receive that store for every confirmation operation. Token replacement, consumption and revocation therefore commit or roll back together with lifecycle state and events. No unsubscribe nonce store is needed. The PostgreSQL/Kysely adapter provides durable storage for this contract.
 
 Security properties:
 
@@ -379,7 +379,50 @@ import {
 
 `memoryCapabilities()` uses the real hashing/HMAC implementation with an ephemeral signing key. Confirmation digests live in `memoryStorage()` and roll back with its transactions; `confirmationTokenSnapshot()` exposes the committed records for assertions. For distributed-style tests, combine separate `createSecureCapabilities()` instances with the same signing key and one shared `memoryStorage()`. The memory storage reports duplicate inserts as `StorageConflictError`. None of the memory stores are durable production persistence.
 
-Production storage must provide transaction semantics strong enough to serialize conflicting contact-wide and subscription transitions, including generation checks and delivery claims. The PostgreSQL/Kysely adapter in #4 will enforce database uniqueness and atomicity.
+Production storage must provide transaction semantics strong enough to serialize conflicting contact-wide and subscription transitions, including generation checks and delivery claims. The PostgreSQL/Kysely adapter enforces database uniqueness and atomicity.
+
+## PostgreSQL / Kysely
+
+The PostgreSQL adapter targets PostgreSQL 14 or newer, Kysely 0.28.x, `pg` 8.x, and Node.js 20.11 or newer. The package currently depends on Kysely `^0.28.17` and `pg` `^8.23.0`; Kysely 0.28 supports the package's Node.js baseline. Provide your own configured Kysely database instance and connection pool; the library does not own their lifecycle. From a checkout of this repository, apply the inspectable V1 migration **before** using the adapter:
+
+```bash
+psql "$DATABASE_URL" --single-transaction -v ON_ERROR_STOP=1 -f migrations/001_newsletter.sql
+```
+
+In deployments, review and run that SQL inside your host migration runner's transaction instead. The migration contains no `BEGIN` or `COMMIT`, so it does not prematurely commit an enclosing transaction. Importing `better-newsletter/kysely` does not create or alter tables. Apply future schema changes as new forward migrations; V1 does not promise a destructive rollback.
+
+```ts
+import { createNewsletter } from 'better-newsletter'
+import { createHmacRateLimitKeyProvider } from 'better-newsletter/security'
+import {
+  kyselyRateLimiter,
+  kyselyStorage,
+  listEligibleSubscriptions
+} from 'better-newsletter/kysely'
+
+// db is the host application's configured Kysely instance for PostgreSQL.
+const newsletter = createNewsletter({
+  storage: kyselyStorage(db),
+  mailer,
+  capabilities,
+  rateLimiter: kyselyRateLimiter(db),
+  rateLimitKeyProvider: createHmacRateLimitKeyProvider({
+    secret: process.env.NEWSLETTER_RATE_LIMIT_SECRET!
+  })
+})
+
+const recipients = await listEligibleSubscriptions(db, 'default')
+```
+
+`listEligibleSubscriptions()` is a read-only recipient-selection helper for one audience. It selects only enabled Contacts with active, confirmed, not-unsubscribed Subscriptions. Re-check eligibility when sending if recipient state may have changed since selection; no campaign sending or scheduler is provided. Hosts that need another database or storage design can implement `NewsletterStorage` and `RateLimiter` directly.
+
+The migration defines `newsletter_contacts`, `newsletter_subscriptions`, `newsletter_tokens`, `newsletter_events`, and `newsletter_rate_limits`. Contact, Subscription, and event IDs are application-generated `text` values: the core generates UUIDs by default, but injected generators may produce other unique strings. `email` must already be trimmed and lowercase and is globally unique; `(contact_id, audience_key)` is unique. Each Contact can link at most one external subject per newsletter instance through opaque `subject_namespace` and `subject_id` strings without a foreign key into the host application; the core controls replacement of an existing subject. Contact metadata and event metadata are JSON objects in `jsonb`; event types use the `event_type` text column. Subscription consent evidence is stored in `consent_version`, `consent_source`, `consent_locale`, and `consented_at`. Delivery work is stored in `confirmation_delivery_id`, `confirmation_attempt_id`, and `confirmation_lease_expires_at`. Both generation columns are positive `bigint` values and must remain within JavaScript's safe-integer range when mapped to the core.
+
+Only confirmation-token digests, never raw confirmation tokens, belong in `newsletter_tokens`. Its identity `id` orders equal-timestamp records deterministically for bounded retention within `(subscription_id, lifecycle_generation)`; `sequence` gives events append order even when timestamps match. Store `capabilityGeneration` and `lifecycleGeneration` persistently; do not reset generations or reuse IDs. All state transitions, token mutations, and event appends must share one atomic transaction. Serialize conflicting transitions with `SERIALIZABLE` isolation or row locks, taking contact locks before subscription locks and token locks. Retry unique violations, serialization failures, and deadlocks through the storage conflict contract rather than continuing a failed transaction.
+
+`newsletter_rate_limits` is an optional SQL fixed-window counter keyed by `(key_hash, action, window_ms, bucket_start_ms)`, with `attempt_count` and `expires_at`; including the window length prevents different configured policies from sharing a bucket. `kyselyRateLimiter(db)` performs atomic consumption across service instances and requires 64-character lowercase hex HMAC/SHA-256 keys, rejecting raw e-mail or IP keys. Rate-limit counters and expired token rows need explicit scheduled cleanup; neither import nor the core starts a scheduler. Keep HMAC signing and rate-limit secrets stable across process restarts and protect them outside the database. Rotating a signing secret invalidates outstanding unsubscribe links; rotating the rate-limit secret resets effective buckets.
+
+Deleting a Contact cascades to its Subscriptions, token records, and lifecycle events, so intentional erasure removes historical evidence too. Events are otherwise append-only; the schema does not use an immutable-event trigger that would block erasure. Plan operational retention, exports, and erasure with that behavior in mind.
 
 ## Development
 
@@ -398,6 +441,11 @@ pnpm typecheck
 pnpm test
 pnpm build
 ```
+
+Set `DATABASE_URL` to a disposable PostgreSQL database to run the integration
+tests (the test user needs `CREATE SCHEMA`). The tests create and remove their
+own isolated schema; without `DATABASE_URL`, they are skipped. CI provisions a
+temporary PostgreSQL service and runs them on every check.
 
 ## Design references
 
@@ -422,7 +470,7 @@ listmonk is AGPLv3. This MIT project does **not** copy or port listmonk implemen
 Issue #2 implements the framework-neutral lifecycle and consent model. The following remain separate:
 
 - #3: cryptographic token/capability security, abuse protection and cleanup (implemented here);
-- #4: Kysely/PostgreSQL persistence;
+- #4: Kysely/PostgreSQL persistence (implemented here);
 - #5: Resend delivery adapter;
 - #6: Nuxt/Nitro integration;
 - #7: provider bounce/complaint feedback;

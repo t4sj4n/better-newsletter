@@ -14,6 +14,7 @@
   "packageManager": "pnpm@10.17.1",
   "files": [
     "dist",
+    "migrations",
     "README.md",
     "LICENSE"
   ],
@@ -26,6 +27,10 @@
     "./memory": {
       "types": "./dist/memory.d.ts",
       "import": "./dist/memory.js"
+    },
+    "./kysely": {
+      "types": "./dist/kysely.d.ts",
+      "import": "./dist/kysely.js"
     },
     "./package.json": "./package.json",
     "./security": {
@@ -42,10 +47,15 @@
   },
   "devDependencies": {
     "@eslint/js": "^9.35.0",
+    "@types/pg": "^8.23.1",
     "eslint": "^9.35.0",
     "typescript": "^5.9.2",
     "typescript-eslint": "^8.42.0",
     "vitest": "^3.2.4"
   },
-  "types": "./dist/index.d.ts"
+  "types": "./dist/index.d.ts",
+  "dependencies": {
+    "kysely": "^0.28.17",
+    "pg": "^8.23.0"
+  }
 }

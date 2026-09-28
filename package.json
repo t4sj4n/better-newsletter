@@ -1,0 +1,43 @@
+{
+  "name": "better-newsletter",
+  "version": "0.0.0",
+  "description": "Framework-agnostic newsletter subscription and consent lifecycle infrastructure for TypeScript.",
+  "type": "module",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/t4sj4n/better-newsletter.git"
+  },
+  "engines": {
+    "node": ">=20.11"
+  },
+  "packageManager": "pnpm@10.17.1",
+  "files": [
+    "dist",
+    "README.md",
+    "LICENSE"
+  ],
+  "sideEffects": false,
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js"
+    },
+    "./package.json": "./package.json"
+  },
+  "scripts": {
+    "build": "tsc -p tsconfig.build.json",
+    "typecheck": "tsc -p tsconfig.json",
+    "lint": "eslint . --max-warnings=0",
+    "test": "vitest run",
+    "check": "pnpm lint && pnpm typecheck && pnpm test && pnpm build"
+  },
+  "devDependencies": {
+    "@eslint/js": "^9.35.0",
+    "eslint": "^9.35.0",
+    "typescript": "^5.9.2",
+    "typescript-eslint": "^8.42.0",
+    "vitest": "^3.2.4"
+  },
+  "types": "./dist/index.d.ts"
+}

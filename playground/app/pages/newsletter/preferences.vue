@@ -22,7 +22,7 @@ async function viewPreferences() {
     subscriptions.value = result.subscriptions
     message.value = result.subscriptions == null
       ? 'This preferences link is invalid or outdated.'
-      : 'Current audience subscriptions:'
+      : 'Current audience subscriptions are shown below. You can close this tab when finished and return to the demo.'
   } catch {
     message.value = 'Unable to load preferences. Please try again later.'
   } finally {
@@ -43,7 +43,7 @@ async function viewPreferences() {
         {{ subscription.audience }}: {{ subscription.status }}
       </li>
     </ul>
-    <NuxtLink to="/">Back to demo</NuxtLink>
+    <NuxtLink to="/">Open demo in this tab</NuxtLink>
   </main>
 </template>
 

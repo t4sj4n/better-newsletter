@@ -18,7 +18,9 @@ async function unsubscribe() {
     )
     completed.value = true
     message.value = result.unsubscribed
-      ? all.value ? 'Unsubscribed from all audiences.' : 'Unsubscribed from this audience.'
+      ? all.value
+        ? 'Unsubscribed from all audiences. You can close this tab and return to the demo.'
+        : 'Unsubscribed from this audience. You can close this tab and return to the demo.'
       : 'This link is invalid or outdated.'
   } catch {
     message.value = 'Unsubscribe failed. Please try again later.'
@@ -37,7 +39,7 @@ async function unsubscribe() {
       {{ all ? 'Unsubscribe from all' : 'Unsubscribe from this audience' }}
     </button>
     <p role="status">{{ message }}</p>
-    <NuxtLink to="/">Back to demo</NuxtLink>
+    <NuxtLink to="/">Open demo in this tab</NuxtLink>
   </main>
 </template>
 

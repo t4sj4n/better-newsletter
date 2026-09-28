@@ -17,7 +17,7 @@ async function confirm() {
     })
     completed.value = true
     message.value = result.confirmed
-      ? 'Subscription confirmed.'
+      ? 'Subscription confirmed. You can close this tab and return to the demo.'
       : 'This link is invalid, already used, or expired. Request a new confirmation.'
   } catch {
     message.value = 'Confirmation failed. Please try again later.'
@@ -34,7 +34,7 @@ async function confirm() {
     <p v-if="!token">The confirmation link is missing a token.</p>
     <button v-else-if="!completed" :disabled="busy" @click="confirm">Confirm subscription</button>
     <p role="status">{{ message }}</p>
-    <NuxtLink to="/">Back to demo</NuxtLink>
+    <NuxtLink to="/">Open demo in this tab</NuxtLink>
   </main>
 </template>
 

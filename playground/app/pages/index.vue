@@ -205,20 +205,20 @@ async function setSuppression(suppressed: boolean) {
         <ul>
           <li v-for="link in inbox.confirmationLinks" :key="link.audience">
             {{ link.audience }} (expires {{ link.expiresAt }}):
-            <a :href="link.url">Open confirmation landing page</a>
+            <a :href="link.url" target="_blank" rel="noopener noreferrer">Open confirmation landing page</a>
           </li>
         </ul>
         <h3>Unsubscribe capabilities</h3>
         <ul>
           <li v-for="link in inbox.unsubscribeLinks" :key="link.audience">
-            <a :href="link.url">Open {{ link.audience }} unsubscribe landing page</a>
+            <a :href="link.url" target="_blank" rel="noopener noreferrer">Open {{ link.audience }} unsubscribe landing page</a>
           </li>
         </ul>
         <p v-if="inbox.unsubscribeAllUrl">
-          <a :href="inbox.unsubscribeAllUrl">Open unsubscribe-all landing page</a>
+          <a :href="inbox.unsubscribeAllUrl" target="_blank" rel="noopener noreferrer">Open unsubscribe-all landing page</a>
         </p>
         <p v-if="inbox.preferencesUrl">
-          <a :href="inbox.preferencesUrl">Open capability-authorized preferences landing page</a>
+          <a :href="inbox.preferencesUrl" target="_blank" rel="noopener noreferrer">Open capability-authorized preferences landing page</a>
         </p>
       </template>
     </section>

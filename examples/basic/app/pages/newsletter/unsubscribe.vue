@@ -21,7 +21,7 @@ async function unsubscribe() {
     })
     completed.value = true
     message.value = result.unsubscribed
-      ? 'Unsubscribed. Return to the inbox to see its status.'
+      ? 'Unsubscribed. You can close this tab and return to the inbox.'
       : 'This link is invalid or outdated.'
   } catch {
     message.value = 'Unsubscribe failed. Please try again later.'
@@ -38,7 +38,7 @@ async function unsubscribe() {
     <p v-if="!capability">The unsubscribe link is missing a capability.</p>
     <button v-else-if="!completed" :disabled="busy" @click="unsubscribe">Unsubscribe</button>
     <p role="status">{{ message }}</p>
-    <NuxtLink to="/">Back to inbox</NuxtLink>
+    <NuxtLink to="/">Open inbox in this tab</NuxtLink>
   </main>
 </template>
 

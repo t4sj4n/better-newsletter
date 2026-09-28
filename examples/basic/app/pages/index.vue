@@ -71,10 +71,10 @@ async function subscribe() {
         <template v-if="inbox.mail">
           <h3>{{ inbox.mail.subject }}</h3>
           <pre>{{ inbox.mail.text }}</pre>
-          <a :href="inbox.mail.confirmationUrl">Open confirmation page</a>
+          <a :href="inbox.mail.confirmationUrl" target="_blank" rel="noopener noreferrer">Open confirmation page</a>
         </template>
         <p v-if="inbox.unsubscribeUrl">
-          <a :href="inbox.unsubscribeUrl">Open unsubscribe page</a>
+          <a :href="inbox.unsubscribeUrl" target="_blank" rel="noopener noreferrer">Open unsubscribe page</a>
         </p>
       </template>
     </section>

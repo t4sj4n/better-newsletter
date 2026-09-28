@@ -81,7 +81,7 @@ async function resend() {
       body: { email: email.value, audience: retryAudience.value }
     })
     await refreshInbox()
-    message.value = `Resend requested for ${retryAudience.value}. The accepted-delivery count and timestamp below update when a new fake mail is delivered.`
+    message.value = `Confirmation email requested again for ${retryAudience.value}. The accepted-delivery count and timestamp below update when a new fake mail is delivered.`
   } catch (error) {
     message.value = errorMessage(error)
   } finally {
@@ -172,19 +172,19 @@ async function setSuppression(suppressed: boolean) {
     </section>
 
     <section>
-      <h2>Resend and delivery retry</h2>
+      <h2>Send confirmation again and delivery retry</h2>
       <label>Audience
         <select v-model="retryAudience">
           <option v-for="audience in audiences" :key="audience" :value="audience">{{ audience }}</option>
         </select>
       </label>
-      <button :disabled="busy || !email || !canRetryDelivery" @click="resend">Resend confirmation</button>
+      <button :disabled="busy || !email || !canRetryDelivery" @click="resend">Send confirmation email again</button>
       <p>
         Selected audience status:
         <strong>{{ retrySubscription?.status ?? 'not subscribed' }}</strong>.
-        Resend is only applicable while the subscription is pending confirmation.
+        Sending again is only applicable while the subscription is pending confirmation.
       </p>
-      <p>For a retry test: arm a failure, subscribe or resend, then resend again. An ambiguous result holds its lease until the demo clock advances 11 seconds.</p>
+      <p>For a retry test: arm a failure, subscribe or send the confirmation email again, then send it again after the failure. An ambiguous result holds its lease until the demo clock advances 11 seconds.</p>
       <label>Next mail attempt
         <select v-model="failure">
           <option value="TEMPORARY">Temporary failure (retry immediately)</option>

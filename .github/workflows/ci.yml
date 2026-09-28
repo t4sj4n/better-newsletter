@@ -55,5 +55,10 @@ jobs:
       - name: Build minimal Nuxt consumer
         run: pnpm exec nuxt build test/fixtures/nuxt --logLevel=silent
 
+      - name: Verify playground consumer
+        run: |
+          pnpm --dir playground typecheck
+          pnpm --dir playground build
+
       - name: Smoke test packed package in clean consumers
         run: node scripts/smoke-pack.mjs

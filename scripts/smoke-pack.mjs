@@ -1,14 +1,14 @@
 import { execFileSync } from 'node:child_process'
 import console from 'node:console'
-import { randomUUID } from 'node:crypto'
-import { existsSync, mkdirSync, readFileSync, readdirSync, rmSync, writeFileSync } from 'node:fs'
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from 'node:fs'
+import { tmpdir } from 'node:os'
 import { dirname, join } from 'node:path'
 import process from 'node:process'
 import { fileURLToPath } from 'node:url'
 
 const root = dirname(dirname(fileURLToPath(import.meta.url)))
 const manifest = JSON.parse(readFileSync(join(root, 'package.json'), 'utf8'))
-const scratch = join(root, `.pack-smoke-${process.pid}-${randomUUID()}`)
+const scratch = mkdtempSync(join(tmpdir(), 'better-newsletter-pack-smoke-'))
 
 function run(command, args, cwd = root, env = process.env) {
   console.log(`\n$ ${command} ${args.join(' ')}`)
@@ -73,6 +73,7 @@ function checkConsumer(name, tarball, peers, types, runtime) {
     name: `packed-${name}-consumer`,
     private: true,
     type: 'module',
+    packageManager: manifest.packageManager,
     dependencies: {
       [manifest.name]: `file:${tarball}`,
       typescript: manifest.devDependencies.typescript,
@@ -108,7 +109,6 @@ function checkConsumer(name, tarball, peers, types, runtime) {
     consumer, { ...process.env, SMOKE_CONSUMER_ROOT: consumer })
 }
 
-mkdirSync(scratch)
 for (const signal of ['SIGINT', 'SIGTERM']) {
   process.once(signal, () => {
     rmSync(scratch, { recursive: true, force: true })

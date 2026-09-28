@@ -585,9 +585,10 @@ For production, replace memory adapters with `kyselyStorage(db)` and `kyselyRate
 ```bash
 pnpm install --frozen-lockfile
 pnpm build
-pnpm --dir playground install
 pnpm --dir playground dev
 ```
+
+The root pnpm install also installs the playground through the minimal workspace configuration; its `link:..` dependency still resolves the public package exports. After building the library, run `pnpm --dir playground typecheck` and `pnpm --dir playground build` to validate the full application locally.
 
 For an artifact-level smoke test instead of the playground's `link:..` dependency, pack the **root** package with `pnpm pack --pack-destination playground` (the `prepack` hook builds it); install the resulting `.tgz` in the playground with `pnpm --dir playground add ./better-newsletter-<version>.tgz`, then run its build. This checks the published `dist` exports, not merely the source checkout. Restore `link:..` and remove the local test tarball afterward.
 

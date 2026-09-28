@@ -9,9 +9,10 @@ Use Node.js 20.11+ and pnpm. From the repository root:
 ```bash
 pnpm install --frozen-lockfile
 pnpm build
-pnpm --dir playground install
 pnpm --dir playground dev
 ```
+
+The root install includes this playground through `pnpm-workspace.yaml`. It still links the library as a package and imports only its public exports. To validate the entire Nuxt app, run `pnpm --dir playground typecheck` and `pnpm --dir playground build` after the library build.
 
 Visit `http://localhost:3000`. If you run on a different origin, set `DEMO_APP_ORIGIN` to that fixed URL **before** starting Nuxt (for example, `DEMO_APP_ORIGIN=http://localhost:3001 pnpm --dir playground dev --port 3001`). The application supplies this trusted origin; no incoming Host header is used to build links.
 

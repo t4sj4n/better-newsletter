@@ -4,6 +4,8 @@ export interface DemoMessage {
   audience: string
   token: string
   expiresAt: string
+  lastDeliveredAt: string
+  acceptedDeliveries: number
 }
 
 type Failure = 'TEMPORARY' | 'AMBIGUOUS'
@@ -61,10 +63,13 @@ export const demoMailer = {
       byAudience = new Map()
       messages.set(email, byAudience)
     }
+    const previous = byAudience.get(input.audienceKey)
     byAudience.set(input.audienceKey, {
       audience: input.audienceKey,
       token: input.token,
-      expiresAt: input.expiresAt.toISOString()
+      expiresAt: input.expiresAt.toISOString(),
+      lastDeliveredAt: demoClock.now().toISOString(),
+      acceptedDeliveries: (previous?.acceptedDeliveries ?? 0) + 1
     })
     return { accepted: true }
   }

@@ -3,7 +3,13 @@ type Inbox = {
   contactStatus: string | null
   subject: { namespace: string, id: string } | null
   subscriptions: { audience: string, status: string }[]
-  confirmationLinks: { audience: string, expiresAt: string, url: string }[]
+  confirmationLinks: {
+    audience: string
+    expiresAt: string
+    lastDeliveredAt: string
+    acceptedDeliveries: number
+    url: string
+  }[]
   unsubscribeLinks: { audience: string, url: string }[]
   unsubscribeAllUrl: string | null
   preferencesUrl: string | null
@@ -19,6 +25,12 @@ const inbox = ref<Inbox | null>(null)
 const message = ref('')
 const busy = ref(false)
 const audiences = ['default', 'product-news', 'weekly-analysis']
+const retrySubscription = computed(() =>
+  inbox.value?.subscriptions.find(subscription => subscription.audience === retryAudience.value) ?? null
+)
+const canRetryDelivery = computed(() =>
+  retrySubscription.value?.status === 'PENDING_CONFIRMATION'
+)
 
 function errorMessage(error: unknown): string {
   return error instanceof Error ? error.message : 'Request failed.'
@@ -68,8 +80,8 @@ async function resend() {
       method: 'POST',
       body: { email: email.value, audience: retryAudience.value }
     })
-    message.value = 'Request accepted. Refresh the development inbox after delivery.'
     await refreshInbox()
+    message.value = `Resend requested for ${retryAudience.value}. The accepted-delivery count and timestamp below update when a new fake mail is delivered.`
   } catch (error) {
     message.value = errorMessage(error)
   } finally {
@@ -166,7 +178,12 @@ async function setSuppression(suppressed: boolean) {
           <option v-for="audience in audiences" :key="audience" :value="audience">{{ audience }}</option>
         </select>
       </label>
-      <button :disabled="busy || !email" @click="resend">Resend confirmation</button>
+      <button :disabled="busy || !email || !canRetryDelivery" @click="resend">Resend confirmation</button>
+      <p>
+        Selected audience status:
+        <strong>{{ retrySubscription?.status ?? 'not subscribed' }}</strong>.
+        Resend is only applicable while the subscription is pending confirmation.
+      </p>
       <p>For a retry test: arm a failure, subscribe or resend, then resend again. An ambiguous result holds its lease until the demo clock advances 11 seconds.</p>
       <label>Next mail attempt
         <select v-model="failure">
@@ -174,7 +191,7 @@ async function setSuppression(suppressed: boolean) {
           <option value="AMBIGUOUS">Interrupted/ambiguous delivery (wait for lease)</option>
         </select>
       </label>
-      <button :disabled="busy || !email" @click="failNext">Fail next delivery</button>
+      <button :disabled="busy || !email || !canRetryDelivery" @click="failNext">Fail next delivery</button>
       <button :disabled="busy" @click="advanceClock(11_000)">Advance clock 11 seconds</button>
       <p>To test expiry, open a confirmation link <em>after</em> advancing the demo clock six minutes.</p>
       <button :disabled="busy" @click="advanceClock(6 * 60_000)">Advance clock six minutes</button>
@@ -204,22 +221,24 @@ async function setSuppression(suppressed: boolean) {
         <h3>Latest accepted confirmation mail per audience</h3>
         <ul>
           <li v-for="link in inbox.confirmationLinks" :key="link.audience">
-            {{ link.audience }} (expires {{ link.expiresAt }}):
+            {{ link.audience }} · accepted deliveries: {{ link.acceptedDeliveries }}
+            · last delivered: {{ link.lastDeliveredAt }}
+            · expires: {{ link.expiresAt }} ·
             <a :href="link.url" target="_blank" rel="noopener noreferrer">Open confirmation landing page</a>
           </li>
         </ul>
-        <h3>Unsubscribe capabilities</h3>
+        <h3>Capability links</h3>
         <ul>
           <li v-for="link in inbox.unsubscribeLinks" :key="link.audience">
             <a :href="link.url" target="_blank" rel="noopener noreferrer">Open {{ link.audience }} unsubscribe landing page</a>
           </li>
+          <li v-if="inbox.unsubscribeAllUrl">
+            <a :href="inbox.unsubscribeAllUrl" target="_blank" rel="noopener noreferrer">Open unsubscribe-all landing page</a>
+          </li>
+          <li v-if="inbox.preferencesUrl">
+            <a :href="inbox.preferencesUrl" target="_blank" rel="noopener noreferrer">Open capability-authorized preferences landing page</a>
+          </li>
         </ul>
-        <p v-if="inbox.unsubscribeAllUrl">
-          <a :href="inbox.unsubscribeAllUrl" target="_blank" rel="noopener noreferrer">Open unsubscribe-all landing page</a>
-        </p>
-        <p v-if="inbox.preferencesUrl">
-          <a :href="inbox.preferencesUrl" target="_blank" rel="noopener noreferrer">Open capability-authorized preferences landing page</a>
-        </p>
       </template>
     </section>
   </main>

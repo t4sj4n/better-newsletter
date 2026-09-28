@@ -16,10 +16,22 @@ export default defineEventHandler(async (event) => {
     ? []
     : await newsletter.listSubscriptions({ email })
   const origin = getDemoOrigin()
-  const confirmationLinks = getDemoMessages(email).map(({ audience, token, expiresAt }) => {
+  const confirmationLinks = getDemoMessages(email).map(({
+    audience,
+    token,
+    expiresAt,
+    lastDeliveredAt,
+    acceptedDeliveries
+  }) => {
     const url = new URL('/newsletter/confirm', origin)
     url.searchParams.set('token', token)
-    return { audience, expiresAt, url: url.toString() }
+    return {
+      audience,
+      expiresAt,
+      lastDeliveredAt,
+      acceptedDeliveries,
+      url: url.toString()
+    }
   })
 
   const unsubscribeLinks = await Promise.all(subscriptions.map(async subscription => {

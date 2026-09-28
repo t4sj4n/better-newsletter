@@ -59,7 +59,7 @@ function checkArchive(tarball) {
     }
   }
   for (const file of files) {
-    if (/^package\/(?:playground|test|scripts)(?:\/|$)/u.test(file)) {
+    if (/^package\/(?:playground|examples|test|scripts)(?:\/|$)/u.test(file)) {
       throw new Error(`Development-only file shipped in packed package: ${file}`)
     }
   }

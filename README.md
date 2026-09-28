@@ -578,17 +578,23 @@ The handler passes this transient context to the core `abuseGuard` and `rateLimi
 
 For production, replace memory adapters with `kyselyStorage(db)` and `kyselyRateLimiter(db)` from `better-newsletter/kysely` (apply `migrations/001_newsletter.sql` first), `createSecureCapabilities({ hmacSecret })`, `createHmacRateLimitKeyProvider({ secret })`, and `resendMailer({ apiKey, from, renderConfirmation })` from `better-newsletter/resend`. Configure a verified sender, durable PostgreSQL connection, stable server-side signing/rate-limit secrets, a trusted origin for URLs, and runtime-safe background delivery (`waitUntil`, an awaited fallback or a durable worker). See the adapter sections above for integration details; the example deliberately uses none of these external services.
 
-### Local example and package smoke test
+### Consumer example and maintainer playground
 
-[`playground/`](playground/README.md) is a runnable Nuxt 4 consumer of the public package API with three audiences, a local development inbox, safe GET landing pages, explicit POST lifecycle actions and preferences read, and simulated failure/expiry. It is part of the GitHub repository, not the published package. From this repository checkout, build the package before starting the demo:
+To learn the essential Nuxt integration, start with [`examples/basic/`](examples/basic/README.md) in the [consumer examples](examples/README.md): a small, copyable signup, confirmation and unsubscribe flow. Contributors testing lifecycle edge cases should use [`playground/`](playground/README.md), the full maintainer development app with three audiences, a fake inbox, preferences, suppression and delivery-failure/expiry controls. Both import only public package APIs and remain outside the npm artifact. From this repository checkout:
 
 ```bash
 pnpm install --frozen-lockfile
 pnpm build
+pnpm --dir examples/basic dev
+```
+
+To run the maintainer playground instead:
+
+```bash
 pnpm --dir playground dev
 ```
 
-The root pnpm install also installs the playground through the minimal workspace configuration; its `link:..` dependency still resolves the public package exports. After building the library, run `pnpm --dir playground typecheck` and `pnpm --dir playground build` to validate the full application locally.
+The root pnpm install also installs both consumers through the minimal workspace configuration. Their temporary `link:` dependencies resolve the local package through its public exports. After building the library, run `pnpm --dir examples/basic typecheck` and `pnpm --dir examples/basic build` to validate the small example, or `pnpm --dir playground typecheck` and `pnpm --dir playground build` to validate the full app. The npm prerelease and active StackBlitz demo for `examples/basic/` are tracked separately in #16; no active link is provided before publication.
 
 For an artifact-level smoke test instead of the playground's `link:..` dependency, pack the **root** package with `pnpm pack --pack-destination playground` (the `prepack` hook builds it); install the resulting `.tgz` in the playground with `pnpm --dir playground add ./better-newsletter-<version>.tgz`, then run its build. This checks the published `dist` exports, not merely the source checkout. Restore `link:..` and remove the local test tarball afterward.
 
@@ -601,8 +607,9 @@ Repository layout:
 | Path | Role |
 | --- | --- |
 | `src/` | Library and Nuxt module implementation. |
-| `playground/` | First-party development/demo Nuxt consumer using public package imports; excluded from the npm artifact. |
-| `test/` | Automated tests and external-consumer fixtures. |
+| `playground/` | Full maintainer development/debugging Nuxt app, excluded from the npm artifact. |
+| `examples/basic/` | Minimal, copyable consumer integration example, excluded from the npm artifact. |
+| `test/` | Automated tests; `test/fixtures/` contains automated consumers, not documentation examples. |
 | `migrations/` | SQL migrations shipped with the package. |
 | `dist/` | Generated package output, not committed to Git. |
 

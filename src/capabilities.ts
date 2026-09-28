@@ -37,6 +37,11 @@ export interface NewsletterCapabilities {
     readonly maxActiveTokens: number
   }): Promise<ConfirmationReplacementResult | void>
 
+  resolveConfirmation?(
+    token: string,
+    now: Date
+  ): Promise<ConfirmationCapabilityTarget | null>
+
   consumeConfirmation(
     token: string,
     now: Date

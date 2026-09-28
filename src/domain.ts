@@ -20,6 +20,8 @@ export const NEWSLETTER_EVENT_TYPES = {
   CONFIRMATION_REQUESTED: 'CONFIRMATION_REQUESTED',
   CONFIRMATION_SENT: 'CONFIRMATION_SENT',
   CONFIRMATION_SEND_FAILED: 'CONFIRMATION_SEND_FAILED',
+  /** A provider result from an attempt that no longer owns the delivery work. */
+  CONFIRMATION_STALE_RESULT: 'CONFIRMATION_STALE_RESULT',
   CONFIRMATION_REPLACED: 'CONFIRMATION_REPLACED',
   CONFIRMATION_EXPIRED: 'CONFIRMATION_EXPIRED',
   CONFIRMED: 'CONFIRMED',
@@ -46,6 +48,7 @@ export interface ExternalSubject {
 
 export interface Contact {
   readonly id: string
+  readonly capabilityGeneration: number
   readonly email: string
   readonly status: ContactStatus
   readonly subject: ExternalSubject | null
@@ -65,15 +68,23 @@ export interface ConsentEvidence {
 
 export interface Subscription {
   readonly id: string
+  readonly lifecycleGeneration: number
   readonly contactId: string
   readonly audienceKey: string
   readonly status: SubscriptionStatus
   readonly consent: ConsentEvidence
+  readonly confirmationDelivery: ConfirmationDelivery | null
   readonly confirmationSentAt?: Date | null
   readonly confirmedAt?: Date | null
   readonly unsubscribedAt?: Date | null
   readonly createdAt: Date
   readonly updatedAt: Date
+}
+
+export interface ConfirmationDelivery {
+  readonly id: string
+  readonly attemptId: string | null
+  readonly leaseExpiresAt: Date | null
 }
 
 export interface NewsletterEvent {

@@ -8,6 +8,7 @@ import {
   CONTACT_STATUSES,
   NEWSLETTER_EVENT_TYPES,
   SUBSCRIPTION_STATUSES,
+  type ConfirmationDelivery,
   type ConsentEvidence,
   type Contact,
   type ExternalSubject,
@@ -18,8 +19,13 @@ import {
 import { getDeliveryEligibility } from './eligibility.js'
 import {
   NEWSLETTER_ERROR_CODES,
-  NewsletterError
+  NewsletterError,
+  StorageConflictError
 } from './errors.js'
+import {
+  MAIL_DELIVERY_FAILURES,
+  type MailDeliveryResult
+} from './mailer.js'
 import {
   assertAudienceKey,
   DEFAULT_AUDIENCE_KEY,
@@ -30,9 +36,27 @@ import type {
   ImportSubscriptionInput,
   SubscriptionLookup
 } from './operations.js'
+import {
+  CONFIRMATION_REPLACEMENT_STRATEGIES,
+  secureTokenGenerator,
+  type PublicAbuseAction,
+  type RateLimitPolicy
+} from './security.js'
 import type { NewsletterStorageTransaction } from './storage.js'
 
 export const DEFAULT_CONFIRMATION_EXPIRES_IN_MS = 24 * 60 * 60 * 1000
+export const DEFAULT_CONFIRMATION_CLEANUP_RETENTION_MS = 7 * 24 * 60 * 60 * 1000
+export const DEFAULT_CONFIRMATION_DELIVERY_LEASE_MS = 5 * 60 * 1000
+export const DEFAULT_MAX_ACTIVE_CONFIRMATION_TOKENS = 2
+export const DEFAULT_TRANSACTION_MAX_ATTEMPTS = 3
+export const DEFAULT_SUBSCRIBE_RATE_LIMIT = Object.freeze({
+  limit: 5,
+  windowMs: 60 * 60 * 1000
+})
+export const DEFAULT_RESEND_RATE_LIMIT = Object.freeze({
+  limit: 3,
+  windowMs: 10 * 60 * 1000
+})
 
 export const systemClock: Clock = {
   now: () => new Date()
@@ -98,12 +122,30 @@ function dateEquals(left: Date | null | undefined, right: Date | null | undefine
   return left.getTime() === right.getTime()
 }
 
-/** Compares consent version, source, locale, and the recorded consent timestamp. */
+/**
+ * Compares consent version, source, locale, and the recorded consent timestamp.
+ * Missing source/locale values match whether stored as null or undefined.
+ */
 function consentEquals(left: ConsentEvidence, right: ConsentEvidence): boolean {
   return left.version === right.version
-    && left.source === right.source
-    && left.locale === right.locale
+    && (left.source ?? null) === (right.source ?? null)
+    && (left.locale ?? null) === (right.locale ?? null)
     && left.consentedAt.getTime() === right.consentedAt.getTime()
+}
+
+function isStorageConflict(error: unknown): boolean {
+  return error instanceof StorageConflictError
+    || (error instanceof Error && error.name === 'StorageConflictError')
+}
+
+function nextGeneration(generation: number): number {
+  if (!Number.isSafeInteger(generation) || generation < 1 || generation === Number.MAX_SAFE_INTEGER) {
+    throw new NewsletterError(
+      NEWSLETTER_ERROR_CODES.INVALID_CONFIGURATION,
+      'Cannot increment an invalid or exhausted capability generation.'
+    )
+  }
+  return generation + 1
 }
 
 /**
@@ -169,6 +211,20 @@ export function createNewsletter(config: NewsletterConfig): NewsletterCore {
   const expiresInMs =
     config.confirmation?.expiresInMs
     ?? DEFAULT_CONFIRMATION_EXPIRES_IN_MS
+  const replacementStrategy =
+    config.confirmation?.replacementStrategy
+    ?? CONFIRMATION_REPLACEMENT_STRATEGIES.RETAIN_PREVIOUS_UNTIL_EXPIRY
+  const maxActiveTokens =
+    config.confirmation?.maxActiveTokens
+    ?? DEFAULT_MAX_ACTIVE_CONFIRMATION_TOKENS
+  const cleanupRetentionMs =
+    config.confirmation?.cleanupRetentionMs
+    ?? DEFAULT_CONFIRMATION_CLEANUP_RETENTION_MS
+  const deliveryLeaseMs =
+    config.confirmation?.deliveryLeaseMs
+    ?? DEFAULT_CONFIRMATION_DELIVERY_LEASE_MS
+  const transactionMaxAttempts =
+    config.transactionMaxAttempts ?? DEFAULT_TRANSACTION_MAX_ATTEMPTS
 
   if (!Number.isSafeInteger(expiresInMs) || expiresInMs <= 0) {
     throw new NewsletterError(
@@ -176,9 +232,156 @@ export function createNewsletter(config: NewsletterConfig): NewsletterCore {
       'confirmation.expiresInMs must be a positive safe integer.'
     )
   }
+  if (!Number.isSafeInteger(maxActiveTokens) || maxActiveTokens <= 0) {
+    throw new NewsletterError(
+      NEWSLETTER_ERROR_CODES.INVALID_CONFIGURATION,
+      'confirmation.maxActiveTokens must be a positive safe integer.'
+    )
+  }
+  if (!Number.isSafeInteger(cleanupRetentionMs) || cleanupRetentionMs < 0) {
+    throw new NewsletterError(
+      NEWSLETTER_ERROR_CODES.INVALID_CONFIGURATION,
+      'confirmation.cleanupRetentionMs must be a non-negative safe integer.'
+    )
+  }
+  if (!Number.isSafeInteger(deliveryLeaseMs) || deliveryLeaseMs <= 0) {
+    throw new NewsletterError(
+      NEWSLETTER_ERROR_CODES.INVALID_CONFIGURATION,
+      'confirmation.deliveryLeaseMs must be a positive safe integer.'
+    )
+  }
+  if (!Number.isSafeInteger(transactionMaxAttempts) || transactionMaxAttempts <= 0) {
+    throw new NewsletterError(
+      NEWSLETTER_ERROR_CODES.INVALID_CONFIGURATION,
+      'transactionMaxAttempts must be a positive safe integer.'
+    )
+  }
+  if ((config.rateLimiter == null) !== (config.rateLimitKeyProvider == null)) {
+    throw new NewsletterError(
+      NEWSLETTER_ERROR_CODES.INVALID_CONFIGURATION,
+      'rateLimiter and rateLimitKeyProvider must be configured together.'
+    )
+  }
+
+  const validateRatePolicy = (name: string, policy: RateLimitPolicy): void => {
+    if (
+      !Number.isSafeInteger(policy.limit)
+      || policy.limit <= 0
+      || !Number.isSafeInteger(policy.windowMs)
+      || policy.windowMs <= 0
+    ) {
+      throw new NewsletterError(
+        NEWSLETTER_ERROR_CODES.INVALID_CONFIGURATION,
+        `${name} must use positive safe integer limit and windowMs values.`
+      )
+    }
+  }
+
+  const subscribeRateLimit =
+    config.rateLimits?.subscribe ?? DEFAULT_SUBSCRIBE_RATE_LIMIT
+  const resendRateLimit =
+    config.rateLimits?.resendConfirmation ?? DEFAULT_RESEND_RATE_LIMIT
+  validateRatePolicy('rateLimits.subscribe', subscribeRateLimit)
+  validateRatePolicy('rateLimits.resendConfirmation', resendRateLimit)
 
   const clock = config.clock ?? systemClock
   const idGenerator = config.idGenerator ?? systemIdGenerator
+  const tokenGenerator = config.tokenGenerator ?? secureTokenGenerator
+  const logger = config.logger ?? console
+
+  /** Runs a storage transaction, re-running the callback on storage conflicts. */
+  const runTransaction = async <T>(
+    operation: (transaction: NewsletterStorageTransaction) => Promise<T>
+  ): Promise<T> => {
+    for (let attempt = 1; ; attempt += 1) {
+      try {
+        return await config.storage.transaction(operation)
+      } catch (error) {
+        if (!isStorageConflict(error) || attempt >= transactionMaxAttempts) {
+          throw error
+        }
+      }
+    }
+  }
+
+  const runInBackground = (task: Promise<void>): void => {
+    const guarded = task.catch(error => {
+      try {
+        logger.error(
+          'Newsletter confirmation processing failed; pending work remains retryable.',
+          error
+        )
+      } catch {
+        // A failing logger must not turn into an unhandled rejection.
+      }
+    })
+    if (config.runBackground == null) return
+    try {
+      config.runBackground(guarded)
+    } catch (error) {
+      logger.error('The runBackground hook failed.', error)
+    }
+  }
+  const newConfirmationDelivery = (): ConfirmationDelivery => ({
+    id: idGenerator.generate(),
+    attemptId: null,
+    leaseExpiresAt: null
+  })
+
+  const enforcePublicSecurity = async (
+    action: PublicAbuseAction,
+    email: string,
+    audienceKey: string,
+    context: unknown
+  ): Promise<void> => {
+    if (config.abuseGuard != null) {
+      const result = await config.abuseGuard.verify({
+        action,
+        email,
+        audienceKey,
+        ...(context !== undefined ? { context } : {})
+      })
+      if (!result.allowed) {
+        throw new NewsletterError(
+          NEWSLETTER_ERROR_CODES.ABUSE_REJECTED,
+          'The request was rejected by the configured abuse guard.'
+        )
+      }
+    }
+
+    if (config.rateLimiter != null && config.rateLimitKeyProvider != null) {
+      const policy = action === 'subscribe'
+        ? subscribeRateLimit
+        : resendRateLimit
+      const key = await config.rateLimitKeyProvider.createKey({
+        action,
+        email,
+        audienceKey,
+        ...(context !== undefined ? { context } : {})
+      })
+      if (key.length === 0) {
+        throw new NewsletterError(
+          NEWSLETTER_ERROR_CODES.INVALID_CONFIGURATION,
+          'rateLimitKeyProvider returned an empty key.'
+        )
+      }
+      const result = await config.rateLimiter.consume({
+        key,
+        action,
+        limit: policy.limit,
+        windowMs: policy.windowMs
+      })
+      if (!result.allowed) {
+        throw new NewsletterError(
+          NEWSLETTER_ERROR_CODES.RATE_LIMITED,
+          'The request rate limit was exceeded.',
+          result.retryAfterMs !== undefined
+            ? { retryAfterMs: result.retryAfterMs }
+            : {}
+        )
+      }
+    }
+  }
 
   const appendEvent = async (
     transaction: NewsletterStorageTransaction,
@@ -216,13 +419,13 @@ export function createNewsletter(config: NewsletterConfig): NewsletterCore {
 
   const requestConfirmation = async (
     contactId: string,
-    subscriptionId: string
+    subscriptionId: string,
+    lifecycleGeneration: number
   ): Promise<void> => {
-    const token = await config.tokenGenerator.generate()
-    const requestedAt = clock.now()
-    const expiresAt = new Date(requestedAt.getTime() + expiresInMs)
+    const attemptId = idGenerator.generate()
 
-    const state = await config.storage.transaction(async transaction => {
+    const claim = await runTransaction(async transaction => {
+      const requestedAt = clock.now()
       const contact = await transaction.getContactById(contactId)
       const subscription = await transaction.getSubscriptionById(subscriptionId)
 
@@ -231,53 +434,154 @@ export function createNewsletter(config: NewsletterConfig): NewsletterCore {
         || subscription == null
         || contact.status === CONTACT_STATUSES.SUPPRESSED
         || subscription.status !== SUBSCRIPTION_STATUSES.PENDING_CONFIRMATION
+        || subscription.lifecycleGeneration !== lifecycleGeneration
+        || subscription.confirmationDelivery == null
+        || (
+          subscription.confirmationDelivery.leaseExpiresAt != null
+          && subscription.confirmationDelivery.leaseExpiresAt.getTime() > requestedAt.getTime()
+        )
       ) {
         return null
       }
 
+      const claimed = await transaction.updateSubscription(subscriptionId, {
+        confirmationDelivery: {
+          ...subscription.confirmationDelivery,
+          attemptId,
+          leaseExpiresAt: new Date(requestedAt.getTime() + deliveryLeaseMs)
+        }
+      })
       await appendEvent(transaction, {
         contactId,
         subscriptionId,
         type: NEWSLETTER_EVENT_TYPES.CONFIRMATION_REQUESTED,
         occurredAt: requestedAt,
-        metadata: { audienceKey: subscription.audienceKey }
+        metadata: { audienceKey: subscription.audienceKey, lifecycleGeneration, attemptId }
       })
 
-      return { contact, subscription }
+      return {
+        contact,
+        subscription: claimed,
+        deliveryId: subscription.confirmationDelivery.id
+      }
     })
 
-    if (state == null) return
+    if (claim == null) return
 
-    await config.capabilities.replaceConfirmation({
-      token,
-      contactId,
-      subscriptionId,
-      expiresAt
-    })
-
-    let accepted = false
-    let providerMessageId: string | undefined
+    let result: MailDeliveryResult = { accepted: false }
+    let stage = 'TOKEN_SETUP'
     try {
-      const result = await config.mailer.sendConfirmation({
-        contact: state.contact,
-        subscription: state.subscription,
-        token,
-        expiresAt
+      const token = await tokenGenerator.generate()
+      const issuedAt = clock.now()
+      const expiresAt = new Date(issuedAt.getTime() + expiresInMs)
+
+      const setup = await runTransaction(async transaction => {
+        const contact = await transaction.getContactById(contactId)
+        const current = await transaction.getSubscriptionById(subscriptionId)
+        if (
+          contact == null
+          || current?.status !== SUBSCRIPTION_STATUSES.PENDING_CONFIRMATION
+          || current.lifecycleGeneration !== lifecycleGeneration
+          || current.confirmationDelivery?.attemptId !== attemptId
+        ) return 'STALE' as const
+
+        if (contact.status !== CONTACT_STATUSES.ENABLED) {
+          // Release the claim so a resend after unsuppression is not blocked
+          // until the lease expires.
+          await transaction.updateSubscription(subscriptionId, {
+            confirmationDelivery: {
+              ...current.confirmationDelivery,
+              attemptId: null,
+              leaseExpiresAt: null
+            },
+            updatedAt: issuedAt
+          })
+          await appendEvent(transaction, {
+            contactId,
+            subscriptionId,
+            type: NEWSLETTER_EVENT_TYPES.CONFIRMATION_SEND_FAILED,
+            occurredAt: issuedAt,
+            metadata: {
+              deliveryId: claim.deliveryId,
+              attemptId,
+              lifecycleGeneration,
+              authoritative: true,
+              stage: 'ELIGIBILITY',
+              reason: 'CONTACT_SUPPRESSED'
+            }
+          })
+          return 'INELIGIBLE' as const
+        }
+
+        // Fence token replacement as well as completion: a stale worker must
+        // never replace tokens belonging to a newer delivery attempt.
+        const replacement = await config.capabilities.replaceConfirmation({
+          token,
+          contactId,
+          subscriptionId,
+          lifecycleGeneration,
+          issuedAt,
+          expiresAt,
+          replacementStrategy,
+          maxActiveTokens
+        }, transaction.confirmationTokens)
+        if (replacement != null) {
+          for (const [type, count] of [
+            [NEWSLETTER_EVENT_TYPES.CONFIRMATION_REPLACED, replacement.replacedCount],
+            [NEWSLETTER_EVENT_TYPES.CONFIRMATION_EXPIRED, replacement.expiredCount]
+          ] as const) {
+            if (count > 0) {
+              await appendEvent(transaction, {
+                contactId, subscriptionId, type, occurredAt: issuedAt,
+                metadata: { count, lifecycleGeneration }
+              })
+            }
+          }
+        }
+        return 'READY' as const
       })
-      accepted = result.accepted
-      providerMessageId = result.providerMessageId
+      if (setup !== 'READY') return
+
+      stage = 'DELIVERY'
+      result = await config.mailer.sendConfirmation({
+        contact: claim.contact,
+        subscription: claim.subscription,
+        token,
+        expiresAt,
+        deliveryId: claim.deliveryId,
+        attemptId,
+        audienceKey: claim.subscription.audienceKey,
+        lifecycleGeneration
+      })
     } catch {
-      accepted = false
+      result = { accepted: false }
     }
 
+    const failure = result.accepted
+      ? null
+      : result.failure ?? MAIL_DELIVERY_FAILURES.TEMPORARY
     const completedAt = clock.now()
-    await config.storage.transaction(async transaction => {
+    await runTransaction(async transaction => {
       const current = await transaction.getSubscriptionById(subscriptionId)
       if (current == null) return
 
-      if (accepted && current.status === SUBSCRIPTION_STATUSES.PENDING_CONFIRMATION) {
+      // Only the attempt that still owns the current work may finalize it.
+      // A superseded attempt records its result under a distinct event type.
+      const authoritative = current.lifecycleGeneration === lifecycleGeneration
+        && current.status === SUBSCRIPTION_STATUSES.PENDING_CONFIRMATION
+        && current.confirmationDelivery?.attemptId === attemptId
+
+      if (
+        authoritative
+        // An ambiguous send keeps its claim until the lease expires, so an
+        // immediate retry cannot add another message while it may be in flight.
+        && failure !== MAIL_DELIVERY_FAILURES.AMBIGUOUS
+      ) {
         await transaction.updateSubscription(subscriptionId, {
-          confirmationSentAt: completedAt,
+          ...(failure == null ? { confirmationSentAt: completedAt } : {}),
+          confirmationDelivery: failure === MAIL_DELIVERY_FAILURES.TEMPORARY
+            ? { ...current.confirmationDelivery!, attemptId: null, leaseExpiresAt: null }
+            : null,
           updatedAt: completedAt
         })
       }
@@ -285,12 +589,25 @@ export function createNewsletter(config: NewsletterConfig): NewsletterCore {
       await appendEvent(transaction, {
         contactId,
         subscriptionId,
-        type: accepted
-          ? NEWSLETTER_EVENT_TYPES.CONFIRMATION_SENT
-          : NEWSLETTER_EVENT_TYPES.CONFIRMATION_SEND_FAILED,
+        type: !authoritative
+          ? NEWSLETTER_EVENT_TYPES.CONFIRMATION_STALE_RESULT
+          : failure == null
+            ? NEWSLETTER_EVENT_TYPES.CONFIRMATION_SENT
+            : NEWSLETTER_EVENT_TYPES.CONFIRMATION_SEND_FAILED,
         occurredAt: completedAt,
         metadata: {
-          ...(providerMessageId !== undefined ? { providerMessageId } : {})
+          deliveryId: claim.deliveryId,
+          attemptId,
+          lifecycleGeneration,
+          authoritative,
+          outcome: failure ?? 'ACCEPTED',
+          ...(failure != null ? { stage } : {}),
+          ...(result.providerMessageId !== undefined
+            ? { providerMessageId: result.providerMessageId }
+            : {}),
+          ...(!result.accepted && result.reason !== undefined
+            ? { reason: result.reason }
+            : {})
         }
       })
     })
@@ -301,10 +618,21 @@ export function createNewsletter(config: NewsletterConfig): NewsletterCore {
     mailer: config.mailer,
     capabilities: config.capabilities,
     clock,
-    tokenGenerator: config.tokenGenerator,
+    tokenGenerator,
     idGenerator,
     defaultAudience,
-    confirmation: Object.freeze({ expiresInMs }),
+    abuseGuard: config.abuseGuard,
+    rateLimiter: config.rateLimiter,
+    rateLimitKeyProvider: config.rateLimitKeyProvider,
+    logger,
+    transactionMaxAttempts,
+    confirmation: Object.freeze({
+      expiresInMs,
+      replacementStrategy,
+      maxActiveTokens,
+      cleanupRetentionMs,
+      deliveryLeaseMs
+    }),
     getDeliveryEligibility,
 
     async subscribe(input) {
@@ -312,14 +640,21 @@ export function createNewsletter(config: NewsletterConfig): NewsletterCore {
       const audienceKey = assertAudienceKey(input.audience ?? defaultAudience)
       const now = clock.now()
       const consent = consentFromPublicInput(input.consent, now)
+      await enforcePublicSecurity(
+        'subscribe',
+        email,
+        audienceKey,
+        input.securityContext
+      )
 
-      const transition = await config.storage.transaction(async transaction => {
+      const transition = await runTransaction(async transaction => {
         let contact = await transaction.getContactByEmail(email)
-        let createdContact = false
+        let contactCreated = false
 
         if (contact == null) {
           contact = await transaction.createContact({
             id: idGenerator.generate(),
+            capabilityGeneration: 1,
             email,
             status: CONTACT_STATUSES.ENABLED,
             subject: input.subject ?? null,
@@ -327,7 +662,7 @@ export function createNewsletter(config: NewsletterConfig): NewsletterCore {
             createdAt: now,
             updatedAt: now
           })
-          createdContact = true
+          contactCreated = true
         }
 
         let subscription = await transaction.getSubscription(
@@ -336,12 +671,21 @@ export function createNewsletter(config: NewsletterConfig): NewsletterCore {
         )
 
         if (subscription == null) {
+          if (!contactCreated) {
+            contact = await transaction.updateContact(contact.id, {
+              capabilityGeneration: nextGeneration(contact.capabilityGeneration),
+              updatedAt: now
+            })
+          }
+
           subscription = await transaction.createSubscription({
             id: idGenerator.generate(),
+            lifecycleGeneration: 1,
             contactId: contact.id,
             audienceKey,
             status: SUBSCRIPTION_STATUSES.PENDING_CONFIRMATION,
             consent,
+            confirmationDelivery: newConfirmationDelivery(),
             confirmationSentAt: null,
             confirmedAt: null,
             unsubscribedAt: null,
@@ -364,15 +708,20 @@ export function createNewsletter(config: NewsletterConfig): NewsletterCore {
           return {
             contact,
             subscription,
-            shouldSend: contact.status === CONTACT_STATUSES.ENABLED,
-            shouldRotateUnsubscribe: false
+            shouldSend: contact.status === CONTACT_STATUSES.ENABLED
           }
         }
 
         if (subscription.status === SUBSCRIPTION_STATUSES.UNSUBSCRIBED) {
+          contact = await transaction.updateContact(contact.id, {
+            capabilityGeneration: nextGeneration(contact.capabilityGeneration),
+            updatedAt: now
+          })
           subscription = await transaction.updateSubscription(subscription.id, {
             status: SUBSCRIPTION_STATUSES.PENDING_CONFIRMATION,
+            lifecycleGeneration: nextGeneration(subscription.lifecycleGeneration),
             consent,
+            confirmationDelivery: newConfirmationDelivery(),
             confirmationSentAt: null,
             confirmedAt: null,
             unsubscribedAt: null,
@@ -394,34 +743,25 @@ export function createNewsletter(config: NewsletterConfig): NewsletterCore {
           return {
             contact,
             subscription,
-            shouldSend: contact.status === CONTACT_STATUSES.ENABLED,
-            shouldRotateUnsubscribe: true
+            shouldSend: contact.status === CONTACT_STATUSES.ENABLED
           }
         }
 
         return {
           contact,
           subscription,
-          shouldSend: false,
-          shouldRotateUnsubscribe: false,
-          createdContact
+          shouldSend: contact.status === CONTACT_STATUSES.ENABLED
+            && subscription.status === SUBSCRIPTION_STATUSES.PENDING_CONFIRMATION
+            && subscription.confirmationDelivery != null
         }
       })
 
-      if (transition.shouldRotateUnsubscribe) {
-        await config.capabilities.revokeUnsubscribeCapabilities(
-          transition.subscription.id
-        )
-        await config.capabilities.revokeUnsubscribeAllCapability(
-          transition.contact.id
-        )
-      }
-
       if (transition.shouldSend) {
-        void requestConfirmation(
+        runInBackground(requestConfirmation(
           transition.contact.id,
-          transition.subscription.id
-        ).catch(() => undefined)
+          transition.subscription.id,
+          transition.subscription.lifecycleGeneration
+        ))
       }
 
       return PUBLIC_ACCEPTED
@@ -430,8 +770,14 @@ export function createNewsletter(config: NewsletterConfig): NewsletterCore {
     async resendConfirmation(input) {
       const email = normalizeAndValidateEmail(input.email)
       const audienceKey = assertAudienceKey(input.audience ?? defaultAudience)
+      await enforcePublicSecurity(
+        'resend-confirmation',
+        email,
+        audienceKey,
+        input.securityContext
+      )
 
-      const target = await config.storage.transaction(async transaction => {
+      const target = await runTransaction(async transaction => {
         const contact = await transaction.getContactByEmail(email)
         if (contact == null || contact.status === CONTACT_STATUSES.SUPPRESSED) {
           return null
@@ -448,27 +794,42 @@ export function createNewsletter(config: NewsletterConfig): NewsletterCore {
           return null
         }
 
+        if (subscription.confirmationDelivery == null) {
+          await transaction.updateSubscription(subscription.id, {
+            confirmationDelivery: newConfirmationDelivery()
+          })
+        }
+
         return {
           contactId: contact.id,
-          subscriptionId: subscription.id
+          subscriptionId: subscription.id,
+          lifecycleGeneration: subscription.lifecycleGeneration
         }
       })
 
+      // Deliver in the background like signup, so neither response time nor
+      // delivery errors reveal whether the address has pending work.
       if (target != null) {
-        await requestConfirmation(target.contactId, target.subscriptionId)
+        runInBackground(requestConfirmation(
+          target.contactId,
+          target.subscriptionId,
+          target.lifecycleGeneration
+        ))
       }
 
       return PUBLIC_ACCEPTED
     },
 
     async confirm(input) {
-      const target = await config.capabilities.consumeConfirmation(
-        input.token,
-        clock.now()
-      )
-      if (target == null) return NOT_CONFIRMED
+      return runTransaction(async transaction => {
+        const now = clock.now()
+        const target = await config.capabilities.resolveConfirmation(
+          input.token,
+          now,
+          transaction.confirmationTokens
+        )
+        if (target == null) return NOT_CONFIRMED
 
-      return config.storage.transaction(async transaction => {
         const contact = await transaction.getContactById(target.contactId)
         const subscription = await transaction.getSubscriptionById(
           target.subscriptionId
@@ -478,15 +839,29 @@ export function createNewsletter(config: NewsletterConfig): NewsletterCore {
           contact == null
           || subscription == null
           || subscription.contactId !== contact.id
+          || subscription.lifecycleGeneration !== target.lifecycleGeneration
           || contact.status === CONTACT_STATUSES.SUPPRESSED
           || subscription.status !== SUBSCRIPTION_STATUSES.PENDING_CONFIRMATION
         ) {
           return NOT_CONFIRMED
         }
 
-        const now = clock.now()
+        // Consumption shares the transaction, so a rolled-back activation
+        // never burns the caller's confirmation token.
+        const consumed = await config.capabilities.consumeConfirmation(
+          input.token,
+          now,
+          transaction.confirmationTokens
+        )
+        if (
+          consumed?.contactId !== contact.id
+          || consumed.subscriptionId !== subscription.id
+          || consumed.lifecycleGeneration !== subscription.lifecycleGeneration
+        ) return NOT_CONFIRMED
+
         await transaction.updateSubscription(subscription.id, {
           status: SUBSCRIPTION_STATUSES.ACTIVE,
+          confirmationDelivery: null,
           confirmedAt: now,
           unsubscribedAt: null,
           updatedAt: now
@@ -510,13 +885,14 @@ export function createNewsletter(config: NewsletterConfig): NewsletterCore {
         return NOT_UNSUBSCRIBED
       }
 
-      const result = await config.storage.transaction(async transaction => {
+      return runTransaction(async transaction => {
         const subscription = await transaction.getSubscriptionById(
           target.subscriptionId
         )
         if (
           subscription == null
           || subscription.contactId !== target.contactId
+          || subscription.lifecycleGeneration !== target.lifecycleGeneration
         ) {
           return NOT_UNSUBSCRIBED
         }
@@ -528,6 +904,7 @@ export function createNewsletter(config: NewsletterConfig): NewsletterCore {
         const now = clock.now()
         await transaction.updateSubscription(subscription.id, {
           status: SUBSCRIPTION_STATUSES.UNSUBSCRIBED,
+          confirmationDelivery: null,
           unsubscribedAt: now,
           updatedAt: now
         })
@@ -538,13 +915,14 @@ export function createNewsletter(config: NewsletterConfig): NewsletterCore {
           occurredAt: now,
           metadata: { audienceKey: subscription.audienceKey }
         })
+        await config.capabilities.revokeConfirmations(
+          subscription.id,
+          subscription.lifecycleGeneration,
+          now,
+          transaction.confirmationTokens
+        )
         return UNSUBSCRIBED
       })
-
-      if (result.unsubscribed) {
-        await config.capabilities.revokeConfirmations(target.subscriptionId)
-      }
-      return result
     },
 
     async unsubscribeAll(input) {
@@ -555,12 +933,14 @@ export function createNewsletter(config: NewsletterConfig): NewsletterCore {
         return NOT_UNSUBSCRIBED
       }
 
-      const changed = await config.storage.transaction(async transaction => {
+      return runTransaction(async transaction => {
         const contact = await transaction.getContactById(target.contactId)
-        if (contact == null) return null
+        if (
+          contact == null
+          || contact.capabilityGeneration !== target.capabilityGeneration
+        ) return NOT_UNSUBSCRIBED
 
         const subscriptions = await transaction.listSubscriptions(contact.id)
-        const changedIds: string[] = []
         const now = clock.now()
 
         for (const subscription of subscriptions) {
@@ -570,6 +950,7 @@ export function createNewsletter(config: NewsletterConfig): NewsletterCore {
 
           await transaction.updateSubscription(subscription.id, {
             status: SUBSCRIPTION_STATUSES.UNSUBSCRIBED,
+            confirmationDelivery: null,
             unsubscribedAt: now,
             updatedAt: now
           })
@@ -580,32 +961,32 @@ export function createNewsletter(config: NewsletterConfig): NewsletterCore {
             occurredAt: now,
             metadata: { audienceKey: subscription.audienceKey }
           })
-          changedIds.push(subscription.id)
+          await config.capabilities.revokeConfirmations(
+            subscription.id,
+            subscription.lifecycleGeneration,
+            now,
+            transaction.confirmationTokens
+          )
         }
 
-        return changedIds
+        return UNSUBSCRIBED
       })
-
-      if (changed == null) return NOT_UNSUBSCRIBED
-      await Promise.all(
-        changed.map(subscriptionId =>
-          config.capabilities.revokeConfirmations(subscriptionId)
-        )
-      )
-      return UNSUBSCRIBED
     },
 
     async createUnsubscribeCapability(input) {
       const email = normalizeAndValidateEmail(input.email)
       const audienceKey = assertAudienceKey(input.audience ?? defaultAudience)
-      const capability = await config.tokenGenerator.generate()
 
-      const target = await config.storage.transaction(async transaction => {
+      const target = await runTransaction(async transaction => {
         const contact = await transaction.getContactByEmail(email)
         if (contact == null) return null
 
         if (input.all === true) {
-          return { scope: 'ALL' as const, contactId: contact.id }
+          return {
+            scope: 'ALL' as const,
+            contactId: contact.id,
+            capabilityGeneration: contact.capabilityGeneration
+          }
         }
 
         const subscription = await transaction.getSubscription(
@@ -617,34 +998,44 @@ export function createNewsletter(config: NewsletterConfig): NewsletterCore {
         return {
           scope: 'SUBSCRIPTION' as const,
           contactId: contact.id,
-          subscriptionId: subscription.id
+          subscriptionId: subscription.id,
+          lifecycleGeneration: subscription.lifecycleGeneration
         }
       })
 
       if (target == null) return null
       if (target.scope === 'ALL') {
-        await config.capabilities.replaceUnsubscribeAllCapability({
-          capability,
-          contactId: target.contactId
-        })
-      } else {
-        await config.capabilities.replaceUnsubscribeCapability({
-          capability,
-          contactId: target.contactId,
-          subscriptionId: target.subscriptionId
-        })
+        return config.capabilities.issueUnsubscribeAllCapability(target)
       }
-      return capability
+
+      return config.capabilities.issueUnsubscribeCapability(target)
+    },
+
+    async cleanupConfirmationTokens(input = {}) {
+      const retentionMs = input.retentionMs ?? cleanupRetentionMs
+      if (!Number.isSafeInteger(retentionMs) || retentionMs < 0) {
+        throw new NewsletterError(
+          NEWSLETTER_ERROR_CODES.INVALID_CONFIGURATION,
+          'cleanup retentionMs must be a non-negative safe integer.'
+        )
+      }
+      const deleteBefore = new Date(clock.now().getTime() - retentionMs)
+      return runTransaction(transaction =>
+        config.capabilities.cleanupConfirmations(
+          { deleteBefore },
+          transaction.confirmationTokens
+        )
+      )
     },
 
     async getContact(input) {
-      return config.storage.transaction(transaction =>
+      return runTransaction(transaction =>
         resolveContact(transaction, input)
       )
     },
 
     async getSubscription(input: SubscriptionLookup) {
-      return config.storage.transaction(async transaction => {
+      return runTransaction(async transaction => {
         if ('id' in input) {
           return transaction.getSubscriptionById(input.id)
         }
@@ -661,7 +1052,7 @@ export function createNewsletter(config: NewsletterConfig): NewsletterCore {
     },
 
     async listSubscriptions(input) {
-      return config.storage.transaction(async transaction => {
+      return runTransaction(async transaction => {
         const contact = await resolveContact(transaction, input)
         if (contact == null) return []
         return transaction.listSubscriptions(contact.id)
@@ -669,7 +1060,7 @@ export function createNewsletter(config: NewsletterConfig): NewsletterCore {
     },
 
     async listEvents(input) {
-      return config.storage.transaction(async transaction => {
+      return runTransaction(async transaction => {
         const contact = await resolveContact(transaction, input)
         if (contact == null) return []
         return transaction.listEvents(contact.id)
@@ -678,7 +1069,7 @@ export function createNewsletter(config: NewsletterConfig): NewsletterCore {
 
     async linkSubject(input) {
       const email = normalizeAndValidateEmail(input.email)
-      return config.storage.transaction(async transaction => {
+      return runTransaction(async transaction => {
         const contact = await transaction.getContactByEmail(email)
         if (contact == null) return null
         if (subjectEquals(contact.subject, input.subject)) return contact
@@ -715,12 +1106,10 @@ export function createNewsletter(config: NewsletterConfig): NewsletterCore {
         )
       }
 
-      const transition = await config.storage.transaction(async transaction => {
+      return runTransaction(async transaction => {
         const contact = await transaction.getContactByEmail(email)
         if (contact == null) return null
-        if (contact.status === CONTACT_STATUSES.SUPPRESSED) {
-          return { contact, subscriptionIds: [] as string[] }
-        }
+        if (contact.status === CONTACT_STATUSES.SUPPRESSED) return contact
 
         const now = clock.now()
         const updated = await transaction.updateContact(contact.id, {
@@ -736,24 +1125,21 @@ export function createNewsletter(config: NewsletterConfig): NewsletterCore {
           metadata: { reason }
         })
         const subscriptions = await transaction.listSubscriptions(contact.id)
-        return {
-          contact: updated,
-          subscriptionIds: subscriptions.map(subscription => subscription.id)
+        for (const subscription of subscriptions) {
+          await config.capabilities.revokeConfirmations(
+            subscription.id,
+            subscription.lifecycleGeneration,
+            now,
+            transaction.confirmationTokens
+          )
         }
+        return updated
       })
-
-      if (transition == null) return null
-      await Promise.all(
-        transition.subscriptionIds.map(subscriptionId =>
-          config.capabilities.revokeConfirmations(subscriptionId)
-        )
-      )
-      return transition.contact
     },
 
     async unsuppressContact(input) {
       const email = normalizeAndValidateEmail(input.email)
-      return config.storage.transaction(async transaction => {
+      return runTransaction(async transaction => {
         const contact = await transaction.getContactByEmail(email)
         if (contact == null) return null
         if (contact.status === CONTACT_STATUSES.ENABLED) return contact
@@ -781,11 +1167,13 @@ export function createNewsletter(config: NewsletterConfig): NewsletterCore {
       const createdAt = input.originalCreatedAt ?? input.consent.consentedAt
       const now = clock.now()
 
-      return config.storage.transaction(async transaction => {
+      return runTransaction(async transaction => {
         let contact = await transaction.getContactByEmail(email)
+        const contactCreated = contact == null
         if (contact == null) {
           contact = await transaction.createContact({
             id: idGenerator.generate(),
+            capabilityGeneration: 1,
             email,
             status: CONTACT_STATUSES.ENABLED,
             subject: input.subject ?? null,
@@ -824,12 +1212,23 @@ export function createNewsletter(config: NewsletterConfig): NewsletterCore {
           )
         }
 
+        // A new audience extends the contact's scope, so older
+        // unsubscribe-all links must not cover it.
+        if (!contactCreated) {
+          contact = await transaction.updateContact(contact.id, {
+            capabilityGeneration: nextGeneration(contact.capabilityGeneration),
+            updatedAt: now
+          })
+        }
+
         const subscription = await transaction.createSubscription({
           id: idGenerator.generate(),
+          lifecycleGeneration: 1,
           contactId: contact.id,
           audienceKey,
           status: input.status,
           consent: input.consent,
+          confirmationDelivery: null,
           confirmationSentAt: null,
           confirmedAt: input.confirmedAt ?? null,
           unsubscribedAt: input.unsubscribedAt ?? null,

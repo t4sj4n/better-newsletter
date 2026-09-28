@@ -1,6 +1,17 @@
+import type {
+  ConfirmationReplacementStrategy,
+  ConfirmationTokenStore
+} from './security.js'
+
 export interface ConfirmationCapabilityTarget {
   readonly contactId: string
   readonly subscriptionId: string
+  readonly lifecycleGeneration: number
+}
+
+export interface ConfirmationReplacementResult {
+  readonly replacedCount: number
+  readonly expiredCount: number
 }
 
 export type UnsubscribeCapabilityTarget =
@@ -8,48 +19,73 @@ export type UnsubscribeCapabilityTarget =
     readonly scope: 'SUBSCRIPTION'
     readonly contactId: string
     readonly subscriptionId: string
+    readonly lifecycleGeneration: number
   }
   | {
     readonly scope: 'ALL'
     readonly contactId: string
+    readonly capabilityGeneration: number
   }
 
 /**
- * Security mechanics intentionally live behind this contract. Issue #3 owns
- * cryptographic token generation, hashing, expiry persistence and hardened
- * replay/race guarantees.
+ * Security-sensitive mechanics live behind this contract. Production adapters
+ * must avoid persisting raw bearer tokens and must make confirmation
+ * consumption atomic. Resolved targets are not authorization by themselves:
+ * the core must match their generation against persisted state transactionally.
+ *
+ * Confirmation methods receive the token store of the current lifecycle
+ * transaction and must not write anywhere else, so they stay retry-safe.
  */
 export interface NewsletterCapabilities {
   replaceConfirmation(input: {
     readonly token: string
     readonly contactId: string
     readonly subscriptionId: string
+    readonly lifecycleGeneration: number
+    readonly issuedAt: Date
     readonly expiresAt: Date
-  }): Promise<void>
+    readonly replacementStrategy: ConfirmationReplacementStrategy
+    readonly maxActiveTokens: number
+  }, store: ConfirmationTokenStore): Promise<ConfirmationReplacementResult | void>
+
+  resolveConfirmation(
+    token: string,
+    now: Date,
+    store: ConfirmationTokenStore
+  ): Promise<ConfirmationCapabilityTarget | null>
 
   consumeConfirmation(
     token: string,
-    now: Date
+    now: Date,
+    store: ConfirmationTokenStore
   ): Promise<ConfirmationCapabilityTarget | null>
 
-  revokeConfirmations(subscriptionId: string): Promise<void>
+  revokeConfirmations(
+    subscriptionId: string,
+    lifecycleGeneration: number,
+    now: Date,
+    store: ConfirmationTokenStore
+  ): Promise<void>
 
-  replaceUnsubscribeCapability(input: {
-    readonly capability: string
+  /**
+   * Sign the purpose, target IDs and generation without mutable nonce state.
+   */
+  issueUnsubscribeCapability(input: {
     readonly contactId: string
     readonly subscriptionId: string
-  }): Promise<void>
+    readonly lifecycleGeneration: number
+  }): Promise<string>
 
-  replaceUnsubscribeAllCapability(input: {
-    readonly capability: string
+  issueUnsubscribeAllCapability(input: {
     readonly contactId: string
-  }): Promise<void>
+    readonly capabilityGeneration: number
+  }): Promise<string>
 
   resolveUnsubscribeCapability(
     capability: string
   ): Promise<UnsubscribeCapabilityTarget | null>
 
-  revokeUnsubscribeCapabilities(subscriptionId: string): Promise<void>
-
-  revokeUnsubscribeAllCapability(contactId: string): Promise<void>
+  cleanupConfirmations(input: {
+    readonly deleteBefore: Date
+  }, store: ConfirmationTokenStore): Promise<number>
 }

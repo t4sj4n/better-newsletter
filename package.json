@@ -27,7 +27,11 @@
       "types": "./dist/memory.d.ts",
       "import": "./dist/memory.js"
     },
-    "./package.json": "./package.json"
+    "./package.json": "./package.json",
+    "./security": {
+      "types": "./dist/security.d.ts",
+      "import": "./dist/security.js"
+    }
   },
   "scripts": {
     "build": "tsc -p tsconfig.build.json",

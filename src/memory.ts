@@ -1,12 +1,12 @@
-import type {
-  NewsletterCapabilities,
-  UnsubscribeCapabilityTarget
-} from './capabilities.js'
+import type { NewsletterCapabilities } from './capabilities.js'
+import { createSecureCapabilities, type ConfirmationTokenRecord } from './security.js'
+import { MemoryConfirmationTokenStore } from './memory-security.js'
 import type {
   Contact,
   NewsletterEvent,
   Subscription
 } from './domain.js'
+import { StorageConflictError } from './errors.js'
 import type {
   ContactPatch,
   CreateContactInput,
@@ -22,6 +22,7 @@ interface MemoryState {
   subscriptions: Map<string, Subscription>
   subscriptionByContactAudience: Map<string, string>
   events: NewsletterEvent[]
+  confirmationTokens: Map<string, ConfirmationTokenRecord>
 }
 
 /** Deep-copies supported values so callers cannot mutate stored state by reference. */
@@ -40,7 +41,8 @@ export class MemoryNewsletterStorage implements NewsletterStorage {
     contactByEmail: new Map(),
     subscriptions: new Map(),
     subscriptionByContactAudience: new Map(),
-    events: []
+    events: [],
+    confirmationTokens: new Map()
   }
 
   private queue: Promise<void> = Promise.resolve()
@@ -97,16 +99,24 @@ export class MemoryNewsletterStorage implements NewsletterStorage {
       listEvents: async contactId =>
         this.state.events
           .filter(event => event.contactId === contactId)
-          .map(clone)
+          .map(clone),
+      confirmationTokens: new MemoryConfirmationTokenStore(
+        this.state.confirmationTokens
+      )
     }
+  }
+
+  /** Returns committed confirmation-token records, e.g. to assert digests in tests. */
+  confirmationTokenSnapshot(): readonly ConfirmationTokenRecord[] {
+    return [...this.state.confirmationTokens.values()].map(clone)
   }
 
   private createContact(input: CreateContactInput): Contact {
     if (this.state.contacts.has(input.id)) {
-      throw new Error(`Contact id already exists: ${input.id}`)
+      throw new StorageConflictError(`Contact id already exists: ${input.id}`)
     }
     if (this.state.contactByEmail.has(input.email)) {
-      throw new Error(`Contact e-mail already exists: ${input.email}`)
+      throw new StorageConflictError('Contact e-mail already exists.')
     }
 
     const contact: Contact = clone(input)
@@ -126,12 +136,12 @@ export class MemoryNewsletterStorage implements NewsletterStorage {
 
   private createSubscription(input: CreateSubscriptionInput): Subscription {
     if (this.state.subscriptions.has(input.id)) {
-      throw new Error(`Subscription id already exists: ${input.id}`)
+      throw new StorageConflictError(`Subscription id already exists: ${input.id}`)
     }
 
     const key = subscriptionKey(input.contactId, input.audienceKey)
     if (this.state.subscriptionByContactAudience.has(key)) {
-      throw new Error(`Subscription already exists: ${key}`)
+      throw new StorageConflictError('Subscription already exists for this contact and audience.')
     }
 
     const subscription: Subscription = clone(input)
@@ -158,108 +168,21 @@ export function memoryStorage(): MemoryNewsletterStorage {
   return new MemoryNewsletterStorage()
 }
 
-interface StoredConfirmation {
-  readonly contactId: string
-  readonly subscriptionId: string
-  readonly expiresAt: Date
-}
-
-/** Test/development capability adapter. It stores raw opaque values in memory and is not production security. */
-export class MemoryNewsletterCapabilities implements NewsletterCapabilities {
-  private readonly confirmations = new Map<string, StoredConfirmation>()
-  private readonly confirmationBySubscription = new Map<string, string>()
-  private readonly unsubscribe = new Map<string, UnsubscribeCapabilityTarget>()
-  private readonly unsubscribeBySubscription = new Map<string, string>()
-  private readonly unsubscribeAllByContact = new Map<string, string>()
-
-  async replaceConfirmation(input: {
-    readonly token: string
-    readonly contactId: string
-    readonly subscriptionId: string
-    readonly expiresAt: Date
-  }): Promise<void> {
-    await this.revokeConfirmations(input.subscriptionId)
-    this.confirmations.set(input.token, {
-      contactId: input.contactId,
-      subscriptionId: input.subscriptionId,
-      expiresAt: clone(input.expiresAt)
-    })
-    this.confirmationBySubscription.set(input.subscriptionId, input.token)
-  }
-
-  async consumeConfirmation(token: string, now: Date) {
-    const stored = this.confirmations.get(token)
-    if (stored == null) return null
-
-    this.confirmations.delete(token)
-    if (this.confirmationBySubscription.get(stored.subscriptionId) === token) {
-      this.confirmationBySubscription.delete(stored.subscriptionId)
-    }
-
-    if (stored.expiresAt.getTime() <= now.getTime()) return null
-    return {
-      contactId: stored.contactId,
-      subscriptionId: stored.subscriptionId
-    }
-  }
-
-  async revokeConfirmations(subscriptionId: string): Promise<void> {
-    const token = this.confirmationBySubscription.get(subscriptionId)
-    if (token != null) this.confirmations.delete(token)
-    this.confirmationBySubscription.delete(subscriptionId)
-  }
-
-  async replaceUnsubscribeCapability(input: {
-    readonly capability: string
-    readonly contactId: string
-    readonly subscriptionId: string
-  }): Promise<void> {
-    await this.revokeUnsubscribeCapabilities(input.subscriptionId)
-    this.unsubscribe.set(input.capability, {
-      scope: 'SUBSCRIPTION',
-      contactId: input.contactId,
-      subscriptionId: input.subscriptionId
-    })
-    this.unsubscribeBySubscription.set(
-      input.subscriptionId,
-      input.capability
-    )
-  }
-
-  async replaceUnsubscribeAllCapability(input: {
-    readonly capability: string
-    readonly contactId: string
-  }): Promise<void> {
-    const previous = this.unsubscribeAllByContact.get(input.contactId)
-    if (previous != null) this.unsubscribe.delete(previous)
-    this.unsubscribe.set(input.capability, {
-      scope: 'ALL',
-      contactId: input.contactId
-    })
-    this.unsubscribeAllByContact.set(input.contactId, input.capability)
-  }
-
-  async resolveUnsubscribeCapability(capability: string) {
-    return clone(this.unsubscribe.get(capability) ?? null)
-  }
-
-  async revokeUnsubscribeCapabilities(subscriptionId: string): Promise<void> {
-    const capability = this.unsubscribeBySubscription.get(subscriptionId)
-    if (capability != null) this.unsubscribe.delete(capability)
-    this.unsubscribeBySubscription.delete(subscriptionId)
-  }
-
-  async revokeUnsubscribeAllCapability(contactId: string): Promise<void> {
-    const capability = this.unsubscribeAllByContact.get(contactId)
-    if (capability != null) this.unsubscribe.delete(capability)
-    this.unsubscribeAllByContact.delete(contactId)
-  }
-}
-
 /**
- * Creates an isolated capability adapter for tests and development.
- * Stores raw opaque values in memory and provides no production token security.
+ * Creates secure capabilities with an ephemeral signing key. Confirmation
+ * digests live in the storage transaction's token store. The key does not
+ * survive a restart.
  */
-export function memoryCapabilities(): MemoryNewsletterCapabilities {
-  return new MemoryNewsletterCapabilities()
+export function memoryCapabilities(): NewsletterCapabilities {
+  return createSecureCapabilities({
+    hmacSecret: crypto.getRandomValues(new Uint8Array(32))
+  })
 }
+
+
+export {
+  MemoryConfirmationTokenStore,
+  MemoryRateLimiter,
+  memoryConfirmationTokenStore,
+  memoryRateLimiter
+} from './memory-security.js'

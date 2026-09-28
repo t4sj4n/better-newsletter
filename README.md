@@ -2,7 +2,7 @@
 
 Framework-agnostic newsletter subscription and consent lifecycle infrastructure for TypeScript.
 
-> **Status:** early development. The core subscription lifecycle is implemented; production token hardening, database and delivery adapters follow in issues #3–#6.
+> **Status:** early development. The core lifecycle and production security primitives are implemented; persistent PostgreSQL and delivery/framework adapters follow in issues #4–#6.
 
 ## Scope
 
@@ -77,14 +77,121 @@ const newsletter = createNewsletter({
   storage,
   mailer,
   capabilities,
-  tokenGenerator,
   confirmation: {
     expiresInMs: 24 * 60 * 60 * 1000
   }
 })
 ```
 
-Time and IDs can be injected for deterministic tests.
+Time, IDs, and confirmation-token generation can be injected for deterministic tests. When no token generator is supplied, the core uses a Web Crypto generator that produces 32 random bytes.
+
+## Production security
+
+The security layer is framework- and database-neutral:
+
+```ts
+import {
+  createNewsletter,
+  createSecureCapabilities
+} from 'better-newsletter'
+
+const capabilities = createSecureCapabilities({
+  hmacSecret: process.env.NEWSLETTER_LINK_SECRET!
+})
+
+const newsletter = createNewsletter({
+  storage,
+  mailer,
+  capabilities
+})
+```
+
+The host supplies the lifecycle storage contract. Each storage transaction exposes a `confirmationTokens: ConfirmationTokenStore`, and the capabilities receive that store for every confirmation operation. Token replacement, consumption and revocation therefore commit or roll back together with lifecycle state and events. No unsubscribe nonce store is needed. Issue #4 will provide the PostgreSQL/Kysely implementation.
+
+Security properties:
+
+- confirmation tokens use 32 bytes of Web Crypto entropy by default;
+- only SHA-256 confirmation-token digests are persisted;
+- confirmation consumption is single-use and must be atomic in the token store;
+- confirmation links are scoped to a Subscription ID and its persisted lifecycle generation;
+- unsubscribe links are HMAC-SHA-256 signed and purpose-bound;
+- unsubscribe capabilities contain no e-mail address;
+- signed target IDs and generations remove mutable nonce initialization and issuance races;
+- per-audience unsubscribe and unsubscribe-all use distinct purposes;
+- re-subscription atomically increments subscription and contact generations, invalidating old capabilities even when their resolution was already in flight;
+- expired, consumed, and revoked confirmation records can be removed through explicit cleanup.
+
+Use a secret with at least 32 bytes for HMAC signing. `createSecureCapabilities()` and `createHmacRateLimitKeyProvider()` throw `INVALID_CONFIGURATION` synchronously for a shorter or missing secret.
+
+### Lifecycle generations and adapter requirements
+
+`Subscription.lifecycleGeneration` and `Contact.capabilityGeneration` start at `1` and are positive safe integers. A re-subscription increments both in the same transaction that records fresh consent and queues confirmation work. Adding a new audience to an existing Contact, through signup or trusted import, increments `capabilityGeneration`. Repeated pending or active signups do not increment either generation or rewrite consent.
+
+Confirmation and per-audience unsubscribe targets carry `lifecycleGeneration`; unsubscribe-all targets carry `capabilityGeneration`. The core compares the resolved generation with the current persisted row **inside the state-transition transaction**. Resolving or verifying a signed capability alone is not authorization: a previously signed target may belong to an old generation.
+
+Contact-wide generation changes invalidate previous unsubscribe-all links whenever any audience starts a new consent cycle. Per-audience generations keep other audiences independent. Repeated unsubscribe requests remain idempotent until a new cycle starts.
+
+Storage adapters must serialize conflicting contact-wide and subscription operations, including generation checks, generation increments, confirmation-delivery claims, token-store writes, state updates, and event appends. Roll them back together. Either run transactions with SERIALIZABLE isolation or lock every contact and subscription row read inside a transaction (for example `SELECT ... FOR UPDATE`). The core always reads the contact before its subscriptions, and subscriptions before locking token records; `ConfirmationTokenStore.resolve()` is a non-locking read. `listEvents()` returns events in append order.
+
+Adapters report unique-constraint violations, serialization failures, and deadlocks as `StorageConflictError`. The core then re-runs the whole transaction callback, up to `transactionMaxAttempts` (default `3`). Callbacks have no side effects outside the transaction, so re-running them is safe. For example, two concurrent first signups for the same address both succeed: the losing insert is retried and observes the other Contact. IDs must never be reused, and generations must never be reset on existing rows. Injected ID generators must produce unique IDs across service instances.
+
+`ConfirmationTokenStore.replace()` must atomically enforce replacement and bounded retention within `(subscriptionId, lifecycleGeneration)`, retaining the newest records first and breaking timestamp ties by insertion order. Revocation is also generation-scoped, so it cannot revoke a new cycle's tokens. Confirmation resolves, checks, and consumes the token inside the activation transaction, so a rolled-back activation does not burn its token. Unsubscribe, unsubscribe-all, and suppression revoke pending confirmation tokens in the same transaction.
+
+These are breaking pre-release contract changes: adapters must persist both generation fields, `Subscription.confirmationDelivery`, and the generation on confirmation-token records. The nonce-store API and legacy opaque unsubscribe replacement hooks have been removed. Existing `bn1` links are not accepted; newly issued generation-bound links use `bn2`.
+
+### Scanner-safe web flows
+
+Core methods are mutation methods. Framework integrations should use a safe landing page and an explicit mutation:
+
+```text
+GET link
+  -> render confirmation/unsubscribe page
+  -> POST/action
+  -> confirm() or unsubscribe()
+```
+
+Do not confirm or unsubscribe merely because an e-mail security scanner or link preview performed a GET. An application may deliberately implement a browser-side auto-POST confirmation flow, but it is not the library default.
+
+### Cleanup
+
+Token expiry and physical deletion are separate. Expired tokens become invalid immediately; cleanup is explicit and scheduler-neutral:
+
+```ts
+await newsletter.cleanupConfirmationTokens({
+  retentionMs: 7 * 24 * 60 * 60 * 1000
+})
+```
+
+Call this from the scheduler appropriate to the host runtime.
+
+## Abuse protection
+
+`subscribe()` and `resendConfirmation()` support a generic `AbuseGuard` plus provider-neutral rate limiting:
+
+```ts
+import {
+  createHmacRateLimitKeyProvider
+} from 'better-newsletter/security'
+
+const newsletter = createNewsletter({
+  storage,
+  mailer,
+  capabilities,
+  abuseGuard,
+  rateLimiter,
+  rateLimitKeyProvider: createHmacRateLimitKeyProvider({
+    secret: process.env.NEWSLETTER_RATE_LIMIT_SECRET!
+  })
+})
+```
+
+The built-in HMAC key provider derives opaque 64-character keys instead of passing raw e-mail addresses to the rate limiter. A framework adapter may supply trusted request context and a custom material function for an IP/fingerprint-based policy.
+
+A rejected request throws `NewsletterError` with code `RATE_LIMITED` and, when the limiter reports it, `retryAfterMs` for a `Retry-After` response header.
+
+Rate limiting is intentionally not represented by a silent production no-op. If a `rateLimiter` is configured, a `rateLimitKeyProvider` is required as well. Signup and resend use separate action buckets and policies.
+
+The generic abuse guard can integrate a honeypot, Cloudflare Turnstile, hCaptcha, ALTCHA, WAF/session proof, or another host-owned mechanism without coupling the core to that provider.
 
 ## Subscribe and confirm
 
@@ -117,7 +224,41 @@ Confirmation is capability-based:
 await newsletter.confirm({ token })
 ```
 
-The capability contract is intentionally abstract in #2. Issue #3 owns cryptographic generation, hashed persistence, expiry cleanup, replay hardening and scanner-safe web integration.
+Production confirmation capabilities are provided by `createSecureCapabilities()`. Raw confirmation tokens are never persisted by that implementation: only SHA-256 digests are passed to the token store. Tokens are purpose-bound, subscription-bound, expiring, and atomically consumable through the store contract.
+
+The default resend policy retains at most the immediately previous still-valid confirmation token (`maxActiveTokens: 2`) to tolerate ambiguous mail-provider timeouts without allowing an unbounded set of live links. Applications may instead choose `REPLACE_PREVIOUS`.
+
+### Retrying unfinished confirmation work
+
+Signup persists a `confirmationDelivery` work item together with pending consent, before starting asynchronous processing. Its stable `id`, unique `attemptId`, and `leaseExpiresAt` let independent service instances claim work transactionally without an in-process lock. Concurrent signups reuse the pending work rather than starting duplicate live attempts.
+
+The mailer receives the `deliveryId` of the work item, the current `attemptId`, the `audienceKey`, and the `lifecycleGeneration`, next to the Contact, the claimed Subscription and the token. `deliveryId` stays stable across retries of the same work and suits correlation. Every attempt carries a fresh token, so use `attemptId` as a provider idempotency key.
+
+Accepted delivery atomically sets `confirmationSentAt`, clears the work item, and appends its delivery event. A mailer reports a failed send as `{ accepted: false, failure }`:
+
+- `TEMPORARY` (the default, also used when the mailer throws or token setup fails): the claim is released for an immediate retry.
+- `PERMANENT`: the work item is dropped; a later `subscribe()` does not retry it, while `resendConfirmation()` starts new work.
+- `AMBIGUOUS`: the provider may have sent the message. The claim is kept until its lease expires, so an immediate retry cannot add another message. The retry after expiry is a new attempt of the same work item.
+
+Each failure records `CONFIRMATION_SEND_FAILED` with its `outcome` and `stage`. If the Contact was suppressed after the claim, the claim is released and the event records stage `ELIGIBILITY`. Failures do not discard possibly delivered tokens; the configured bounded retention policy still applies. A subsequent `subscribe()` or `resendConfirmation()` resumes unfinished work without replacing consent or incrementing generations.
+
+Delivery result events carry `deliveryId`, `attemptId`, `lifecycleGeneration`, `authoritative`, and `outcome` (`ACCEPTED`, `TEMPORARY`, `PERMANENT`, or `AMBIGUOUS`). `CONFIRMATION_SENT` and `CONFIRMATION_SEND_FAILED` always mean `authoritative: true`: the result belongs to the attempt that currently owns the work and was allowed to finalize it. A result from a superseded attempt is recorded as `CONFIRMATION_STALE_RESULT` with `authoritative: false` and never changes Subscription state. An attempt is superseded when its lease was reclaimed by a newer attempt, or when the work ended in the meantime (confirmation, unsubscribe, or a new lifecycle generation).
+
+If a process stops or result persistence fails, the work remains recoverable after its lease expires. Configure `confirmation.deliveryLeaseMs` for the expected provider timeout; it defaults to five minutes. A later attempt gets a new attempt ID. Token replacement runs under the lifecycle transaction's ownership check; completion also checks ownership, so an older worker cannot replace newer tokens, clear newer work, or modify a new consent cycle. Capability adapters must support being called from lifecycle transactions without re-entering the same lifecycle locks. Delivery events identify the lifecycle generation and attempt.
+
+Delivery is **at least once**, not exactly once: an ambiguous provider result or expired lease can lead to another message. The core does not run a scheduler or automatically drain pending work after restart. Hosts must keep asynchronous processing alive or trigger retry through signup/resend.
+
+Both `subscribe()` and `resendConfirmation()` answer before delivery finishes, so neither response time nor delivery errors reveal whether an address has pending work. Pass `runBackground` to hand the background work to the runtime, for example to `event.waitUntil()` on serverless platforms. The tasks it receives never reject. Background failures are reported through `logger.error` (default: `console`); failures of the synchronous state transition propagate to the caller.
+
+```ts
+const newsletter = createNewsletter({
+  storage,
+  mailer,
+  capabilities,
+  runBackground: task => event.waitUntil(task),
+  logger
+})
+```
 
 ## Unsubscribe and preferences
 
@@ -212,6 +353,7 @@ RESUBSCRIBED
 CONFIRMATION_REQUESTED
 CONFIRMATION_SENT
 CONFIRMATION_SEND_FAILED
+CONFIRMATION_STALE_RESULT
 CONFIRMED
 UNSUBSCRIBED
 SUPPRESSED
@@ -235,9 +377,9 @@ import {
 
 `memoryStorage()` serializes conflicting in-process transactions so lifecycle concurrency can be tested deterministically.
 
-`memoryCapabilities()` stores raw opaque values in memory and is **not production security**. It exists to exercise #2 without prematurely implementing #3. Do not use it as a production confirmation/unsubscribe token store.
+`memoryCapabilities()` uses the real hashing/HMAC implementation with an ephemeral signing key. Confirmation digests live in `memoryStorage()` and roll back with its transactions; `confirmationTokenSnapshot()` exposes the committed records for assertions. For distributed-style tests, combine separate `createSecureCapabilities()` instances with the same signing key and one shared `memoryStorage()`. The memory storage reports duplicate inserts as `StorageConflictError`. None of the memory stores are durable production persistence.
 
-Production storage must provide transaction semantics strong enough to serialize conflicting Contact + audience transitions. The PostgreSQL/Kysely adapter in #4 will additionally enforce database uniqueness and atomicity.
+Production storage must provide transaction semantics strong enough to serialize conflicting contact-wide and subscription transitions, including generation checks and delivery claims. The PostgreSQL/Kysely adapter in #4 will enforce database uniqueness and atomicity.
 
 ## Development
 
@@ -279,7 +421,7 @@ listmonk is AGPLv3. This MIT project does **not** copy or port listmonk implemen
 
 Issue #2 implements the framework-neutral lifecycle and consent model. The following remain separate:
 
-- #3: cryptographic token/capability security, abuse protection and cleanup;
+- #3: cryptographic token/capability security, abuse protection and cleanup (implemented here);
 - #4: Kysely/PostgreSQL persistence;
 - #5: Resend delivery adapter;
 - #6: Nuxt/Nitro integration;

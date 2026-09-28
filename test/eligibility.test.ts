@@ -13,6 +13,7 @@ const now = new Date('2026-09-28T08:00:00.000Z')
 function contact(overrides: Partial<Contact> = {}): Contact {
   return {
     id: 'contact-1',
+    capabilityGeneration: 1,
     email: 'person@example.com',
     status: CONTACT_STATUSES.ENABLED,
     subject: null,
@@ -28,6 +29,8 @@ function subscription(
 ): Subscription {
   return {
     id: `subscription-${audienceKey}`,
+    lifecycleGeneration: 1,
+    confirmationDelivery: null,
     contactId: 'contact-1',
     audienceKey,
     status: SUBSCRIPTION_STATUSES.ACTIVE,

@@ -1,5 +1,6 @@
 import type {
   ConsentEvidence,
+  ConfirmationDelivery,
   Contact,
   ContactStatus,
   ExternalSubject,
@@ -8,9 +9,11 @@ import type {
   Subscription,
   SubscriptionStatus
 } from './domain.js'
+import type { ConfirmationTokenStore } from './security.js'
 
 export interface CreateContactInput {
   readonly id: string
+  readonly capabilityGeneration: number
   readonly email: string
   readonly status: ContactStatus
   readonly subject: ExternalSubject | null
@@ -24,6 +27,7 @@ export interface CreateContactInput {
 export type ContactPatch = Partial<Pick<
   Contact,
   | 'status'
+  | 'capabilityGeneration'
   | 'subject'
   | 'metadata'
   | 'suppressedAt'
@@ -33,10 +37,12 @@ export type ContactPatch = Partial<Pick<
 
 export interface CreateSubscriptionInput {
   readonly id: string
+  readonly lifecycleGeneration: number
   readonly contactId: string
   readonly audienceKey: string
   readonly status: SubscriptionStatus
   readonly consent: ConsentEvidence
+  readonly confirmationDelivery: ConfirmationDelivery | null
   readonly confirmationSentAt?: Date | null
   readonly confirmedAt?: Date | null
   readonly unsubscribedAt?: Date | null
@@ -47,6 +53,8 @@ export interface CreateSubscriptionInput {
 export type SubscriptionPatch = Partial<Pick<
   Subscription,
   | 'status'
+  | 'lifecycleGeneration'
+  | 'confirmationDelivery'
   | 'consent'
   | 'confirmationSentAt'
   | 'confirmedAt'
@@ -73,13 +81,32 @@ export interface NewsletterStorageTransaction {
   listSubscriptions(contactId: string): Promise<readonly Subscription[]>
 
   appendEvent(event: NewsletterEvent): Promise<void>
+  /** Returns events in append order, including events sharing a timestamp. */
   listEvents(contactId: string): Promise<readonly NewsletterEvent[]>
+
+  /**
+   * Confirmation-token records bound to this transaction. Token replacement,
+   * consumption and revocation commit or roll back with lifecycle state.
+   */
+  readonly confirmationTokens: ConfirmationTokenStore
 }
 
 /**
- * A production adapter must provide transaction semantics strong enough to
- * serialize conflicting Contact + audience lifecycle transitions. Database
- * adapters should enforce uniqueness independently as a second line of defense.
+ * Transaction contract for production adapters:
+ *
+ * - Conflicting contact-wide and subscription transitions must be serialized,
+ *   including generation checks, delivery claims, token-store writes and
+ *   event appends. Use SERIALIZABLE isolation, or lock every contact and
+ *   subscription row read inside the transaction (e.g. `SELECT ... FOR UPDATE`).
+ * - The core reads rows in a fixed order: contact before subscriptions before
+ *   locking confirmation-token writes. `confirmationTokens.resolve()` is a
+ *   non-locking read, so row-locking adapters keep a deadlock-free order.
+ * - Unique-constraint violations, serialization failures and deadlocks must be
+ *   thrown as `StorageConflictError`. The core then re-runs the whole callback,
+ *   so a concurrent first signup observes the contact the other one created.
+ * - Callbacks are retry-safe: they have no side effects outside the
+ *   transaction. Adapters must not retry by themselves after a partial commit.
+ * - State, token records and events commit or roll back together.
  */
 export interface NewsletterStorage {
   transaction<T>(

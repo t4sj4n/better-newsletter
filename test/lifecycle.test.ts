@@ -5,7 +5,8 @@ import {
   NEWSLETTER_EVENT_TYPES,
   SUBSCRIPTION_STATUSES,
   createNewsletter,
-  type ConfirmationMailInput
+  type ConfirmationMailInput,
+  type NewsletterStorage
 } from '../src/index.js'
 import {
   memoryCapabilities,
@@ -441,6 +442,100 @@ describe('newsletter lifecycle', () => {
     })
     await expect(newsletter.unsubscribeAll({ capability: freshAll! }))
       .resolves.toEqual({ unsubscribed: true })
+  })
+
+  it('invalidates old unsubscribe-all links when an import adds an audience', async () => {
+    const { newsletter } = setup()
+    const history = {
+      email: 'legacy@example.com',
+      status: SUBSCRIPTION_STATUSES.ACTIVE,
+      consent: { version: 'legacy-v1', consentedAt: new Date('2025-01-01T00:00:00.000Z') },
+      confirmedAt: new Date('2025-01-01T00:05:00.000Z')
+    } as const
+    await newsletter.importSubscription({ ...history, audience: 'a' })
+    const oldAll = (await newsletter.createUnsubscribeCapability({
+      email: history.email, all: true
+    }))!
+
+    await newsletter.importSubscription({ ...history, audience: 'b' })
+    await newsletter.importSubscription({ ...history, audience: 'b' })
+
+    expect(await newsletter.getContact({ email: history.email }))
+      .toMatchObject({ capabilityGeneration: 2 })
+    await expect(newsletter.unsubscribeAll({ capability: oldAll }))
+      .resolves.toEqual({ unsubscribed: false })
+    expect((await newsletter.listSubscriptions({ email: history.email }))
+      .map(subscription => subscription.status))
+      .toEqual([SUBSCRIPTION_STATUSES.ACTIVE, SUBSCRIPTION_STATUSES.ACTIVE])
+  })
+
+  it('treats null and omitted consent fields as equal on repeated import', async () => {
+    const storage = memoryStorage()
+    // SQL adapters read omitted optional columns back as null.
+    const sqlLike: NewsletterStorage = {
+      transaction: operation => storage.transaction(transaction => operation({
+        ...transaction,
+        async getSubscription(contactId, audienceKey) {
+          const subscription = await transaction.getSubscription(contactId, audienceKey)
+          return subscription == null
+            ? null
+            : { ...subscription, consent: { ...subscription.consent, source: null, locale: null } }
+        }
+      }))
+    }
+    const newsletter = createNewsletter({
+      storage: sqlLike,
+      capabilities: memoryCapabilities(),
+      mailer: { async sendConfirmation() { return { accepted: true } } }
+    })
+    const input = {
+      email: 'legacy@example.com',
+      status: SUBSCRIPTION_STATUSES.ACTIVE,
+      consent: { version: 'legacy-v1', consentedAt: new Date('2025-01-01T00:00:00.000Z') },
+      confirmedAt: new Date('2025-01-01T00:05:00.000Z')
+    } as const
+
+    await newsletter.importSubscription(input)
+    await expect(newsletter.importSubscription(input)).resolves.toMatchObject({
+      audienceKey: 'default',
+      status: SUBSCRIPTION_STATUSES.ACTIVE
+    })
+    await expect(newsletter.importSubscription({
+      ...input,
+      consent: { ...input.consent, source: 'other' }
+    })).rejects.toMatchObject({ code: NEWSLETTER_ERROR_CODES.IMPORT_CONFLICT })
+  })
+
+  it('hands background work to runBackground and reports failures through the logger', async () => {
+    const storage = memoryStorage()
+    const tasks: Promise<void>[] = []
+    const logger = { error: vi.fn() }
+    const newsletter = createNewsletter({
+      storage: {
+        transaction: operation => storage.transaction(transaction => operation({
+          ...transaction,
+          async appendEvent(event) {
+            if (event.type === NEWSLETTER_EVENT_TYPES.CONFIRMATION_REQUESTED) {
+              throw new Error('claim failed')
+            }
+            await transaction.appendEvent(event)
+          }
+        }))
+      },
+      capabilities: memoryCapabilities(),
+      mailer: { async sendConfirmation() { return { accepted: true } } },
+      runBackground: task => { tasks.push(task) },
+      logger
+    })
+
+    await expect(newsletter.subscribe({ email: 'person@example.com', consent: consent() }))
+      .resolves.toEqual({ accepted: true })
+    await expect(newsletter.resendConfirmation({ email: 'person@example.com' }))
+      .resolves.toEqual({ accepted: true })
+    expect(tasks).toHaveLength(2)
+    await expect(Promise.all(tasks)).resolves.toEqual([undefined, undefined])
+    expect(logger.error).toHaveBeenCalledTimes(2)
+    expect(logger.error.mock.calls[0]?.[1]).toMatchObject({ message: 'claim failed' })
   })
 
   it('requires explicit consent', async () => {

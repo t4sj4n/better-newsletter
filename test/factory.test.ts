@@ -37,6 +37,17 @@ describe('createNewsletter', () => {
     expect(newsletter.clock.now()).toBeInstanceOf(Date)
   })
 
+  it('uses the secure Web Crypto token generator by default', () => {
+    const newsletter = createNewsletter({
+      storage: memoryStorage(),
+      capabilities: memoryCapabilities(),
+      mailer
+    })
+
+    const token = newsletter.tokenGenerator.generate()
+    expect(token).toMatch(/^[0-9a-f]{64}$/u)
+  })
+
   it('accepts injected deterministic dependencies', () => {
     const now = new Date('2026-09-28T08:00:00.000Z')
     const deterministicTokenGenerator = { generate: () => 'deterministic-token' }
@@ -89,4 +100,28 @@ describe('createNewsletter', () => {
         .toBe(NEWSLETTER_ERROR_CODES.INVALID_CONFIGURATION)
     }
   })
+
+  it.each([0, -1, 1.5, Infinity, Number.MAX_SAFE_INTEGER + 1])(
+    'rejects an invalid confirmation delivery lease: %s',
+    deliveryLeaseMs => {
+      expect(() => createNewsletter({
+        storage: memoryStorage(),
+        capabilities: memoryCapabilities(),
+        mailer,
+        confirmation: { deliveryLeaseMs }
+      })).toThrow('confirmation.deliveryLeaseMs must be a positive safe integer.')
+    }
+  )
+
+  it.each([0, -1, 1.5, Infinity])(
+    'rejects invalid transactionMaxAttempts: %s',
+    transactionMaxAttempts => {
+      expect(() => createNewsletter({
+        storage: memoryStorage(),
+        capabilities: memoryCapabilities(),
+        mailer,
+        transactionMaxAttempts
+      })).toThrow('transactionMaxAttempts must be a positive safe integer.')
+    }
+  )
 })

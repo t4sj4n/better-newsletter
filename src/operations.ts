@@ -19,11 +19,13 @@ export interface SubscribeInput {
   }
   readonly subject?: ExternalSubject
   readonly metadata?: Readonly<Record<string, JsonValue>>
+  readonly securityContext?: unknown
 }
 
 export interface ResendConfirmationInput {
   readonly email: string
   readonly audience?: string
+  readonly securityContext?: unknown
 }
 
 export interface ConfirmInput {
@@ -46,6 +48,10 @@ export interface CreateUnsubscribeCapabilityInput {
   readonly email: string
   readonly audience?: string
   readonly all?: boolean
+}
+
+export interface CleanupConfirmationTokensInput {
+  readonly retentionMs?: number
 }
 
 export type ContactLookup =
@@ -103,6 +109,10 @@ export interface NewsletterService {
   createUnsubscribeCapability(
     input: CreateUnsubscribeCapabilityInput
   ): Promise<string | null>
+
+  cleanupConfirmationTokens(
+    input?: CleanupConfirmationTokensInput
+  ): Promise<number>
 
   getContact(input: ContactLookup): Promise<Contact | null>
   getSubscription(input: SubscriptionLookup): Promise<Subscription | null>

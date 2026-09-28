@@ -522,7 +522,7 @@ export default defineBetterNewsletterConfig(async () => ({
     async sendConfirmation(input) {
       // Implement server-side delivery using a link to
       // new URL(`/newsletter/confirm?token=${encodeURIComponent(input.token)}`, appOrigin).
-      // Never log or persist raw tokens; see examples/nuxt for a local-only inbox.
+      // Never log or persist raw tokens; see playground/ for a local-only inbox.
       return { accepted: false, failure: 'TEMPORARY' }
     }
   }
@@ -580,20 +580,30 @@ For production, replace memory adapters with `kyselyStorage(db)` and `kyselyRate
 
 ### Local example and package smoke test
 
-[`examples/nuxt`](examples/nuxt/README.md) is a runnable Nuxt 4 demo with three audiences, a local development inbox, safe GET landing pages, explicit POST lifecycle actions and preferences read, and simulated failure/expiry. From this repository checkout, build the package before starting the demo:
+[`playground/`](playground/README.md) is a runnable Nuxt 4 consumer of the public package API with three audiences, a local development inbox, safe GET landing pages, explicit POST lifecycle actions and preferences read, and simulated failure/expiry. It is part of the GitHub repository, not the published package. From this repository checkout, build the package before starting the demo:
 
 ```bash
 pnpm install --frozen-lockfile
 pnpm build
-pnpm --dir examples/nuxt install
-pnpm --dir examples/nuxt dev
+pnpm --dir playground install
+pnpm --dir playground dev
 ```
 
-For an artifact-level smoke test instead of the example's `link:../..` dependency, build and pack the **root** package with `pnpm pack --pack-destination examples/nuxt`; install the resulting `.tgz` in the example with `pnpm --dir examples/nuxt add ./better-newsletter-<version>.tgz`, then run its build. This checks the published `dist` exports, not merely the source checkout. The `.tgz` is a local test artifact; remove it when done.
+For an artifact-level smoke test instead of the playground's `link:..` dependency, pack the **root** package with `pnpm pack --pack-destination playground` (the `prepack` hook builds it); install the resulting `.tgz` in the playground with `pnpm --dir playground add ./better-newsletter-<version>.tgz`, then run its build. This checks the published `dist` exports, not merely the source checkout. Restore `link:..` and remove the local test tarball afterward.
 
 ## Development
 
 This repository uses pnpm.
+
+Repository layout:
+
+| Path | Role |
+| --- | --- |
+| `src/` | Library and Nuxt module implementation. |
+| `playground/` | First-party development/demo Nuxt consumer using public package imports; excluded from the npm artifact. |
+| `test/` | Automated tests and external-consumer fixtures. |
+| `migrations/` | SQL migrations shipped with the package. |
+| `dist/` | Generated package output, not committed to Git. |
 
 ```bash
 pnpm install --frozen-lockfile

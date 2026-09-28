@@ -30,13 +30,21 @@ function checkArchive(tarball) {
     throw new Error(`Unexpected packed package: ${packed.name}`)
   }
 
-  for (const subpath of ['.', './nuxt', './nuxt/server', './nuxt/client']) {
+  for (const subpath of [
+    '.', './memory', './security', './kysely', './resend',
+    './nuxt', './nuxt/server', './nuxt/client'
+  ]) {
     if (!packed.exports?.[subpath]) {
       throw new Error(`Missing package export: ${subpath}`)
     }
   }
 
-  const required = new Set(['package/package.json', 'package/migrations/001_newsletter.sql'])
+  const required = new Set([
+    'package/package.json',
+    'package/README.md',
+    'package/LICENSE',
+    'package/migrations/001_newsletter.sql'
+  ])
   for (const [subpath, entry] of Object.entries(packed.exports)) {
     for (const target of typeof entry === 'string' ? [entry] : Object.values(entry)) {
       if (typeof target !== 'string' || !target.startsWith('./')) {
@@ -48,6 +56,11 @@ function checkArchive(tarball) {
   for (const file of required) {
     if (!files.has(file)) {
       throw new Error(`Missing packed file: ${file}`)
+    }
+  }
+  for (const file of files) {
+    if (/^package\/(?:playground|test|scripts)(?:\/|$)/u.test(file)) {
+      throw new Error(`Development-only file shipped in packed package: ${file}`)
     }
   }
   console.log(`Checked ${packed.name} exports and migration in the tarball`)
@@ -86,6 +99,9 @@ function checkConsumer(name, tarball, peers, types, runtime) {
     if (!Object.hasOwn(peers, peer) && existsSync(join(consumer, 'node_modules', peer))) {
       throw new Error(`Unexpected optional peer in ${name} consumer: ${peer}`)
     }
+  }
+  if (name === 'kysely' && existsSync(join(consumer, 'node_modules', 'pg'))) {
+    throw new Error('Kysely consumer unexpectedly installed PostgreSQL')
   }
   run('pnpm', ['exec', 'tsc', '-p', 'tsconfig.json'], consumer)
   run('node', ['--no-warnings=ExperimentalWarning', '--loader', join(scratch, 'isolate.mjs'), 'smoke.mjs'],
@@ -139,6 +155,47 @@ const [core, memory, security] = await Promise.all([
 if (typeof core.createNewsletter !== 'function' ||
     !Object.keys(memory).length || !Object.keys(security).length) {
   throw new Error('Core runtime imports are incomplete')
+}
+`)
+
+  checkConsumer('kysely', tarball, {
+    kysely: manifest.peerDependencies.kysely
+  }, `
+import { kyselyStorage, kyselyRateLimiter } from 'better-newsletter/kysely'
+import type { Kysely } from 'kysely'
+declare const hostDb: Kysely<{}>
+const storage = kyselyStorage(hostDb)
+const limiter = kyselyRateLimiter(hostDb)
+void [storage, limiter]
+`, `
+import { kyselyStorage, kyselyRateLimiter } from 'better-newsletter/kysely'
+if (typeof kyselyStorage !== 'function' || typeof kyselyRateLimiter !== 'function') {
+  throw new Error('Kysely adapter runtime exports are missing')
+}
+if (typeof kyselyStorage({})?.transaction !== 'function' ||
+    typeof kyselyRateLimiter({})?.consume !== 'function') {
+  throw new Error('Kysely adapters cannot be constructed from a host database')
+}
+`)
+
+  checkConsumer('resend', tarball, {}, `
+import { resendMailer } from 'better-newsletter/resend'
+const mailer = resendMailer({
+  apiKey: 'smoke-only',
+  from: 'test@example.com',
+  renderConfirmation: () => ({ subject: 'Test', text: 'Test' })
+})
+void mailer
+`, `
+import { resendMailer } from 'better-newsletter/resend'
+const mailer = resendMailer({
+  apiKey: 'smoke-only',
+  from: 'test@example.com',
+  renderConfirmation: () => ({ subject: 'Test', text: 'Test' }),
+  fetch: async () => { throw new Error('The smoke test must not contact Resend') }
+})
+if (typeof mailer.sendConfirmation !== 'function') {
+  throw new Error('Resend API-key adapter could not be constructed without the SDK')
 }
 `)
 

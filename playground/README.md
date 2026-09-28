@@ -1,6 +1,6 @@
-# Nuxt 4 / Nitro development demo
+# Nuxt 4 / Nitro development playground
 
-This example links the repository's local package (`link:../..`), uses process-local `memoryStorage()` and `memoryCapabilities()`, and a server-only fake mailer. No database, Resend account, API key or real email is needed. It is **not a production starter**: every restart loses consent, confirmation links and signing keys. Production builds cannot use the demo service or the development-only inbox/control endpoints.
+This playground consumes the repository's public package exports through a local link (`link:..`), uses process-local `memoryStorage()` and `memoryCapabilities()`, and a server-only fake mailer. No database, Resend account, API key or real email is needed. It is **not a production starter**: every restart loses consent, confirmation links and signing keys. Production builds cannot use the demo service or the development-only inbox/control endpoints.
 
 ## Run locally
 
@@ -9,11 +9,11 @@ Use Node.js 20.11+ and pnpm. From the repository root:
 ```bash
 pnpm install --frozen-lockfile
 pnpm build
-pnpm --dir examples/nuxt install
-pnpm --dir examples/nuxt dev
+pnpm --dir playground install
+pnpm --dir playground dev
 ```
 
-Visit `http://localhost:3000`. If you run on a different origin, set `DEMO_APP_ORIGIN` to that fixed URL **before** starting Nuxt (for example, `DEMO_APP_ORIGIN=http://localhost:3001 pnpm --dir examples/nuxt dev --port 3001`). The application supplies this trusted origin; no incoming Host header is used to build links.
+Visit `http://localhost:3000`. If you run on a different origin, set `DEMO_APP_ORIGIN` to that fixed URL **before** starting Nuxt (for example, `DEMO_APP_ORIGIN=http://localhost:3001 pnpm --dir playground dev --port 3001`). The application supplies this trusted origin; no incoming Host header is used to build links.
 
 `nuxt.config.ts` registers `BetterNewsletter` from `better-newsletter/nuxt` with a public allowlist for `default`, `product-news` and `weekly-analysis`, and a fixed consent version/source. `server/better-newsletter.config.ts` uses the server-only `defineBetterNewsletterConfig` factory with a trusted application origin. Demo-only routes call the server-only `useBetterNewsletter(event)` accessor. The module owns five POST lifecycle endpoints and the read-only POST preferences endpoint; the example provides pages and **development-only** helper routes, not replacement public lifecycle endpoints.
 
@@ -36,9 +36,9 @@ For a published-artifact smoke test from the repository root:
 
 ```bash
 pnpm build
-pnpm pack --pack-destination examples/nuxt
-pnpm --dir examples/nuxt add ./better-newsletter-<version>.tgz
-pnpm --dir examples/nuxt build
+pnpm pack --pack-destination playground
+pnpm --dir playground add ./better-newsletter-<version>.tgz
+pnpm --dir playground build
 ```
 
-Replace `<version>` with the tarball name printed by `pnpm pack`. This changes the example's dependency for your local test; revert it to `"link:../.."` afterward and remove the test tarball. Do not commit packed artifacts. The root README documents production Kysely/PostgreSQL + Resend configuration, route overrides/disablement, trusted origins, abuse protection and deployment background-task requirements.
+Replace `<version>` with the tarball name printed by `pnpm pack`. This changes the example's dependency for your local test; revert it to `"link:.."` afterward and remove the test tarball. Do not commit packed artifacts. The root README documents production Kysely/PostgreSQL + Resend configuration, route overrides/disablement, trusted origins, abuse protection and deployment background-task requirements.

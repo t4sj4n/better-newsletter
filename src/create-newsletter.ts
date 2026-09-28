@@ -534,6 +534,7 @@ export function createNewsletter(config: NewsletterConfig): NewsletterCore {
 
       const transition = await config.storage.transaction(async transaction => {
         let contact = await transaction.getContactByEmail(email)
+        let contactCreated = false
 
         if (contact == null) {
           contact = await transaction.createContact({
@@ -546,6 +547,7 @@ export function createNewsletter(config: NewsletterConfig): NewsletterCore {
             createdAt: now,
             updatedAt: now
           })
+          contactCreated = true
         }
 
         let subscription = await transaction.getSubscription(
@@ -554,6 +556,13 @@ export function createNewsletter(config: NewsletterConfig): NewsletterCore {
         )
 
         if (subscription == null) {
+          if (!contactCreated) {
+            contact = await transaction.updateContact(contact.id, {
+              capabilityGeneration: nextGeneration(contact.capabilityGeneration),
+              updatedAt: now
+            })
+          }
+
           subscription = await transaction.createSubscription({
             id: idGenerator.generate(),
             lifecycleGeneration: 1,
@@ -749,7 +758,7 @@ export function createNewsletter(config: NewsletterConfig): NewsletterCore {
         await config.capabilities.consumeConfirmation(
           input.token,
           clock.now()
-        )
+        ).catch(() => null)
       }
       return result
     },
@@ -799,7 +808,7 @@ export function createNewsletter(config: NewsletterConfig): NewsletterCore {
         await config.capabilities.revokeConfirmations(
           target.subscriptionId,
           target.lifecycleGeneration
-        )
+        ).catch(() => undefined)
       }
       return result
     },
@@ -848,9 +857,12 @@ export function createNewsletter(config: NewsletterConfig): NewsletterCore {
       })
 
       if (changed == null) return NOT_UNSUBSCRIBED
-      await Promise.all(
+      await Promise.allSettled(
         changed.map(subscription =>
-          config.capabilities.revokeConfirmations(subscription.id, subscription.lifecycleGeneration)
+          config.capabilities.revokeConfirmations(
+            subscription.id,
+            subscription.lifecycleGeneration
+          )
         )
       )
       return UNSUBSCRIBED
@@ -1013,9 +1025,12 @@ export function createNewsletter(config: NewsletterConfig): NewsletterCore {
       })
 
       if (transition == null) return null
-      await Promise.all(
+      await Promise.allSettled(
         transition.subscriptions.map(subscription =>
-          config.capabilities.revokeConfirmations(subscription.id, subscription.lifecycleGeneration)
+          config.capabilities.revokeConfirmations(
+            subscription.id,
+            subscription.lifecycleGeneration
+          )
         )
       )
       return transition.contact

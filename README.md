@@ -64,7 +64,7 @@ Repeated public signup is neutral and idempotent:
 - unsubscribed subscriptions require fresh consent and a fresh DOI cycle;
 - suppressed Contacts remain suppressed.
 
-Use the dedicated `resendConfirmation()` operation when a new confirmation message is needed. Abuse throttling and hardened token replacement semantics belong to #3.
+Use the dedicated `resendConfirmation()` operation when a new confirmation message is needed. Abuse throttling and confirmation-token replacement are handled by the security and lifecycle configuration described below.
 
 ## Creating a service
 
@@ -347,7 +347,7 @@ A Contact may optionally link to an application-owned entity:
 await newsletter.linkSubject({
   email: 'person@example.com',
   subject: {
-    namespace: 'tipplabor-user',
+    namespace: 'app-user',
     id: '550e8400-e29b-41d4-a716-446655440000'
   }
 })
@@ -594,7 +594,7 @@ To run the maintainer playground instead:
 pnpm --dir playground dev
 ```
 
-The root pnpm install also installs both consumers through the minimal workspace configuration. Their temporary `link:` dependencies resolve the local package through its public exports. After building the library, run `pnpm --dir examples/basic typecheck` and `pnpm --dir examples/basic build` to validate the small example, or `pnpm --dir playground typecheck` and `pnpm --dir playground build` to validate the full app. The npm prerelease and active StackBlitz demo for `examples/basic/` are tracked separately in #16; no active link is provided before publication.
+The root pnpm install also installs both consumers through the minimal workspace configuration. Their temporary `link:` dependencies resolve the local package through its public exports. After building the library, run `pnpm --dir examples/basic typecheck` and `pnpm --dir examples/basic build` to validate the small example, or `pnpm --dir playground typecheck` and `pnpm --dir playground build` to validate the full app. The active StackBlitz demo will be enabled after the package is available from npm; no active link is provided before publication.
 
 For an artifact-level smoke test instead of the playground's `link:..` dependency, pack the **root** package with `pnpm pack --pack-destination playground` (the `prepack` hook builds it); install the resulting `.tgz` in the playground with `pnpm --dir playground add ./better-newsletter-<version>.tgz`, then run its build. This checks the published `dist` exports, not merely the source checkout. Restore `link:..` and remove the local test tarball afterward.
 
@@ -631,35 +631,6 @@ Set `DATABASE_URL` to a disposable PostgreSQL database to run the integration
 tests (the test user needs `CREATE SCHEMA`). The tests create and remove their
 own isolated schema; without `DATABASE_URL`, they are skipped. CI provisions a
 temporary PostgreSQL service and runs them on every check.
-
-## Design references
-
-### Tipplabor
-
-Tipplabor is the primary behavioral reference. Its existing newsletter implementation already exercises real DOI, re-subscribe, neutral public responses, provider-send result recording, unsubscribe and concurrency edge cases:
-
-- https://github.com/t4sj4n/tipplabor/issues/65
-- https://github.com/t4sj4n/tipplabor/blob/staging/frontend/server/repositories/newsletter-opt-in-repository.ts
-- https://github.com/t4sj4n/tipplabor/blob/staging/frontend/shared/utils/newsletter.ts
-
-The goal is to generalize proven behavior and tests, **not** to copy Tipplabor-specific routes, tables, UI text, account models, launch logic or Cloudflare assumptions.
-
-### listmonk
-
-[listmonk](https://github.com/knadh/listmonk) is a non-normative architectural reference for separating subscriber-wide state from per-list subscription state and for preference-management edge cases.
-
-listmonk is AGPLv3. This MIT project does **not** copy or port listmonk implementation code.
-
-## Issue boundaries
-
-Issue #2 implements the framework-neutral lifecycle and consent model. The following remain separate:
-
-- #3: cryptographic token/capability security, abuse protection and cleanup (implemented here);
-- #4: Kysely/PostgreSQL persistence (implemented here);
-- #5: Resend delivery adapter (implemented here);
-- #6: Nuxt/Nitro integration;
-- #7: provider bounce/complaint feedback;
-- #8: privacy export and erasure lifecycle.
 
 ## License
 

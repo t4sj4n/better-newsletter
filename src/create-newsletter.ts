@@ -290,6 +290,12 @@ export function createNewsletterWithSubscriptionBatch(config: NewsletterConfig) 
     config.rateLimits?.resendConfirmation ?? DEFAULT_RESEND_RATE_LIMIT
   validateRatePolicy('rateLimits.subscribe', subscribeRateLimit)
   validateRatePolicy('rateLimits.resendConfirmation', resendRateLimit)
+  const rateLimitChecks = [
+    ...(config.rateLimitChecks ?? []),
+    ...(config.rateLimiter != null && config.rateLimitKeyProvider != null
+      ? [{ rateLimiter: config.rateLimiter, keyProvider: config.rateLimitKeyProvider, rateLimits: config.rateLimits }]
+      : [])
+  ]
 
   const clock = config.clock ?? systemClock
   const idGenerator = config.idGenerator ?? systemIdGenerator
@@ -339,7 +345,8 @@ export function createNewsletterWithSubscriptionBatch(config: NewsletterConfig) 
     action: PublicAbuseAction,
     email: string,
     audienceKey: string,
-    context: unknown
+    context: unknown,
+    consumedKeys?: readonly Set<string>[]
   ): Promise<void> => {
     if (config.abuseGuard != null) {
       const result = await config.abuseGuard.verify({
@@ -356,13 +363,7 @@ export function createNewsletterWithSubscriptionBatch(config: NewsletterConfig) 
       }
     }
 
-    const checks = [
-      ...(config.rateLimitChecks ?? []),
-      ...(config.rateLimiter != null && config.rateLimitKeyProvider != null
-        ? [{ rateLimiter: config.rateLimiter, keyProvider: config.rateLimitKeyProvider, rateLimits: config.rateLimits }]
-        : [])
-    ]
-    for (const check of checks) {
+    for (const [index, check] of rateLimitChecks.entries()) {
       const policy = action === 'subscribe'
         ? check.rateLimits?.subscribe ?? subscribeRateLimit
         : check.rateLimits?.resendConfirmation ?? resendRateLimit
@@ -379,6 +380,7 @@ export function createNewsletterWithSubscriptionBatch(config: NewsletterConfig) 
           'rateLimitKeyProvider returned an empty key.'
         )
       }
+      if (consumedKeys?.[index]?.has(key)) continue
       const result = await check.rateLimiter.consume({
         key,
         action,
@@ -394,6 +396,7 @@ export function createNewsletterWithSubscriptionBatch(config: NewsletterConfig) 
             : {}
         )
       }
+      consumedKeys?.[index]?.add(key)
     }
   }
 
@@ -1323,11 +1326,12 @@ export function createNewsletterWithSubscriptionBatch(config: NewsletterConfig) 
   return {
     service: Object.freeze(service),
     async subscribeMany(inputs: readonly SubscribeInput[]) {
+      const consumedKeys = rateLimitChecks.map(() => new Set<string>())
       for (const input of inputs) {
         const email = normalizeAndValidateEmail(input.email)
         const audience = assertAudienceKey(input.audience ?? defaultAudience)
         consentFromPublicInput(input.consent, clock.now())
-        await enforcePublicSecurity('subscribe', email, audience, input.securityContext)
+        await enforcePublicSecurity('subscribe', email, audience, input.securityContext, consumedKeys)
       }
       for (const input of inputs) await subscribe(input, true)
       return PUBLIC_ACCEPTED

@@ -319,7 +319,7 @@ describe('Nuxt server integration', () => {
     expect(JSON.stringify(contact)).not.toContain('captcha')
   })
 
-  it.each(['abuse', 'email limit', 'client limit', 'guard error'])(
+  it.each(['abuse', 'email limit', 'guard error'])(
     'does not subscribe any audience when a later audience fails its %s check',
     async failure => {
       const { config, storage, sent } = configuration()
@@ -337,13 +337,6 @@ describe('Nuxt server integration', () => {
           rateLimiter: { consume },
           rateLimitKeyProvider: { createKey: async input => input.audienceKey }
         } : {}),
-        ...(failure === 'client limit' ? {
-          trustedClientIdentity: () => 'trusted-client',
-          clientRateLimit: {
-            secret: 'opaque-client-key-0123456789abcdef0123456789',
-            limiter: { consume }
-          }
-        } : {})
       })
       const result = await http.request('subscribe', {
         email: 'person@example.com', consent: true, consentVersion: '2026-01',
@@ -356,6 +349,32 @@ describe('Nuxt server integration', () => {
       expect(sent).toHaveLength(0)
     }
   )
+
+  it('consumes a shared client limit once for a multi-audience request', async () => {
+    const { config, sent } = configuration()
+    const clientLimiter = memoryRateLimiter()
+    const clientConsume = vi.spyOn(clientLimiter, 'consume')
+    const audienceConsume = vi.fn(async (input: { key: string }) => ({ allowed: input.key.length > 0 }))
+    const http = await fixture({
+      ...config,
+      rateLimiter: { consume: audienceConsume },
+      rateLimitKeyProvider: { createKey: async input => input.audienceKey },
+      trustedClientIdentity: () => 'trusted-client',
+      clientRateLimit: {
+        secret: 'opaque-client-key-0123456789abcdef0123456789',
+        limiter: clientLimiter,
+        policies: { subscribe: { limit: 1, windowMs: 60_000 } }
+      }
+    })
+
+    expect(await http.request('subscribe', {
+      email: 'person@example.com', consent: true, consentVersion: '2026-01',
+      audiences: ['default', 'product']
+    })).toEqual({ status: 200, body: { accepted: true } })
+    expect(clientConsume).toHaveBeenCalledTimes(1)
+    expect(audienceConsume.mock.calls.map(([input]) => input.key)).toEqual(['default', 'product'])
+    expect(sent).toHaveLength(2)
+  })
 
   it('checks every audience exactly once before creating subscriptions', async () => {
     const { config, storage, sent } = configuration()

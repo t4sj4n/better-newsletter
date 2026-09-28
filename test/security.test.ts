@@ -9,6 +9,7 @@ import {
   secureTokenGenerator,
   sha256Digest
 } from '../src/index.js'
+import { createNewsletterWithSubscriptionBatch } from '../src/create-newsletter.js'
 import {
   memoryConfirmationTokenStore,
   memoryRateLimiter,
@@ -241,6 +242,36 @@ describe('secure token primitives', () => {
 })
 
 describe('abuse protection', () => {
+  it('consumes each batch rate-limit check once per derived key', async () => {
+    const clientConsume = vi.fn(async (input: { key: string }) => ({ allowed: input.key.length > 0 }))
+    const audienceConsume = vi.fn(async (input: { key: string }) => ({ allowed: input.key.length > 0 }))
+    const emailConsume = vi.fn(async (input: { key: string }) => ({ allowed: input.key.length > 0 }))
+    const { subscribeMany } = createNewsletterWithSubscriptionBatch({
+      storage: memoryStorage(),
+      capabilities: secureCapabilities().capabilities,
+      mailer: { async sendConfirmation() { return { accepted: true } } },
+      rateLimitChecks: [
+        { rateLimiter: { consume: clientConsume }, keyProvider: { createKey: async () => 'client' } },
+        { rateLimiter: { consume: audienceConsume }, keyProvider: { createKey: async input => input.audienceKey } }
+      ],
+      rateLimiter: { consume: emailConsume },
+      rateLimitKeyProvider: { createKey: async input => input.email }
+    })
+    const consent = { granted: true, version: 'v1' }
+
+    await expect(subscribeMany([
+      { email: 'first@example.com', audience: 'default', consent },
+      { email: 'first@example.com', audience: 'product', consent },
+      { email: 'second@example.com', audience: 'default', consent }
+    ])).resolves.toEqual({ accepted: true })
+
+    expect(clientConsume.mock.calls.map(([input]) => input.key)).toEqual(['client'])
+    expect(audienceConsume.mock.calls.map(([input]) => input.key)).toEqual(['default', 'product'])
+    expect(emailConsume.mock.calls.map(([input]) => input.key)).toEqual([
+      'first@example.com', 'second@example.com'
+    ])
+  })
+
   it('creates deterministic privacy-preserving rate-limit keys', async () => {
     const provider = createHmacRateLimitKeyProvider({ secret })
     const input = {

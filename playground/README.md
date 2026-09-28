@@ -28,6 +28,8 @@ DATABASE_URL=postgresql://user:password@localhost:5432/better_newsletter
 Apply the PostgreSQL migration from the repository root before starting the playground:
 
 ```bash
+. ./playground/.env
+export DATABASE_URL
 psql "$DATABASE_URL" --single-transaction -v ON_ERROR_STOP=1 -f migrations/postgres/001_newsletter.sql
 ```
 

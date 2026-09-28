@@ -254,6 +254,10 @@ export class MemoryNewsletterCapabilities implements NewsletterCapabilities {
     if (capability != null) this.unsubscribe.delete(capability)
     this.unsubscribeAllByContact.delete(contactId)
   }
+
+  async cleanupConfirmations(): Promise<number> {
+    return 0
+  }
 }
 
 /**
@@ -263,3 +267,13 @@ export class MemoryNewsletterCapabilities implements NewsletterCapabilities {
 export function memoryCapabilities(): MemoryNewsletterCapabilities {
   return new MemoryNewsletterCapabilities()
 }
+
+
+export {
+  MemoryCapabilityNonceStore,
+  MemoryConfirmationTokenStore,
+  MemoryRateLimiter,
+  memoryCapabilityNonceStore,
+  memoryConfirmationTokenStore,
+  memoryRateLimiter
+} from './memory-security.js'

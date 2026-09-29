@@ -73,6 +73,7 @@ describe.skipIf(!databaseUrl)('PostgreSQL migration tooling', () => {
         'newsletter_tokens',
         'newsletter_events',
         'newsletter_provider_events',
+        'newsletter_suppression_keys',
         'newsletter_rate_limits'
       ])
       expect(migrations.sql).toContain(`SET search_path TO "${schema}", pg_catalog;`)
@@ -86,6 +87,7 @@ describe.skipIf(!databaseUrl)('PostgreSQL migration tooling', () => {
         'newsletter_provider_events',
         'newsletter_rate_limits',
         'newsletter_subscriptions',
+        'newsletter_suppression_keys',
         'newsletter_tokens'
       ])
 

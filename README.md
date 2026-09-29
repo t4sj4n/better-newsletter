@@ -10,6 +10,7 @@ Instead of rebuilding the same edge cases in every app, you get predictable beha
 - Double Opt-In, confirmation tokens and unsubscribe capabilities follow one consistent lifecycle;
 - one e-mail address can have independent subscriptions to multiple audiences;
 - bounces or manual suppression can block delivery globally without rewriting consent history.
+- trusted export and host-controlled deletion or anonymization cover Contact data and consent history.
 
 > **Status:** early development. The package has not been published to npm yet and the public API may still change before the first prerelease.
 

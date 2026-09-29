@@ -301,6 +301,7 @@ function transactionAdapter<DB>(trx: Transaction<DB>): NewsletterStorageTransact
     },
     async updateContact(id: string, patch: ContactPatch) {
       const fields: RawBuilder<unknown>[] = []
+      if (patch.email !== undefined) fields.push(sql`email = ${patch.email}`)
       if (patch.capabilityGeneration !== undefined) {
         fields.push(sql`capability_generation = ${patch.capabilityGeneration}`)
       }
@@ -357,6 +358,7 @@ function transactionAdapter<DB>(trx: Transaction<DB>): NewsletterStorageTransact
     },
     async updateSubscription(id: string, patch: SubscriptionPatch) {
       const fields: RawBuilder<unknown>[] = []
+      if (patch.audienceKey !== undefined) fields.push(sql`audience_key = ${patch.audienceKey}`)
       if (patch.lifecycleGeneration !== undefined) {
         fields.push(sql`lifecycle_generation = ${patch.lifecycleGeneration}`)
       }
@@ -427,6 +429,43 @@ function transactionAdapter<DB>(trx: Transaction<DB>): NewsletterStorageTransact
         WHERE contact_id = ${contactId} ORDER BY sequence
       `.execute(trx)
       return result.rows.map(eventFromRow)
+    },
+    async listContactTokenMetadata(contactId) {
+      const result = await sql<TokenRow>`
+        SELECT * FROM newsletter_tokens WHERE contact_id = ${contactId}
+        ORDER BY created_at, id
+      `.execute(trx)
+      return result.rows.map(row => ({
+        purpose: 'CONFIRMATION' as const,
+        subscriptionId: row.subscription_id,
+        lifecycleGeneration: Number(row.lifecycle_generation),
+        createdAt: row.created_at,
+        expiresAt: row.expires_at,
+        consumedAt: row.consumed_at,
+        revokedAt: row.revoked_at
+      }))
+    },
+    async deleteContactTokens(contactId) {
+      await sql`DELETE FROM newsletter_tokens WHERE contact_id = ${contactId}`.execute(trx)
+    },
+    async deleteProviderEvents(contactId) {
+      await sql`DELETE FROM newsletter_provider_events WHERE contact_id = ${contactId}`.execute(trx)
+    },
+    async minimizeEvents(contactId) {
+      await sql`UPDATE newsletter_events SET metadata = '{}'::jsonb
+        WHERE contact_id = ${contactId}`.execute(trx)
+    },
+    async deleteContact(contactId) {
+      await sql`DELETE FROM newsletter_contacts WHERE id = ${contactId}`.execute(trx)
+    },
+    async hasSuppressionKey(key) {
+      const result = await sql`SELECT 1 FROM newsletter_suppression_keys
+        WHERE key_hash = ${key}`.execute(trx)
+      return result.rows.length > 0
+    },
+    async retainSuppressionKey(key) {
+      await sql`INSERT INTO newsletter_suppression_keys (key_hash)
+        VALUES (${key}) ON CONFLICT DO NOTHING`.execute(trx)
     },
     confirmationTokens: new PostgresConfirmationTokenStore(trx)
   }

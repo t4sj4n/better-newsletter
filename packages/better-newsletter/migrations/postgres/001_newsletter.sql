@@ -99,6 +99,12 @@ CREATE TABLE newsletter_provider_events (
   CONSTRAINT newsletter_provider_events_contact_id_fkey FOREIGN KEY (contact_id) REFERENCES newsletter_contacts (id) ON DELETE CASCADE
 );
 
+CREATE TABLE newsletter_suppression_keys (
+  key_hash text NOT NULL,
+  CONSTRAINT newsletter_suppression_keys_pkey PRIMARY KEY (key_hash),
+  CONSTRAINT newsletter_suppression_keys_key_hash_check CHECK (key_hash <> '')
+);
+
 CREATE TABLE newsletter_rate_limits (
   key_hash text NOT NULL,
   action text NOT NULL,

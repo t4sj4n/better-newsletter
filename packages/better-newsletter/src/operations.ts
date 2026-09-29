@@ -65,6 +65,30 @@ export type ContactLookup =
   | { readonly email: string; readonly id?: never }
   | { readonly id: string; readonly email?: never }
 
+export interface ContactTokenMetadata {
+  readonly purpose: 'CONFIRMATION'
+  readonly subscriptionId: string
+  readonly lifecycleGeneration: number
+  readonly createdAt: Date
+  readonly expiresAt: Date
+  readonly consumedAt?: Date | null
+  readonly revokedAt?: Date | null
+}
+
+export interface ContactDataExport {
+  readonly contact: Contact
+  readonly subscriptions: readonly Subscription[]
+  readonly events: readonly NewsletterEvent[]
+  readonly confirmationTokens: readonly ContactTokenMetadata[]
+}
+
+export interface EraseContactDataInput {
+  readonly contact: ContactLookup
+  readonly strategy: 'DELETE' | 'ANONYMIZE'
+  /** Retain only an opaque, host-keyed suppression digest. Defaults to NONE. */
+  readonly suppression?: 'NONE' | 'RETAIN_HASH'
+}
+
 export type SubscriptionLookup =
   | { readonly id: string; readonly email?: never; readonly audience?: never }
   | {
@@ -128,6 +152,10 @@ export interface NewsletterService {
   getSubscription(input: SubscriptionLookup): Promise<Subscription | null>
   listSubscriptions(input: ContactLookup): Promise<readonly Subscription[]>
   listEvents(input: ContactLookup): Promise<readonly NewsletterEvent[]>
+  /** Trusted server-side operation; never expose this through a public route. */
+  exportContactData(input: ContactLookup): Promise<ContactDataExport | null>
+  /** Trusted server-side operation, independent of public unsubscribe. */
+  eraseContactData(input: EraseContactDataInput): Promise<{ readonly erased: boolean }>
 
   linkSubject(input: LinkSubjectInput): Promise<Contact | null>
   suppressContact(input: SuppressContactInput): Promise<Contact | null>

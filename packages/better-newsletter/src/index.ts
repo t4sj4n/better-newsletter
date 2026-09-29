@@ -73,9 +73,12 @@ export type {
   ConfirmInput,
   ConfirmResult,
   ContactLookup,
+  ContactDataExport,
+  ContactTokenMetadata,
   CleanupConfirmationTokensInput,
   CreateUnsubscribeCapabilityInput,
   ImportSubscriptionInput,
+  EraseContactDataInput,
   LinkSubjectInput,
   PublicRequestResult,
   PreferenceSubscription,
@@ -89,5 +92,6 @@ export type {
 } from './operations.js'
 
 export {
-  CONFIRMATION_REPLACEMENT_STRATEGIES
+  CONFIRMATION_REPLACEMENT_STRATEGIES,
+  createHmacSuppressionKeyProvider
 } from './security.js'

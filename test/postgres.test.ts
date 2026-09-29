@@ -5,8 +5,10 @@ import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest'
 import {
   CONTACT_STATUSES,
   NEWSLETTER_EVENT_TYPES,
-  SUBSCRIPTION_STATUSES
+  SUBSCRIPTION_STATUSES,
+  betterNewsletter
 } from '../packages/better-newsletter/src/index.js'
+import { memoryCapabilities } from '../packages/better-newsletter/src/adapters/memory.js'
 import {
   listEligibleSubscriptions,
   postgresRateLimiter,
@@ -34,7 +36,7 @@ describe.skipIf(!databaseUrl)('PostgreSQL integration', () => {
 
   async function reset() {
     await pool.query(
-      'TRUNCATE newsletter_contacts, newsletter_rate_limits RESTART IDENTITY CASCADE'
+      'TRUNCATE newsletter_contacts, newsletter_rate_limits, newsletter_suppression_keys RESTART IDENTITY CASCADE'
     )
   }
 
@@ -124,6 +126,61 @@ describe.skipIf(!databaseUrl)('PostgreSQL integration', () => {
 
   describe('PostgreSQL-specific behavior', () => {
     beforeEach(reset)
+
+    it('exports and anonymizes persisted contact data without leaving direct metadata or tokens', async () => {
+      const storage = postgresAdapter(db)
+      const now = new Date('2026-09-29T08:00:00.000Z')
+      const newsletter = betterNewsletter({
+        storage, capabilities: memoryCapabilities(),
+        mailer: { async sendConfirmation() { return { accepted: true } } },
+        clock: { now: () => now }
+      })
+      await storage.transaction(async transaction => {
+        await transaction.createContact({
+          id: 'privacy-contact', capabilityGeneration: 1,
+          email: 'private@example.com', status: CONTACT_STATUSES.ENABLED,
+          subject: { namespace: 'user', id: 'private-user' },
+          metadata: { email: 'private@example.com' },
+          createdAt: now, updatedAt: now
+        })
+        await transaction.createSubscription({
+          id: 'privacy-subscription', lifecycleGeneration: 1,
+          contactId: 'privacy-contact', audienceKey: 'private-audience',
+          status: SUBSCRIPTION_STATUSES.PENDING_CONFIRMATION,
+          consent: { version: 'v1', source: 'private@example.com', consentedAt: now },
+          confirmationDelivery: null, createdAt: now, updatedAt: now
+        })
+        await transaction.confirmationTokens.replace({
+          record: {
+            digest: 'private-token-digest', purpose: 'CONFIRMATION',
+            contactId: 'privacy-contact', subscriptionId: 'privacy-subscription',
+            lifecycleGeneration: 1, createdAt: now,
+            expiresAt: new Date(now.getTime() + 60_000)
+          },
+          strategy: 'REPLACE_PREVIOUS', maxActiveTokens: 1, now
+        })
+        await transaction.appendEvent({
+          id: 'privacy-event', contactId: 'privacy-contact',
+          subscriptionId: 'privacy-subscription',
+          type: NEWSLETTER_EVENT_TYPES.SIGNED_UP, occurredAt: now,
+          metadata: { email: 'private@example.com' }
+        })
+      })
+      expect((await newsletter.exportContactData({ id: 'privacy-contact' }))?.confirmationTokens)
+        .toHaveLength(1)
+      expect(await newsletter.eraseContactData({
+        contact: { id: 'privacy-contact' }, strategy: 'ANONYMIZE'
+      })).toEqual({ erased: true })
+      const exported = await newsletter.exportContactData({ id: 'privacy-contact' })
+      expect(JSON.stringify(exported)).not.toContain('private@example.com')
+      expect(JSON.stringify(exported)).not.toContain('private-token-digest')
+      expect(exported?.events[0]?.metadata).toEqual({})
+      expect(exported?.confirmationTokens).toEqual([])
+      const persisted = await pool.query<{ count: string }>(
+        'SELECT count(*) FROM newsletter_tokens WHERE contact_id = $1', ['privacy-contact']
+      )
+      expect(persisted.rows[0]?.count).toBe('0')
+    })
 
     it('bounds soft-bounce counts after the latest unsuppression', async () => {
       const storage = postgresAdapter(db)

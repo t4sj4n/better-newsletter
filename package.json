@@ -52,6 +52,10 @@
     "./security": {
       "types": "./dist/security.d.ts",
       "import": "./dist/security.js"
+    },
+    "./migration": {
+      "types": "./dist/migration.d.ts",
+      "import": "./dist/migration.js"
     }
   },
   "scripts": {
@@ -60,7 +64,9 @@
     "typecheck": "tsc -p tsconfig.json",
     "lint": "eslint . --max-warnings=0",
     "test": "vitest run",
-    "check": "pnpm lint && pnpm typecheck && pnpm build && pnpm test"
+    "check": "pnpm lint && pnpm typecheck && pnpm build && pnpm migration:snapshot:check && pnpm test",
+    "migration:snapshot:check": "node scripts/check-postgres-migration.mjs",
+    "migration:snapshot:write": "pnpm build && node scripts/check-postgres-migration.mjs --write"
   },
   "devDependencies": {
     "@eslint/js": "^9.35.0",
@@ -101,5 +107,11 @@
     "resend": {
       "optional": true
     }
+  },
+  "bin": {
+    "better-newsletter": "./dist/cli.js"
+  },
+  "dependencies": {
+    "jiti": "^2.7.0"
   }
 }

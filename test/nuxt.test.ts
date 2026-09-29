@@ -1,4 +1,4 @@
-import { createServer, IncomingMessage, ServerResponse, type Server } from 'node:http'
+import { createServer, IncomingMessage, request as httpRequest, ServerResponse, type Server } from 'node:http'
 import { Socket } from 'node:net'
 import { createApp, createEvent, defineEventHandler, toNodeListener } from 'h3'
 import { afterEach, describe, expect, it, vi } from 'vitest'
@@ -90,6 +90,65 @@ describe('Nuxt server integration', () => {
       website: 'honeypot'
     })).body).toEqual({ accepted: true })
     expect(await storage.transaction(tx => tx.getContactByEmail('person@example.com'))).toBeNull()
+  })
+
+  it('limits the request body by bytes while streaming, including chunked requests', async () => {
+    const { config } = configuration()
+    const http = await fixture(config)
+    const input = {
+      email: 'person@example.com', consent: true, consentVersion: '2026-01'
+    }
+    const valid = JSON.stringify(input)
+    const boundary = valid.padEnd(8192, ' ')
+    const accepted = await fetch(`${http.base}/subscribe`, {
+      method: 'POST',
+      body: boundary,
+      headers: { 'content-type': 'application/json' }
+    })
+    expect(accepted.status).toBe(200)
+
+    const oversized = await fetch(`${http.base}/subscribe`, {
+      method: 'POST',
+      body: JSON.stringify({ ...input, note: 'é'.repeat(4096) }),
+      headers: { 'content-type': 'application/json' }
+    })
+    expect(oversized.status).toBe(400)
+
+    const pending = httpRequest(`${http.base}/subscribe`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json', 'transfer-encoding': 'chunked' }
+    })
+    try {
+      const status = new Promise<number>((resolve, reject) => {
+        pending.on('response', response => {
+          response.resume()
+          response.on('end', () => resolve(response.statusCode ?? 0))
+          response.on('error', reject)
+        })
+        pending.on('error', reject)
+      })
+      pending.write('x'.repeat(8193))
+      expect(await status).toBe(400)
+    } finally {
+      pending.destroy()
+    }
+  })
+
+  it('reads web request bodies without relying on the Node request stream', async () => {
+    const { config } = configuration()
+    const incoming = new IncomingMessage(new Socket())
+    incoming.method = 'POST'
+    const event = createEvent(incoming, new ServerResponse(incoming))
+    event.web = {
+      request: new Request('http://localhost/subscribe', {
+        method: 'POST',
+        body: JSON.stringify({
+          email: 'person@example.com', consent: true, consentVersion: '2026-01'
+        })
+      })
+    }
+    await expect(handleNewsletterRequest(event, 'subscribe', options, config))
+      .resolves.toEqual({ accepted: true })
   })
 
   it('uses explicit POST for mutation and preserves neutral public responses', async () => {

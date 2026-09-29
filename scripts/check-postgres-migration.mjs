@@ -1,5 +1,7 @@
+import console from 'node:console'
 import { readFileSync, writeFileSync } from 'node:fs'
 import { dirname, join } from 'node:path'
+import process from 'node:process'
 import { fileURLToPath } from 'node:url'
 import { renderPostgresSchemaSql } from '../dist/migration/postgres-schema.js'
 

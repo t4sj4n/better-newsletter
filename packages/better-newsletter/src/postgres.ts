@@ -438,7 +438,7 @@ function transactionAdapter<DB>(trx: Transaction<DB>): NewsletterStorageTransact
       return result.rows.map(row => ({
         purpose: 'CONFIRMATION' as const,
         subscriptionId: row.subscription_id,
-        lifecycleGeneration: Number(row.lifecycle_generation),
+        lifecycleGeneration: generation(row.lifecycle_generation),
         createdAt: row.created_at,
         expiresAt: row.expires_at,
         consumedAt: row.consumed_at,

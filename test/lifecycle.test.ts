@@ -4,14 +4,15 @@ import {
   NEWSLETTER_ERROR_CODES,
   NEWSLETTER_EVENT_TYPES,
   SUBSCRIPTION_STATUSES,
-  createNewsletter,
-  type ConfirmationMailInput,
-  type NewsletterStorage
-} from '../src/index.js'
+  betterNewsletter,
+  getDeliveryEligibility
+} from '../packages/better-newsletter/src/index.js'
+import type { ConfirmationMailInput, NewsletterMailer } from '../packages/better-newsletter/src/mailers/index.js'
+import type { NewsletterStorage } from '../packages/better-newsletter/src/storage.js'
 import {
   memoryCapabilities,
-  memoryStorage
-} from '../src/memory.js'
+  memoryAdapter
+} from '../packages/better-newsletter/src/adapters/memory.js'
 
 /**
  * Creates an isolated lifecycle fixture with deterministic time, IDs, and tokens.
@@ -23,20 +24,22 @@ function setup() {
   let token = 0
   let failMail = false
   const messages: ConfirmationMailInput[] = []
-
-  const newsletter = createNewsletter({
-    storage: memoryStorage(),
-    capabilities: memoryCapabilities(),
-    mailer: {
-      async sendConfirmation(input) {
-        messages.push(input)
-        if (failMail) throw new Error('simulated provider failure')
-        return {
-          accepted: true,
-          providerMessageId: `mail-${messages.length}`
-        }
+  const capabilities = memoryCapabilities()
+  const mailer: NewsletterMailer = {
+    async sendConfirmation(input: ConfirmationMailInput) {
+      messages.push(input)
+      if (failMail) throw new Error('simulated provider failure')
+      return {
+        accepted: true,
+        providerMessageId: `mail-${messages.length}`
       }
-    },
+    }
+  }
+
+  const newsletter = betterNewsletter({
+    storage: memoryAdapter(),
+    capabilities,
+    mailer,
     clock: { now: () => new Date(nowMs) },
     idGenerator: { generate: () => `id-${++id}` },
     tokenGenerator: { generate: () => `token-${++token}` }
@@ -44,6 +47,8 @@ function setup() {
 
   return {
     newsletter,
+    mailer,
+    capabilities,
     messages,
     async waitForMail(count = 1) {
       await vi.waitFor(async () => {
@@ -251,7 +256,7 @@ describe('newsletter lifecycle', () => {
     const after = await newsletter.getSubscription({ email: 'person@example.com' })
     expect(contact?.status).toBe(CONTACT_STATUSES.SUPPRESSED)
     expect(after?.status).toBe(before?.status)
-    expect(newsletter.getDeliveryEligibility(contact!, after!)).toEqual({
+    expect(getDeliveryEligibility(contact!, after!)).toEqual({
       eligible: false,
       reason: 'CONTACT_SUPPRESSED'
     })
@@ -370,10 +375,10 @@ describe('newsletter lifecycle', () => {
   })
 
   it('accepts signup before a delayed mailer finishes', async () => {
-    const { newsletter, waitForMail } = setup()
+    const { newsletter, waitForMail, mailer } = setup()
     let release!: () => void
     const delayed = new Promise<void>(resolve => { release = resolve })
-    const send = vi.spyOn(newsletter.mailer, 'sendConfirmation')
+    const send = vi.spyOn(mailer, 'sendConfirmation')
       .mockImplementation(async () => {
         await delayed
         return { accepted: true }
@@ -398,8 +403,8 @@ describe('newsletter lifecycle', () => {
   })
 
   it('handles confirmation setup rejection after accepting signup', async () => {
-    const { newsletter, messages } = setup()
-    const replace = vi.spyOn(newsletter.capabilities, 'replaceConfirmation')
+    const { newsletter, messages, capabilities } = setup()
+    const replace = vi.spyOn(capabilities, 'replaceConfirmation')
       .mockRejectedValue(new Error('capability store unavailable'))
 
     await expect(newsletter.subscribe({
@@ -470,7 +475,7 @@ describe('newsletter lifecycle', () => {
   })
 
   it('treats null and omitted consent fields as equal on repeated import', async () => {
-    const storage = memoryStorage()
+    const storage = memoryAdapter()
     // SQL adapters read omitted optional columns back as null.
     const sqlLike: NewsletterStorage = {
       transaction: operation => storage.transaction(transaction => operation({
@@ -483,7 +488,7 @@ describe('newsletter lifecycle', () => {
         }
       }))
     }
-    const newsletter = createNewsletter({
+    const newsletter = betterNewsletter({
       storage: sqlLike,
       capabilities: memoryCapabilities(),
       mailer: { async sendConfirmation() { return { accepted: true } } }
@@ -507,10 +512,10 @@ describe('newsletter lifecycle', () => {
   })
 
   it('hands background work to runBackground and reports failures through the logger', async () => {
-    const storage = memoryStorage()
+    const storage = memoryAdapter()
     const tasks: Promise<void>[] = []
     const logger = { error: vi.fn() }
-    const newsletter = createNewsletter({
+    const newsletter = betterNewsletter({
       storage: {
         transaction: operation => storage.transaction(transaction => operation({
           ...transaction,

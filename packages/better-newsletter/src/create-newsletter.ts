@@ -1,8 +1,8 @@
 import type {
   Clock,
   IdGenerator,
-  NewsletterConfig,
-  NewsletterCore
+  BetterNewsletterOptions,
+  BetterNewsletter
 } from './config.js'
 import {
   CONTACT_STATUSES,
@@ -16,7 +16,6 @@ import {
   type NewsletterEventType,
   type Subscription
 } from './domain.js'
-import { getDeliveryEligibility } from './eligibility.js'
 import {
   NEWSLETTER_ERROR_CODES,
   NewsletterError,
@@ -206,12 +205,12 @@ function importedSubscriptionMatches(
  * confirmation lifetime when those options are omitted.
  * @throws {NewsletterError} If the audience or confirmation lifetime is invalid.
  */
-export function createNewsletter(config: NewsletterConfig): NewsletterCore {
+export function betterNewsletter(config: BetterNewsletterOptions): BetterNewsletter {
   return createNewsletterWithSubscriptionBatch(config).service
 }
 
 /** Internal integration helper; batch security runs before any lifecycle work. */
-export function createNewsletterWithSubscriptionBatch(config: NewsletterConfig) {
+export function createNewsletterWithSubscriptionBatch(config: BetterNewsletterOptions) {
   const defaultAudience = assertAudienceKey(
     config.defaultAudience ?? DEFAULT_AUDIENCE_KEY
   )
@@ -769,28 +768,7 @@ export function createNewsletterWithSubscriptionBatch(config: NewsletterConfig) 
     return PUBLIC_ACCEPTED
   }
 
-  const service: NewsletterCore = {
-    storage: config.storage,
-    mailer: config.mailer,
-    capabilities: config.capabilities,
-    clock,
-    tokenGenerator,
-    idGenerator,
-    defaultAudience,
-    abuseGuard: config.abuseGuard,
-    rateLimiter: config.rateLimiter,
-    rateLimitKeyProvider: config.rateLimitKeyProvider,
-    logger,
-    transactionMaxAttempts,
-    confirmation: Object.freeze({
-      expiresInMs,
-      replacementStrategy,
-      maxActiveTokens,
-      cleanupRetentionMs,
-      deliveryLeaseMs
-    }),
-    getDeliveryEligibility,
-
+  const service: BetterNewsletter = {
     subscribe(input) {
       return subscribe(input)
     },

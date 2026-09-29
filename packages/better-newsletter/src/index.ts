@@ -1,35 +1,21 @@
 export {
-  createNewsletter,
+  betterNewsletter,
   DEFAULT_CONFIRMATION_CLEANUP_RETENTION_MS,
   DEFAULT_CONFIRMATION_DELIVERY_LEASE_MS,
   DEFAULT_CONFIRMATION_EXPIRES_IN_MS,
   DEFAULT_MAX_ACTIVE_CONFIRMATION_TOKENS,
   DEFAULT_RESEND_RATE_LIMIT,
   DEFAULT_SUBSCRIBE_RATE_LIMIT,
-  DEFAULT_TRANSACTION_MAX_ATTEMPTS,
-  systemClock,
-  systemIdGenerator
+  DEFAULT_TRANSACTION_MAX_ATTEMPTS
 } from './create-newsletter.js'
 
 export type {
-  BackgroundTaskRunner,
-  Clock,
   ConfirmationOptions,
-  IdGenerator,
-  NewsletterConfig,
-  NewsletterCore,
+  BetterNewsletterOptions,
+  BetterNewsletter,
   NewsletterLogger,
-  NewsletterRateLimitCheck,
-  NewsletterRateLimits,
-  TokenGenerator
+  NewsletterRateLimits
 } from './config.js'
-
-export type {
-  ConfirmationCapabilityTarget,
-  ConfirmationReplacementResult,
-  NewsletterCapabilities,
-  UnsubscribeCapabilityTarget
-} from './capabilities.js'
 
 export {
   CONTACT_STATUSES,
@@ -73,16 +59,6 @@ export type {
   NewsletterErrorOptions
 } from './errors.js'
 
-export { MAIL_DELIVERY_FAILURES, MAIL_DELIVERY_REASONS } from './mailer.js'
-
-export type {
-  ConfirmationMailInput,
-  MailDeliveryFailure,
-  MailDeliveryReasonCode,
-  MailDeliveryResult,
-  NewsletterMailer
-} from './mailer.js'
-
 export {
   assertAudienceKey,
   DEFAULT_AUDIENCE_KEY,
@@ -98,7 +74,6 @@ export type {
   CreateUnsubscribeCapabilityInput,
   ImportSubscriptionInput,
   LinkSubjectInput,
-  NewsletterService,
   PublicRequestResult,
   PreferenceSubscription,
   ResendConfirmationInput,
@@ -110,34 +85,6 @@ export type {
   UnsuppressContactInput
 } from './operations.js'
 
-export type {
-  ContactPatch,
-  CreateContactInput,
-  CreateSubscriptionInput,
-  NewsletterStorage,
-  NewsletterStorageTransaction,
-  SubscriptionPatch
-} from './storage.js'
-
 export {
-  CAPABILITY_PURPOSES,
-  CONFIRMATION_REPLACEMENT_STRATEGIES,
-  createHmacRateLimitKeyProvider,
-  createSecureCapabilities,
-  secureTokenGenerator,
-  sha256Digest
-} from './security.js'
-
-export type {
-  AbuseGuard,
-  CapabilityPurpose,
-  ConfirmationReplacementStrategy,
-  ConfirmationTokenRecord,
-  ConfirmationTokenStore,
-  HmacRateLimitKeyProviderOptions,
-  PublicAbuseAction,
-  RateLimiter,
-  RateLimitKeyProvider,
-  RateLimitPolicy,
-  SecureCapabilitiesOptions
+  CONFIRMATION_REPLACEMENT_STRATEGIES
 } from './security.js'

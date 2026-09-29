@@ -7,11 +7,5 @@
     "sourceMap": true,
     "outDir": "dist",
     "rootDir": "src"
-  },
-  "include": [
-    "src/**/*.ts"
-  ],
-  "exclude": [
-    "test/**/*.ts"
-  ]
+  }
 }

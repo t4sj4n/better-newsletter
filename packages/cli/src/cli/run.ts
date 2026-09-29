@@ -2,7 +2,7 @@ import { existsSync, writeFileSync } from 'node:fs'
 import { resolve } from 'node:path'
 import process from 'node:process'
 import { createInterface } from 'node:readline/promises'
-import { getMigrations, type NewsletterMigrations } from '../migration.js'
+import { getMigrations, type NewsletterMigrations } from 'better-newsletter/db/migration'
 import { loadMigrationConfig } from '../migration/config-loader.js'
 
 export interface BetterNewsletterCliEnvironment {

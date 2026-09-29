@@ -12,7 +12,7 @@
     "forceConsistentCasingInFileNames": true
   },
   "include": [
-    "src/**/*.ts",
+    "packages/better-newsletter/src/nuxt/virtual.d.ts",
     "test/**/*.ts"
   ],
   "exclude": [

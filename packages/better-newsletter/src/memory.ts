@@ -164,7 +164,7 @@ export class MemoryNewsletterStorage implements NewsletterStorage {
 }
 
 /** Creates an isolated in-memory store with serialized transactions and rollback. */
-export function memoryStorage(): MemoryNewsletterStorage {
+export function memoryAdapter(): MemoryNewsletterStorage {
   return new MemoryNewsletterStorage()
 }
 

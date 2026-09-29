@@ -65,5 +65,5 @@ jobs:
           pnpm --dir examples/basic typecheck
           pnpm --dir examples/basic build
 
-      - name: Smoke test packed package in clean consumers
+      - name: Smoke test both packed packages in clean consumers
         run: node scripts/smoke-pack.mjs

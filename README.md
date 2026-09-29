@@ -36,20 +36,21 @@ pnpm add better-newsletter
 pnpm add -D @better-newsletter/cli
 ```
 
-Node.js 20.11 or newer is required.
+Node.js 20.11 or newer is required for the packages. The Nuxt example requires Node.js 22.19 or newer.
 
 ### Set up the database
 
 Better Newsletter never changes your database schema during normal application startup.
 
-For PostgreSQL, expose a migration config from `better-newsletter.config.ts` or `server/better-newsletter.config.ts`:
+For PostgreSQL, install Kysely and a PostgreSQL driver (for example, `pnpm add kysely@^0.28.17 pg@^8`). Expose a migration config from `better-newsletter.config.ts` or `server/better-newsletter.config.ts`, using your application's configured Kysely `db`:
 
 ```ts
 import { defineBetterNewsletterMigrationConfig } from 'better-newsletter/db/migration'
 import { postgresMigration } from 'better-newsletter/adapters/postgres'
 
 export const migration = defineBetterNewsletterMigrationConfig({
-  provider: postgresMigration(db)
+  provider: postgresMigration(db),
+  close: () => db.destroy()
 })
 ```
 
@@ -67,7 +68,7 @@ pnpm exec better-newsletter generate --output ./migrations/better-newsletter.sql
 
 **`generate`** inspects the same database but only writes the required SQL so you can review and apply it through your application's existing migration workflow.
 
-Both commands are safe to run again when the schema is already current. Use `--yes` for non-interactive deployments.
+Both commands exit without changes when the schema is already current. Use `--yes` to approve changes in non-interactive deployments. The CLI reads the named `migration` export from a server config; it does not invoke its default Nuxt factory.
 
 ## Basic usage
 
@@ -86,7 +87,7 @@ const newsletter = betterNewsletter({
 })
 ```
 
-The host application owns `storage` and `mailer`. Built-in PostgreSQL and Resend integrations are available, or you can implement the provider-neutral contracts yourself.
+The host application owns `storage` and `mailer`. Built-in PostgreSQL and Resend integrations are available, or you can implement the provider-neutral contracts yourself. Keep the signing secret stable and use at least 32 bytes.
 
 Subscribe with explicit consent:
 
@@ -102,7 +103,7 @@ await newsletter.subscribe({
 })
 ```
 
-A new subscription starts as pending confirmation. Confirm it with the token delivered by your mailer:
+A new subscription starts as pending confirmation. The public signup response does not reveal subscription state, and confirmation delivery runs in the background. Confirm it with the token delivered by your mailer:
 
 ```ts
 await newsletter.confirm({ token })
@@ -138,6 +139,8 @@ const mailer = resendMailer({
   })
 })
 ```
+
+Use a verified sender and a trusted application origin for confirmation links. On runtimes that may stop work when a request ends, provide `runBackground` using the platform's `waitUntil`, or await the delivery task before replying. The Nuxt integration handles this for its routes.
 
 ### Nuxt
 
@@ -177,7 +180,7 @@ export default defineBetterNewsletterConfig(() => ({
 
 The Nuxt integration supplies the lifecycle API routes. Your application still owns the signup form, confirmation/unsubscribe pages and mail copy.
 
-See [examples/basic](examples/basic/README.md) for a minimal Nuxt example.
+See [examples/basic](examples/basic/README.md) for a minimal Nuxt example and the [runtime package documentation](packages/better-newsletter/README.md) for security, migrations, adapters and the full API.
 
 ## License
 

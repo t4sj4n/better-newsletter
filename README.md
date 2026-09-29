@@ -2,274 +2,47 @@
 
 Framework-agnostic newsletter subscription and consent lifecycle infrastructure for TypeScript.
 
-> **Status:** early development. The core lifecycle, PostgreSQL persistence, Resend confirmation delivery, and Nuxt/Nitro adapter are available.
+`better-newsletter` handles the lifecycle around a newsletter so your application does not have to rebuild it itself:
 
-## Scope
+- a repeated signup stays idempotent instead of creating duplicate state;
+- Double Opt-In, confirmation tokens and unsubscribe capabilities follow one consistent lifecycle;
+- one e-mail address can have independent subscriptions to multiple audiences;
+- bounces or manual suppression can block delivery globally without rewriting consent history.
 
-`better-newsletter` provides reusable newsletter lifecycle primitives without becoming a campaign platform:
+You keep control of your database, mail provider, UI and application identity. `better-newsletter` provides the lifecycle and the integration points.
 
-- explicit newsletter consent;
-- Double Opt-In lifecycle;
-- per-audience subscription state;
-- global delivery suppression;
-- append-only lifecycle evidence;
-- trusted migration/import of known historical consent;
-- provider-neutral storage, delivery and capability contracts;
-- optional linking to an application-owned subject.
+> **Status:** early development. The package has not been published to npm yet and the public API may still change before the first prerelease.
 
-It is **not** a campaign editor, CRM, marketing automation suite, authentication library, analytics product, or segmentation/query engine.
+## Installation
 
-## Contact and subscription model
+Until the first npm prerelease, install a packed artifact from a local checkout:
 
-A Contact is the delivery identity. A Subscription is the consent state for one audience.
+```bash
+# better-newsletter
+pnpm install --frozen-lockfile
+pnpm pack
 
-```text
-Contact: person@example.com
-status: ENABLED
-subject: optional opaque application reference
-        |
-        +-- default          ACTIVE
-        +-- product-news     UNSUBSCRIBED
-        +-- weekly-analysis  PENDING_CONFIRMATION
+# your application
+pnpm add /path/to/better-newsletter-0.0.0.tgz
 ```
 
-This distinction is intentional:
+After the first prerelease is published:
 
-- bounce/complaint/manual suppression belongs to the **Contact**;
-- consent, confirmation and unsubscribe belong to a **Subscription**;
-- one e-mail address can have multiple independent subscriptions;
-- suppression blocks delivery without rewriting historical consent state.
-
-V1 uses opaque `audienceKey` strings rather than a list-management subsystem. Single-newsletter applications can use the built-in `default` audience.
-
-## Core lifecycle
-
-```text
-new explicit consent
-  -> PENDING_CONFIRMATION
-  -> confirmation
-  -> ACTIVE
-  -> unsubscribe
-  -> UNSUBSCRIBED
-  -> new explicit consent
-  -> PENDING_CONFIRMATION
+```bash
+pnpm add better-newsletter
 ```
 
-A globally suppressed Contact cannot be confirmed or receive a confirmation message until a trusted caller deliberately unsuppresses it.
+Node.js 20.11 or newer is required.
 
-Repeated public signup is neutral and idempotent:
+## Basic usage
 
-- pending subscriptions are not duplicated or silently given new consent evidence;
-- active subscriptions are not downgraded or re-confirmed;
-- unsubscribed subscriptions require fresh consent and a fresh DOI cycle;
-- suppressed Contacts remain suppressed.
-
-Use the dedicated `resendConfirmation()` operation when a new confirmation message is needed. Abuse throttling and confirmation-token replacement are handled by the security and lifecycle configuration described below.
-
-## Creating a service
-
-The lifecycle is framework- and provider-neutral. Storage, delivery and capability behavior are injected:
-
-```ts
-import { createNewsletter } from 'better-newsletter'
-
-const newsletter = createNewsletter({
-  storage,
-  mailer,
-  capabilities,
-  confirmation: {
-    expiresInMs: 24 * 60 * 60 * 1000
-  }
-})
-```
-
-Time, IDs, and confirmation-token generation can be injected for deterministic tests. When no token generator is supplied, the core uses a Web Crypto generator that produces 32 random bytes.
-
-## Production security
-
-The security layer is framework- and database-neutral:
+Create a newsletter instance by providing storage, mail delivery and secure capabilities:
 
 ```ts
 import {
   createNewsletter,
   createSecureCapabilities
 } from 'better-newsletter'
-
-const capabilities = createSecureCapabilities({
-  hmacSecret: process.env.NEWSLETTER_LINK_SECRET!
-})
-
-const newsletter = createNewsletter({
-  storage,
-  mailer,
-  capabilities
-})
-```
-
-The host supplies the lifecycle storage contract. Each storage transaction exposes a `confirmationTokens: ConfirmationTokenStore`, and the capabilities receive that store for every confirmation operation. Token replacement, consumption and revocation therefore commit or roll back together with lifecycle state and events. No unsubscribe nonce store is needed. The PostgreSQL adapter provides durable storage for this contract.
-
-Security properties:
-
-- confirmation tokens use 32 bytes of Web Crypto entropy by default;
-- only SHA-256 confirmation-token digests are persisted;
-- confirmation consumption is single-use and must be atomic in the token store;
-- confirmation links are scoped to a Subscription ID and its persisted lifecycle generation;
-- unsubscribe links are HMAC-SHA-256 signed and purpose-bound;
-- unsubscribe capabilities contain no e-mail address;
-- signed target IDs and generations remove mutable nonce initialization and issuance races;
-- per-audience unsubscribe and unsubscribe-all use distinct purposes;
-- re-subscription atomically increments subscription and contact generations, invalidating old capabilities even when their resolution was already in flight;
-- expired, consumed, and revoked confirmation records can be removed through explicit cleanup.
-
-Use a secret with at least 32 bytes for HMAC signing. `createSecureCapabilities()` and `createHmacRateLimitKeyProvider()` throw `INVALID_CONFIGURATION` synchronously for a shorter or missing secret.
-
-### Lifecycle generations and adapter requirements
-
-`Subscription.lifecycleGeneration` and `Contact.capabilityGeneration` start at `1` and are positive safe integers. A re-subscription increments both in the same transaction that records fresh consent and queues confirmation work. Adding a new audience to an existing Contact, through signup or trusted import, increments `capabilityGeneration`. Repeated pending or active signups do not increment either generation or rewrite consent.
-
-Confirmation and per-audience unsubscribe targets carry `lifecycleGeneration`; unsubscribe-all targets carry `capabilityGeneration`. The core compares the resolved generation with the current persisted row **inside the state-transition transaction**. Resolving or verifying a signed capability alone is not authorization: a previously signed target may belong to an old generation.
-
-Contact-wide generation changes invalidate previous unsubscribe-all links whenever any audience starts a new consent cycle. Per-audience generations keep other audiences independent. Repeated unsubscribe requests remain idempotent until a new cycle starts.
-
-Storage adapters must serialize conflicting contact-wide and subscription operations, including generation checks, generation increments, confirmation-delivery claims, token-store writes, state updates, and event appends. Roll them back together. Either run transactions with SERIALIZABLE isolation or lock every contact and subscription row read inside a transaction (for example `SELECT ... FOR UPDATE`). The core always reads the contact before its subscriptions, and subscriptions before locking token records; `ConfirmationTokenStore.resolve()` is a non-locking read. `listEvents()` returns events in append order.
-
-Adapters report unique-constraint violations, serialization failures, and deadlocks as `StorageConflictError`. The core then re-runs the whole transaction callback, up to `transactionMaxAttempts` (default `3`). Callbacks have no side effects outside the transaction, so re-running them is safe. For example, two concurrent first signups for the same address both succeed: the losing insert is retried and observes the other Contact. IDs must never be reused, and generations must never be reset on existing rows. Injected ID generators must produce unique IDs across service instances.
-
-`ConfirmationTokenStore.replace()` must atomically enforce replacement and bounded retention within `(subscriptionId, lifecycleGeneration)`, retaining the newest records first and breaking timestamp ties by insertion order. Revocation is also generation-scoped, so it cannot revoke a new cycle's tokens. Confirmation resolves, checks, and consumes the token inside the activation transaction, so a rolled-back activation does not burn its token. Unsubscribe, unsubscribe-all, and suppression revoke pending confirmation tokens in the same transaction.
-
-These are breaking pre-release contract changes: adapters must persist both generation fields, `Subscription.confirmationDelivery`, and the generation on confirmation-token records. The nonce-store API and legacy opaque unsubscribe replacement hooks have been removed. Existing `bn1` links are not accepted; newly issued generation-bound links use `bn2`.
-
-### Scanner-safe web flows
-
-Core methods are mutation methods. Framework integrations should use a safe landing page and an explicit mutation:
-
-```text
-GET link
-  -> render confirmation/unsubscribe page
-  -> POST/action
-  -> confirm() or unsubscribe()
-```
-
-Do not confirm or unsubscribe merely because an e-mail security scanner or link preview performed a GET. An application may deliberately implement a browser-side auto-POST confirmation flow, but it is not the library default.
-
-### Cleanup
-
-Token expiry and physical deletion are separate. Expired tokens become invalid immediately; cleanup is explicit and scheduler-neutral:
-
-```ts
-await newsletter.cleanupConfirmationTokens({
-  retentionMs: 7 * 24 * 60 * 60 * 1000
-})
-```
-
-Call this from the scheduler appropriate to the host runtime.
-
-## Abuse protection
-
-`subscribe()` and `resendConfirmation()` support a generic `AbuseGuard` plus provider-neutral rate limiting:
-
-```ts
-import {
-  createHmacRateLimitKeyProvider
-} from 'better-newsletter/security'
-
-const newsletter = createNewsletter({
-  storage,
-  mailer,
-  capabilities,
-  abuseGuard,
-  rateLimiter,
-  rateLimitKeyProvider: createHmacRateLimitKeyProvider({
-    secret: process.env.NEWSLETTER_RATE_LIMIT_SECRET!
-  })
-})
-```
-
-The built-in HMAC key provider derives opaque 64-character keys instead of passing raw e-mail addresses to the rate limiter. A framework adapter may supply trusted request context and a custom material function for an IP/fingerprint-based policy.
-
-A rejected request throws `NewsletterError` with code `RATE_LIMITED` and, when the limiter reports it, `retryAfterMs` for a `Retry-After` response header.
-
-Rate limiting is intentionally not represented by a silent production no-op. If a `rateLimiter` is configured, a `rateLimitKeyProvider` is required as well. Signup and resend use separate action buckets and policies.
-
-The generic abuse guard can integrate a honeypot, Cloudflare Turnstile, hCaptcha, ALTCHA, WAF/session proof, or another host-owned mechanism without coupling the core to that provider.
-
-## Subscribe and confirm
-
-Public signup requires an explicit consent signal and version:
-
-```ts
-await newsletter.subscribe({
-  email: 'person@example.com',
-  audience: 'default',
-  consent: {
-    granted: true,
-    version: 'privacy-2026-09',
-    source: 'landing-page',
-    locale: 'de'
-  }
-})
-```
-
-The public result is deliberately neutral:
-
-```ts
-{ accepted: true }
-```
-
-It does not reveal whether the address is unknown, pending, active, unsubscribed or suppressed. Confirmation delivery runs asynchronously; signup acceptance does not wait for mail delivery.
-
-Confirmation is capability-based:
-
-```ts
-await newsletter.confirm({ token })
-```
-
-Production confirmation capabilities are provided by `createSecureCapabilities()`. Raw confirmation tokens are never persisted by that implementation: only SHA-256 digests are passed to the token store. Tokens are purpose-bound, subscription-bound, expiring, and atomically consumable through the store contract.
-
-The default resend policy retains at most the immediately previous still-valid confirmation token (`maxActiveTokens: 2`) to tolerate ambiguous mail-provider timeouts without allowing an unbounded set of live links. Applications may instead choose `REPLACE_PREVIOUS`.
-
-### Retrying unfinished confirmation work
-
-Signup persists a `confirmationDelivery` work item together with pending consent, before starting asynchronous processing. Its stable `id`, unique `attemptId`, and `leaseExpiresAt` let independent service instances claim work transactionally without an in-process lock. Concurrent signups reuse the pending work rather than starting duplicate live attempts.
-
-The mailer receives the `deliveryId` of the work item, the current `attemptId`, the `audienceKey`, and the `lifecycleGeneration`, next to the Contact, the claimed Subscription and the token. `deliveryId` stays stable across retries of the same work and suits correlation. Every attempt carries a fresh token, so use `attemptId` as a provider idempotency key.
-
-Accepted delivery atomically sets `confirmationSentAt`, clears the work item, and appends its delivery event. A mailer reports a failed send as `{ accepted: false, failure }`:
-
-- `TEMPORARY` (the default for explicit failures without a category, and for token setup failures): the claim is released for an immediate retry.
-- `PERMANENT`: the work item is dropped; a later `subscribe()` does not retry it, while `resendConfirmation()` starts new work.
-- `AMBIGUOUS` (also used when delivery throws): the provider may have sent the message. The claim is kept until its lease expires, so an immediate retry cannot add another message. The retry after expiry is a new attempt of the same work item.
-
-Each failure records `CONFIRMATION_SEND_FAILED` with its `outcome` and `stage`. Optional `reason` is limited to the exported `MAIL_DELIVERY_REASONS` codes (`INVALID_REQUEST`, `AUTH_FAILED`, `RATE_LIMITED`, `PROVIDER_UNAVAILABLE`, `TIMEOUT`, `RENDER_FAILED`, `TOKEN_SETUP_FAILED`, `UNKNOWN`); unexpected values are persisted as `UNKNOWN`, never as raw provider text. If the Contact was suppressed after the claim, the claim is released and the event records stage `ELIGIBILITY`. Failures do not discard possibly delivered tokens; the configured bounded retention policy still applies. A subsequent `subscribe()` or `resendConfirmation()` resumes unfinished work without replacing consent or incrementing generations.
-
-Delivery result events carry `deliveryId`, `attemptId`, `lifecycleGeneration`, `authoritative`, and `outcome` (`ACCEPTED`, `TEMPORARY`, `PERMANENT`, or `AMBIGUOUS`). `CONFIRMATION_SENT` and `CONFIRMATION_SEND_FAILED` always mean `authoritative: true`: the result belongs to the attempt that currently owns the work and was allowed to finalize it. A result from a superseded attempt is recorded as `CONFIRMATION_STALE_RESULT` with `authoritative: false` and never changes Subscription state. An attempt is superseded when its lease was reclaimed by a newer attempt, or when the work ended in the meantime (confirmation, unsubscribe, or a new lifecycle generation).
-
-If a process stops or result persistence fails, the work remains recoverable after its lease expires. Configure `confirmation.deliveryLeaseMs` for the expected provider timeout; it defaults to five minutes. A later attempt gets a new attempt ID. Token replacement runs under the lifecycle transaction's ownership check; completion also checks ownership, so an older worker cannot replace newer tokens, clear newer work, or modify a new consent cycle. Capability adapters must support being called from lifecycle transactions without re-entering the same lifecycle locks. Delivery events identify the lifecycle generation and attempt.
-
-Delivery is **at least once**, not exactly once: an ambiguous provider result or expired lease can lead to another message. The core does not run a scheduler or automatically drain pending work after restart. Hosts must keep asynchronous processing alive or trigger retry through signup/resend.
-
-### Resend confirmation delivery
-
-On Node.js 20.11 or newer, create a **server-only** API key and verify the sender domain in the [Resend dashboard](https://resend.com/domains). The `/resend` export is optional: core-only users do not install or configure Resend. The default adapter uses the documented HTTPS `POST /emails` API through the runtime's `fetch`, so no Resend SDK is required; callers who already use `resend@^6.30.0` can inject their own SDK instance as `client` instead of providing `apiKey`. Keep the API key in server-side environment variables; do not put it in a client bundle.
-
-```ts
-import { createNewsletter, createSecureCapabilities } from 'better-newsletter'
-import { resendMailer } from 'better-newsletter/resend'
-
-const mailer = resendMailer({
-  apiKey: process.env.RESEND_API_KEY!,
-  from: 'Newsletter <news@example.com>', // use a verified sender domain
-  replyTo: 'support@example.com',
-  renderConfirmation: async input => {
-    const url = new URL('/newsletter/confirm', process.env.PUBLIC_APP_ORIGIN!)
-    url.searchParams.set('token', input.token)
-    return {
-      subject: `Confirm ${input.audienceKey} updates`,
-      html: `<p><a href="${url.toString()}">Confirm subscription</a></p>`,
-      text: `Confirm your subscription: ${url.toString()}`
-    }
-  }
-})
 
 const newsletter = createNewsletter({
   storage,
@@ -280,264 +53,60 @@ const newsletter = createNewsletter({
 })
 ```
 
-The renderer receives the Contact and Subscription (including locale, consent source and metadata), audience key, token, expiry, stable delivery ID, attempt ID and lifecycle generation. It owns all copy and the confirmation URL; the adapter never infers a hostname from request headers. Supply exactly one of `apiKey` or a compatible `client`; `fetch` may be injected for custom transport or tests. The default transport never logs provider response bodies (the standalone Resend SDK may log API errors in non-production environments when you inject it). Resend handles email transport only; local Contact/Subscription state and consent evidence remain authoritative. This adapter does not send campaigns or process bounce/complaint webhooks.
+The host application owns `storage` and `mailer`. Built-in PostgreSQL and Resend integrations are available, or you can implement the provider-neutral contracts yourself.
 
-Resend receives a SHA-256 idempotency key derived from the stable work ID, *individual attempt* ID and lifecycle generation, not from the recipient, body or bearer token. Replaying the **same attempt with the same payload** can be deduplicated by Resend for [up to 24 hours](https://resend.com/docs/dashboard/emails/idempotency-keys). New leased attempts carry new tokens and new keys, so Resend cannot guarantee exactly-once delivery across attempts. A 409 for an in-flight idempotent request, a generic 5xx or an unknown transport outcome is `AMBIGUOUS`: the core holds the claim until its lease expires instead of starting a new attempt immediately. A new attempt after lease expiry still uses a fresh key; the adapter cannot promise cross-attempt deduplication. Known API-key errors map to `AUTH_FAILED`; other 403 responses, including sender-domain validation failures, map to `INVALID_REQUEST`. Provider rejection is never recorded as an accepted send. The adapter emits only bounded failure codes and does not log API keys, tokens or rendered bodies or persist provider payloads. The host remains responsible for its privacy policy and provider agreement.
-
-At the core level, `subscribe()` and `resendConfirmation()` enqueue confirmation delivery and normally answer before it finishes, so delivery errors do not reveal whether an address has pending work. Pass `runBackground` to hand the work to the runtime, for example to `event.waitUntil()` on serverless platforms. The tasks it receives never reject. Background failures are reported through `logger.error` (default: `console`); failures of the synchronous state transition propagate to the caller. The Nuxt server helper handles runtimes without `waitUntil` differently, as described below.
+Subscribe with explicit consent:
 
 ```ts
-const newsletter = createNewsletter({
-  storage,
-  mailer,
-  capabilities,
-  runBackground: task => event.waitUntil(task),
-  logger
+await newsletter.subscribe({
+  email: 'person@example.com',
+  audience: 'default',
+  consent: {
+    granted: true,
+    version: 'privacy-2026-09',
+    source: 'signup-form'
+  }
 })
 ```
 
-When adapting a runtime without `waitUntil`, collect background tasks and **await them before the request ends** (or move delivery to a durable worker). Simply starting a floating Promise is not reliable when a serverless worker can terminate at response time. This can extend response time, but the public response must still be neutral. The core does not schedule retries after a restart; retry unfinished work through a later signup/resend or your own scheduler.
+A new subscription starts as pending confirmation. Confirm it with the token delivered by your mailer:
 
-## Unsubscribe and preferences
+```ts
+await newsletter.confirm({ token })
+```
 
-Create an unsubscribe capability from trusted application code and pass only that opaque value to the public action:
+Create an unsubscribe capability from trusted server code and pass it to the unsubscribe action:
 
 ```ts
 const capability = await newsletter.createUnsubscribeCapability({
   email: 'person@example.com',
-  audience: 'product-news'
+  audience: 'default'
 })
 
 await newsletter.unsubscribe({ capability })
 ```
 
-A separate capability can authorize explicit unsubscribe-all behavior:
+### PostgreSQL and Resend
 
 ```ts
-const capability = await newsletter.createUnsubscribeCapability({
-  email: 'person@example.com',
-  all: true
-})
+import { postgresStorage } from 'better-newsletter/postgres'
+import { resendMailer } from 'better-newsletter/resend'
 
-await newsletter.unsubscribeAll({ capability })
-```
+const storage = postgresStorage(db)
 
-Unsubscribe changes Subscription consent state. It does **not** globally suppress the Contact.
-
-A distinct, purpose-bound capability lets a trusted server expose only public audience keys and statuses through a read-only preferences POST:
-
-```ts
-const capability = await newsletter.createManagePreferencesCapability({
-  email: 'person@example.com'
-})
-const subscriptions = capability == null
-  ? null
-  : await newsletter.listPreferences({ capability })
-// [{ audience: 'default', status: 'ACTIVE', unsubscribeCapability: '...' }, ...]
-// or null for an invalid/stale link
-```
-
-Do not issue this capability from a public email-only endpoint. Render a safe GET landing page, then submit the capability by POST to fetch preferences. Listing does not change consent or expose the Contact email or subject. The result includes per-audience unsubscribe capabilities: treat those as bearer credentials, not public display data.
-
-## External application subjects
-
-A Contact may optionally link to an application-owned entity:
-
-```ts
-await newsletter.linkSubject({
-  email: 'person@example.com',
-  subject: {
-    namespace: 'app-user',
-    id: '550e8400-e29b-41d4-a716-446655440000'
-  }
-})
-```
-
-The reference is opaque. `better-newsletter` does not query, own, or require the host application's user table. Linking never creates consent or changes Subscription status. Replacing a different existing subject requires the trusted `replace: true` option.
-
-## Suppression
-
-Global operational suppression is explicit and independent from newsletter consent:
-
-```ts
-await newsletter.suppressContact({
-  email: 'person@example.com',
-  reason: 'BOUNCE'
-})
-```
-
-The shared delivery eligibility rule remains:
-
-```text
-Contact.status == ENABLED
-AND Subscription.status == ACTIVE
-AND confirmedAt is present
-AND unsubscribedAt is absent
-```
-
-A deliberate trusted `unsuppressContact()` operation re-enables the Contact but does not reactivate or rewrite any Subscription.
-
-## Trusted import
-
-Existing applications can migrate known historical consent without manufacturing a new DOI:
-
-```ts
-await newsletter.importSubscription({
-  email: 'legacy@example.com',
-  audience: 'default',
-  status: 'ACTIVE',
-  consent: {
-    version: 'legacy-v1',
-    consentedAt: new Date('2025-01-01T00:00:00Z')
-  },
-  confirmedAt: new Date('2025-01-01T00:05:00Z')
-})
-```
-
-Import is a trusted service operation, not a public signup path. Importing `ACTIVE` requires an explicit `confirmedAt` and no `unsubscribedAt`; the library never invents confirmation evidence. Repeating the same import is idempotent, while conflicting historical facts are rejected.
-
-## Lifecycle events
-
-Meaningful transitions append lifecycle evidence such as:
-
-```text
-SIGNED_UP
-RESUBSCRIBED
-CONFIRMATION_REQUESTED
-CONFIRMATION_SENT
-CONFIRMATION_SEND_FAILED
-CONFIRMATION_STALE_RESULT
-CONFIRMED
-UNSUBSCRIBED
-SUPPRESSED
-UNSUPPRESSED
-SUBJECT_LINKED
-IMPORTED
-```
-
-Current Contact and Subscription rows remain the operational source of truth. The event contract is append-only; it is not an event-sourcing requirement.
-
-## Memory adapters
-
-For tests and development:
-
-```ts
-import {
-  memoryCapabilities,
-  memoryStorage
-} from 'better-newsletter/memory'
-```
-
-`memoryStorage()` serializes conflicting in-process transactions so lifecycle concurrency can be tested deterministically.
-
-`memoryCapabilities()` uses the real hashing/HMAC implementation with an ephemeral signing key. Confirmation digests live in `memoryStorage()` and roll back with its transactions; `confirmationTokenSnapshot()` exposes the committed records for assertions. For distributed-style tests, combine separate `createSecureCapabilities()` instances with the same signing key and one shared `memoryStorage()`. The memory storage reports duplicate inserts as `StorageConflictError`. None of the memory stores are durable production persistence.
-
-Production storage must provide transaction semantics strong enough to serialize conflicting contact-wide and subscription transitions, including generation checks and delivery claims. The PostgreSQL adapter enforces database uniqueness and atomicity.
-
-## PostgreSQL
-
-The PostgreSQL adapter targets PostgreSQL 14 or newer, Kysely 0.28.x, `pg` 8.x, and Node.js 20.11 or newer. It is implemented with Kysely but supports PostgreSQL specifically; the public adapter does not imply compatibility with other Kysely dialects. If you use the optional `/postgres` subpath, install a supported Kysely version and a PostgreSQL driver in your application (for example, `pnpm add kysely@^0.28.17 pg@^8`). Kysely is an optional peer dependency; `pg` is only a development dependency of this package. Core-only consumers do not need either. Provide your own configured Kysely database instance and connection pool; the library does not own their lifecycle.
-
-### Database migrations
-
-Better Newsletter never creates or alters database objects during normal application startup. Configure a migration provider next to your server configuration and choose either the direct or host-managed workflow:
-
-```ts
-// server/better-newsletter.config.ts
-import { defineBetterNewsletterMigrationConfig } from 'better-newsletter/migration'
-import {
-  postgresMigration,
-  postgresStorage
-} from 'better-newsletter/postgres'
-
-const db = createApplicationDatabase()
-
-export const migration = defineBetterNewsletterMigrationConfig({
-  provider: postgresMigration(db),
-  // Optional but useful for CLI processes that own this database client.
-  close: () => db.destroy()
-})
-
-export default defineBetterNewsletterConfig(async () => ({
-  origin,
-  storage: postgresStorage(db),
-  capabilities,
-  mailer
-}))
-```
-
-The CLI discovers `better-newsletter.config.ts` or `server/better-newsletter.config.ts` by default. Use `--config <path>` for another TypeScript/JavaScript config file. It reads the named `migration` export and does not invoke the runtime newsletter factory, so mail providers and signing secrets are not needed merely to inspect the schema.
-
-For direct schema management:
-
-```bash
-npx better-newsletter migrate
-# non-interactive deployment:
-npx better-newsletter migrate --yes
-```
-
-`migrate` inspects the live database, prints the required additive plan, asks for confirmation, and applies the whole PostgreSQL plan transactionally. Direct PostgreSQL migrations take a schema-scoped advisory lock and recheck the approved plan before applying: if another migration has already brought the schema current, they finish without changes; if the schema changed in another way, they stop so you can review a new plan.
-
-For applications that own migration history:
-
-```bash
-npx better-newsletter generate --output ./migrations/better-newsletter.sql
-```
-
-`generate` inspects the same live database but only writes the required SQL. Review/check that SQL into the host migration system and apply it with the host's normal deployment ordering. Existing compatible objects are not recreated and unrelated host tables/columns are left untouched. Destructive or data-transforming future upgrades are not inferred from a schema diff; they require an explicit reviewed Better Newsletter upgrade step.
-
-The same engine is available programmatically:
-
-```ts
-import { getMigrations } from 'better-newsletter/migration'
-
-const migrations = await getMigrations(migration)
-console.log(migrations.toBeCreated, migrations.toBeAdded)
-await migrations.runMigrations()
-```
-
-`migrations/postgres/001_newsletter.sql` remains an inspectable generated snapshot of the current empty-database target, not the primary installation/upgrade API and not an independent schema source. `pnpm migration:snapshot:check` verifies it against the canonical schema model; contributors update the model first and regenerate the snapshot with `pnpm migration:snapshot:write`.
-
-```ts
-import { createNewsletter } from 'better-newsletter'
-import { createHmacRateLimitKeyProvider } from 'better-newsletter/security'
-import {
-  postgresRateLimiter,
-  postgresStorage,
-  listEligibleSubscriptions
-} from 'better-newsletter/postgres'
-
-// db is the host application's configured Kysely instance for PostgreSQL.
-const newsletter = createNewsletter({
-  storage: postgresStorage(db),
-  mailer,
-  capabilities,
-  rateLimiter: postgresRateLimiter(db),
-  rateLimitKeyProvider: createHmacRateLimitKeyProvider({
-    secret: process.env.NEWSLETTER_RATE_LIMIT_SECRET!
+const mailer = resendMailer({
+  apiKey: process.env.RESEND_API_KEY!,
+  from: 'Newsletter <news@example.com>',
+  renderConfirmation: ({ token }) => ({
+    subject: 'Confirm your subscription',
+    text: `Confirm: https://example.com/newsletter/confirm?token=${encodeURIComponent(token)}`
   })
 })
-
-const recipients = await listEligibleSubscriptions(db, 'default')
 ```
 
-`listEligibleSubscriptions()` is a read-only recipient-selection helper for one audience. It selects only enabled Contacts with active, confirmed, not-unsubscribed Subscriptions. Re-check eligibility when sending if recipient state may have changed since selection; no campaign sending or scheduler is provided. Hosts that need another database or storage design can implement `NewsletterStorage` and `RateLimiter` directly.
+### Nuxt
 
-The migration defines `newsletter_contacts`, `newsletter_subscriptions`, `newsletter_tokens`, `newsletter_events`, and `newsletter_rate_limits`. Contact, Subscription, and event IDs are application-generated `text` values: the core generates UUIDs by default, but injected generators may produce other unique strings. `email` must already be trimmed and lowercase and is globally unique; `(contact_id, audience_key)` is unique. Each Contact can link at most one external subject per newsletter instance through opaque `subject_namespace` and `subject_id` strings without a foreign key into the host application; the core controls replacement of an existing subject. Contact metadata and event metadata are JSON objects in `jsonb`; event types use the `event_type` text column. Subscription consent evidence is stored in `consent_version`, `consent_source`, `consent_locale`, and `consented_at`. Delivery work is stored in `confirmation_delivery_id`, `confirmation_attempt_id`, and `confirmation_lease_expires_at`. Both generation columns are positive `bigint` values and must remain within JavaScript's safe-integer range when mapped to the core.
-
-Only confirmation-token digests, never raw confirmation tokens, belong in `newsletter_tokens`. Its identity `id` orders equal-timestamp records deterministically for bounded retention within `(subscription_id, lifecycle_generation)`; `sequence` gives events append order even when timestamps match. Store `capabilityGeneration` and `lifecycleGeneration` persistently; do not reset generations or reuse IDs. All state transitions, token mutations, and event appends must share one atomic transaction. Serialize conflicting transitions with `SERIALIZABLE` isolation or row locks, taking contact locks before subscription locks and token locks. Retry unique violations, serialization failures, and deadlocks through the storage conflict contract rather than continuing a failed transaction.
-
-`newsletter_rate_limits` is an optional SQL fixed-window counter keyed by `(key_hash, action, window_ms, bucket_start_ms)`, with `attempt_count` and `expires_at`; including the window length prevents different configured policies from sharing a bucket. `postgresRateLimiter(db)` performs atomic consumption across service instances and accepts any string returned by your `RateLimitKeyProvider` (including base64url HMACs); despite the `key_hash` column name, it stores the provided key as-is. Always supply a privacy-preserving opaque key rather than raw e-mail or IP data. Rate-limit counters and expired token rows need explicit scheduled cleanup; neither import nor the core starts a scheduler. Keep HMAC signing and rate-limit secrets stable across process restarts and protect them outside the database. Rotating a signing secret invalidates outstanding unsubscribe links; rotating the rate-limit secret resets effective buckets.
-
-Deleting a Contact cascades to its Subscriptions, token records, and lifecycle events, so intentional erasure removes historical evidence too. Events are otherwise append-only; the schema does not use an immutable-event trigger that would block erasure. Plan operational retention, exports, and erasure with that behavior in mind.
-
-## Nuxt 4 / Nitro
-
-Install the package in a Nuxt 4 application:
-
-```bash
-pnpm add better-newsletter
-```
+Add the module:
 
 ```ts
 // nuxt.config.ts
@@ -546,145 +115,34 @@ import BetterNewsletter from 'better-newsletter/nuxt'
 export default defineNuxtConfig({
   modules: [BetterNewsletter],
   betterNewsletter: {
-    defaultAudience: 'default',
-    consent: { version: 'privacy-2026-09', source: 'landing-page' },
     audiences: {
-      default: { public: true },
-      'product-news': { public: true },
-      'weekly-analysis': { public: true }
+      default: { public: true }
+    },
+    consent: {
+      version: 'v1',
+      source: 'signup-form'
     }
   }
 })
 ```
 
-The default `server/better-newsletter.config.ts` is a **server-only** configuration factory; `useBetterNewsletter(event)` is a server-only Promise-returning accessor for trusted handlers. The factory returns an application-owned `origin`, storage, mailer and capabilities. Do not import either from browser code. Keep long-lived adapters (database pool or memory storage) outside the factory instead of recreating them on every request. The Nuxt helper automatically uses the platform's `waitUntil` when available; otherwise its `subscribe()` and `resendConfirmation()` Promises await pending delivery work before resolving. Custom handlers do **not** need to call `flushBetterNewsletter()` after awaiting either method; an awaited fallback can increase response time without changing the neutral result.
+Then provide the server-side newsletter configuration:
 
 ```ts
 // server/better-newsletter.config.ts
-import { memoryCapabilities, memoryStorage } from 'better-newsletter/memory'
 import { defineBetterNewsletterConfig } from 'better-newsletter/nuxt/server'
 
-const storage = memoryStorage()
-const capabilities = memoryCapabilities()
-const appOrigin = new URL(process.env.APP_ORIGIN ?? 'http://localhost:3000').origin
-
-export default defineBetterNewsletterConfig(async () => ({
-  origin: appOrigin,
+export default defineBetterNewsletterConfig(() => ({
+  origin: 'https://example.com',
   storage,
-  capabilities,
-  mailer: {
-    async sendConfirmation(input) {
-      // Implement server-side delivery using a link to
-      // new URL(`/newsletter/confirm?token=${encodeURIComponent(input.token)}`, appOrigin).
-      // Never log or persist raw tokens; see playground/ for a local-only inbox.
-      return { accepted: false, failure: 'TEMPORARY' }
-    }
-  }
+  mailer,
+  capabilities
 }))
 ```
 
-This placeholder mailer deliberately does **not** deliver. Replace it with a production mailer before accepting real subscriptions. Configure `APP_ORIGIN` to your application's trusted, fixed public origin; never construct confirmation links from an arbitrary request `Host` or forwarded host header. Server-only `newsletterUrl(appOrigin, '/newsletter/confirm', token)` from `better-newsletter/nuxt/server` constructs a confirmation landing-page URL with a URL-encoded token.
+The Nuxt integration supplies the lifecycle API routes. Your application still owns the signup form, confirmation/unsubscribe pages and mail copy.
 
-### Module options and public routes
-
-| Option | Meaning |
-| --- | --- |
-| `defaultAudience` | Audience used when none is supplied (default: `default`). |
-| `audiences` | Map of audience keys to `{ public: boolean }`. Only explicitly public audiences should be accepted by public endpoints. |
-| `consent` | Version and source stored with explicit public consent (defaults: `{ version: 'v1', source: 'signup-form' }`). |
-| `configFile` | Server config path, default `server/better-newsletter.config.ts`. |
-| `routes` | Override a POST route path with a string or disable it with `false`. |
-
-The built-in lifecycle actions and authorized preferences read are **POST only**:
-
-| Route | Request body |
-| --- | --- |
-| `/api/newsletter/subscribe` | `{ email, audience?, audiences?, consent: true, consentVersion: string, website?: string }` (`website` is a honeypot) |
-| `/api/newsletter/resend-confirmation` | `{ email, audience? }` |
-| `/api/newsletter/confirm` | `{ token }` |
-| `/api/newsletter/unsubscribe` | `{ capability }` |
-| `/api/newsletter/unsubscribe-all` | `{ capability }` |
-| `/api/newsletter/preferences` | `{ capability }` (read-only; returns `{ subscriptions: { audience, status, unsubscribeCapability }[] \| null }`) |
-
-For example, `routes: { resendConfirmation: '/api/mail/resend', preferences: false }` moves one endpoint and omits another. The route keys are `subscribe`, `resendConfirmation`, `confirm`, `unsubscribe`, `unsubscribeAll` and `preferences`. If you disable a route, implement its POST behavior yourself or omit that UI feature. Do not put secrets, storage, or provider credentials in `nuxt.config.ts` public runtime config or browser bundles.
-
-The module supplies API endpoints, **not** consent forms, mail copy, confirmation pages, unsubscribe/preferences pages, or authentication. Build your own UI. GET confirmation/unsubscribe links should render landing pages with explicit POST buttons; GET preferences pages should likewise make no authorized read until an explicit POST. Never issue unsubscribe or preferences capabilities to an anonymous caller based solely on an email address. Generate links in trusted server code (for example, after authenticating the user or while sending their mail).
-
-Public signup is anonymous and requires explicit versioned consent: the UI must obtain consent before POSTing `consent: true` and the `consentVersion` configured in `nuxt.config.ts`. The module uses the trusted configured source; it does not trust a source, locale, or subject in public JSON. Do not trust a claimed user ID from query parameters or headers. Use `await useBetterNewsletter(event)` in a protected server handler and call `linkSubject()` only after your application's **verified** session has supplied the identity; linking does not create consent. Likewise, `suppressContact`, `unsuppressContact`, imports and unsubscribe-capability issuance are trusted server operations, not public-by-email endpoints.
-
-Protect subscribe and resend with the optional `website` honeypot or `abuseGuard` and production rate limiting. Plan separate limits for action, audience, normalized address and trusted client IP/network (plus global budgets); a single per-address limit cannot stop many-address abuse. Resolve proxy IPs only through configured, trusted infrastructure and use HMAC-derived opaque keys rather than raw address/IP in rate-limit storage. The core accepts `rateLimiter`, `rateLimitKeyProvider` and `rateLimits`; the Nuxt factory can supply these alongside its mailer and storage. For an additional client-identity dimension, configure both `trustedClientIdentity(event)` (from verified infrastructure, not arbitrary forwarded headers) and `clientRateLimit: { secret, limiter, policies? }` in the server factory.
-
-The server-only config can also map untrusted request metadata into `securityContext(event, body)` for subscribe and resend. For example, add these properties to the object returned by `defineBetterNewsletterConfig` (where `verifyCaptchaToken` is your app's server-side CAPTCHA verifier):
-
-```ts
-securityContext: (_event, body) => ({
-  captchaToken: typeof body.captchaToken === 'string' ? body.captchaToken : null
-}),
-abuseGuard: {
-  async verify({ context }) {
-    const token = (context as { captchaToken?: unknown } | undefined)?.captchaToken
-    return { allowed: typeof token === 'string' && await verifyCaptchaToken(token) }
-  }
-}
-```
-
-The handler passes this transient context to the core `abuseGuard` and `rateLimitKeyProvider`; it does not itself persist raw IPs or CAPTCHA tokens. Never trust a client-supplied IP or session claim in `body`. If you add a trusted network identity from `event`, hash/HMAC it before writing any rate-limit key; do not include raw IPs or CAPTCHA tokens in contact metadata, events or logs.
-
-For production, replace memory adapters with `postgresStorage(db)` and `postgresRateLimiter(db)` from `better-newsletter/postgres`, configure `postgresMigration(db)`, and apply the schema with `better-newsletter migrate` or your host-managed `generate` workflow, `createSecureCapabilities({ hmacSecret })`, `createHmacRateLimitKeyProvider({ secret })`, and `resendMailer({ apiKey, from, renderConfirmation })` from `better-newsletter/resend`. Configure a verified sender, durable PostgreSQL connection, stable server-side signing/rate-limit secrets, a trusted origin for URLs, and runtime-safe background delivery (`waitUntil`, an awaited fallback or a durable worker). See the adapter sections above for integration details; the example deliberately uses none of these external services.
-
-### Consumer example and maintainer playground
-
-To learn the essential Nuxt integration, start with [`examples/basic/`](examples/basic/README.md) in the [consumer examples](examples/README.md): a small, copyable signup, confirmation and unsubscribe flow. Contributors testing lifecycle edge cases should use [`playground/`](playground/README.md), the full maintainer development app with three audiences, a fake inbox, preferences, suppression and delivery-failure/expiry controls. Both import only public package APIs and remain outside the npm artifact. From this repository checkout:
-
-```bash
-pnpm install --frozen-lockfile
-pnpm build
-pnpm --dir examples/basic dev
-```
-
-To run the maintainer playground instead:
-
-```bash
-pnpm --dir playground dev
-```
-
-The root pnpm install also installs both consumers through the minimal workspace configuration. Their temporary `link:` dependencies resolve the local package through its public exports. After building the library, run `pnpm --dir examples/basic typecheck` and `pnpm --dir examples/basic build` to validate the small example, or `pnpm --dir playground typecheck` and `pnpm --dir playground build` to validate the full app. The active StackBlitz demo will be enabled after the package is available from npm; no active link is provided before publication.
-
-For an artifact-level smoke test instead of the playground's `link:..` dependency, pack the **root** package with `pnpm pack --pack-destination playground` (the `prepack` hook builds it); install the resulting `.tgz` in the playground with `pnpm --dir playground add ./better-newsletter-<version>.tgz`, then run its build. This checks the published `dist` exports, not merely the source checkout. Restore `link:..` and remove the local test tarball afterward.
-
-## Development
-
-This repository uses pnpm.
-
-Repository layout:
-
-| Path | Role |
-| --- | --- |
-| `src/` | Library and Nuxt module implementation. |
-| `playground/` | Full maintainer development/debugging Nuxt app, excluded from the npm artifact. |
-| `examples/basic/` | Minimal, copyable consumer integration example, excluded from the npm artifact. |
-| `test/` | Automated tests; `test/fixtures/` contains automated consumers, not documentation examples. |
-| `migrations/` | Generated/verified database-specific schema snapshots shipped with the package. |
-| `dist/` | Generated package output, not committed to Git. |
-
-```bash
-pnpm install --frozen-lockfile
-pnpm check
-```
-
-Individual commands:
-
-```bash
-pnpm lint
-pnpm typecheck
-pnpm test
-pnpm build
-```
-
-Set `DATABASE_URL` to a disposable PostgreSQL database to run the integration
-tests (the test user needs `CREATE SCHEMA`). The tests create and remove their
-own isolated schema; without `DATABASE_URL`, they are skipped. CI provisions a
-temporary PostgreSQL service and runs them on every check.
+See [examples/basic](examples/basic/README.md) for a minimal Nuxt example.
 
 ## License
 

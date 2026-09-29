@@ -505,3 +505,6 @@ export function postgresRateLimiter<DB>(
     }
   }
 }
+
+export { postgresMigration } from './migration/postgres-provider.js'
+export type { PostgresMigrationOptions } from './migration/postgres-provider.js'

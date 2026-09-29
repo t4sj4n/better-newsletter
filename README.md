@@ -83,7 +83,9 @@ const capability = await newsletter.createUnsubscribeCapability({
   audience: 'default'
 })
 
-await newsletter.unsubscribe({ capability })
+if (capability) {
+  await newsletter.unsubscribe({ capability })
+}
 ```
 
 ### PostgreSQL and Resend

@@ -2,14 +2,14 @@
 
 Framework-agnostic newsletter subscription and consent lifecycle infrastructure for TypeScript.
 
-`better-newsletter` handles the lifecycle around a newsletter so your application does not have to rebuild it itself:
+> **In short:** Better Newsletter takes care of the awkward parts around newsletter signups: confirming an address, remembering consent, handling unsubscribe links, and keeping repeat signups consistent. You keep your own database, mail provider and UI — Better Newsletter handles the lifecycle behind them.
 
-- a repeated signup stays idempotent instead of creating duplicate state;
+Instead of rebuilding the same edge cases in every app, you get predictable behavior for common flows:
+
+- repeated signups stay idempotent instead of creating duplicate state;
 - Double Opt-In, confirmation tokens and unsubscribe capabilities follow one consistent lifecycle;
 - one e-mail address can have independent subscriptions to multiple audiences;
 - bounces or manual suppression can block delivery globally without rewriting consent history.
-
-You keep control of your database, mail provider, UI and application identity. `better-newsletter` provides the lifecycle and the integration points.
 
 > **Status:** early development. The package has not been published to npm yet and the public API may still change before the first prerelease.
 
@@ -33,6 +33,37 @@ pnpm add better-newsletter
 ```
 
 Node.js 20.11 or newer is required.
+
+### Set up the database
+
+Better Newsletter never changes your database schema during normal application startup.
+
+For PostgreSQL, expose a migration config from `better-newsletter.config.ts` or `server/better-newsletter.config.ts`:
+
+```ts
+import { defineBetterNewsletterMigrationConfig } from 'better-newsletter/migration'
+import { postgresMigration } from 'better-newsletter/postgres'
+
+export const migration = defineBetterNewsletterMigrationConfig({
+  provider: postgresMigration(db)
+})
+```
+
+Then choose one of the two setup workflows:
+
+```bash
+# Apply the required schema directly
+pnpm exec better-newsletter migrate
+
+# Or generate SQL for your own migration system
+pnpm exec better-newsletter generate --output ./migrations/better-newsletter.sql
+```
+
+**`migrate`** inspects the database, shows the required changes, asks for confirmation, and applies them.
+
+**`generate`** inspects the same database but only writes the required SQL so you can review and apply it through your application's existing migration workflow.
+
+Both commands are safe to run again when the schema is already current. Use `--yes` for non-interactive deployments.
 
 ## Basic usage
 

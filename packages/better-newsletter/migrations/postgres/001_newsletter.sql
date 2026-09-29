@@ -130,4 +130,6 @@ CREATE INDEX newsletter_events_contact_sequence_idx ON newsletter_events (contac
 
 CREATE INDEX newsletter_events_subscription_sequence_idx ON newsletter_events (subscription_id, sequence) WHERE subscription_id IS NOT NULL;
 
+CREATE INDEX newsletter_events_soft_bounce_idx ON newsletter_events (contact_id, sequence DESC) WHERE event_type = 'PROVIDER_FEEDBACK' AND metadata ->> 'feedbackType' = 'SOFT_BOUNCE';
+
 CREATE INDEX newsletter_rate_limits_expires_at_idx ON newsletter_rate_limits (expires_at);

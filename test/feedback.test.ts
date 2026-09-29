@@ -9,15 +9,16 @@ import {
   SUBSCRIPTION_STATUSES
 } from '../packages/better-newsletter/src/index.js'
 import { memoryAdapter, memoryCapabilities } from '../packages/better-newsletter/src/adapters/memory.js'
+import type { NewsletterStorage } from '../packages/better-newsletter/src/storage.js'
 import { resendWebhook } from '../packages/better-newsletter/src/webhooks/resend.js'
 
 const email = 'person@example.com'
 const occurredAt = new Date('2026-09-29T08:00:00.000Z')
 const webhookSecret = `whsec_${Buffer.from('test webhook secret with enough entropy').toString('base64')}`
 
-async function setup(softBounceThreshold?: number) {
+async function setup(softBounceThreshold?: number, storage: NewsletterStorage = memoryAdapter()) {
   const newsletter = betterNewsletter({
-    storage: memoryAdapter(),
+    storage,
     capabilities: memoryCapabilities(),
     mailer: { async sendConfirmation() { return { accepted: true as const } } },
     feedbackPolicy: softBounceThreshold === undefined ? {} : { softBounceThreshold }
@@ -90,6 +91,33 @@ describe('delivery feedback', () => {
     expect((await newsletter.processFeedback({ ...base, providerEventId: 'one' })).processed).toBe(false)
     expect((await newsletter.processFeedback({ ...base, providerEventId: 'two' })).suppressed).toBe(true)
     expect((await newsletter.listEvents({ email })).filter(e => e.type === NEWSLETTER_EVENT_TYPES.SUPPRESSED)).toHaveLength(1)
+  })
+
+  it('counts only bounded soft bounces since unsuppression without loading audit history', async () => {
+    const backing = memoryAdapter()
+    const storage: NewsletterStorage = {
+      transaction: operation => backing.transaction(transaction => operation({
+        ...transaction,
+        listEvents: async () => { throw new Error('Full audit history must not be read') }
+      }))
+    }
+    const newsletter = await setup(2, storage)
+    const input = { provider: 'other', email, occurredAt }
+    await newsletter.processFeedback({ ...input, type: DELIVERY_FEEDBACK_TYPES.SOFT_BOUNCE, providerEventId: 'soft-1' })
+    await newsletter.processFeedback({ ...input, type: DELIVERY_FEEDBACK_TYPES.DELIVERED, providerEventId: 'delivered' })
+    expect((await newsletter.processFeedback({ ...input, type: DELIVERY_FEEDBACK_TYPES.SOFT_BOUNCE, providerEventId: 'soft-2' })).suppressed).toBe(true)
+    await newsletter.unsuppressContact({ email })
+    expect((await newsletter.processFeedback({ ...input, type: DELIVERY_FEEDBACK_TYPES.SOFT_BOUNCE, providerEventId: 'soft-3' })).suppressed).toBe(false)
+    expect((await newsletter.processFeedback({ ...input, type: DELIVERY_FEEDBACK_TYPES.SOFT_BOUNCE, providerEventId: 'soft-3' })).processed).toBe(false)
+    expect((await newsletter.processFeedback({ ...input, type: DELIVERY_FEEDBACK_TYPES.SOFT_BOUNCE, providerEventId: 'soft-4' })).suppressed).toBe(true)
+
+    const contact = await newsletter.getContact({ email })
+    const events = await backing.transaction(transaction => transaction.listEvents(contact!.id))
+    expect(events.filter(event => event.type === NEWSLETTER_EVENT_TYPES.PROVIDER_FEEDBACK)).toHaveLength(5)
+    expect(events.filter(event => event.metadata.feedbackType === DELIVERY_FEEDBACK_TYPES.DELIVERED)).toHaveLength(1)
+    expect(await backing.transaction(transaction =>
+      transaction.countSoftBouncesSinceUnsuppressed(contact!.id, 1)
+    )).toBe(1)
   })
 
   it('does not add another suppression transition for an already-suppressed contact', async () => {

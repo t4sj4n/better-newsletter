@@ -83,6 +83,8 @@ export interface NewsletterStorageTransaction {
   appendEvent(event: NewsletterEvent): Promise<void>
   /** Atomically claims a provider event ID; false means it was processed before. */
   claimProviderEvent(provider: string, eventId: string, contactId: string): Promise<boolean>
+  /** Includes the current appended event; returns at most limit and stops at the latest UNSUPPRESSED event. */
+  countSoftBouncesSinceUnsuppressed(contactId: string, limit: number): Promise<number>
   /** Returns events in append order, including events sharing a timestamp. */
   listEvents(contactId: string): Promise<readonly NewsletterEvent[]>
 

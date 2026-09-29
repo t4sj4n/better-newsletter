@@ -1,10 +1,12 @@
 import type { NewsletterCapabilities } from './capabilities.js'
 import { createSecureCapabilities, type ConfirmationTokenRecord } from './security.js'
 import { MemoryConfirmationTokenStore } from './memory-security.js'
-import type {
-  Contact,
-  NewsletterEvent,
-  Subscription
+import {
+  DELIVERY_FEEDBACK_TYPES,
+  NEWSLETTER_EVENT_TYPES,
+  type Contact,
+  type NewsletterEvent,
+  type Subscription
 } from './domain.js'
 import { StorageConflictError } from './errors.js'
 import type {
@@ -103,6 +105,22 @@ export class MemoryNewsletterStorage implements NewsletterStorage {
         if (this.state.providerEvents.has(key)) return false
         this.state.providerEvents.add(key)
         return true
+      },
+      countSoftBouncesSinceUnsuppressed: async (contactId, limit) => {
+        let count = 0
+        for (let index = this.state.events.length - 1; index >= 0; index -= 1) {
+          const event = this.state.events[index]!
+          if (event.contactId !== contactId) continue
+          if (event.type === NEWSLETTER_EVENT_TYPES.UNSUPPRESSED) break
+          if (
+            event.type === NEWSLETTER_EVENT_TYPES.PROVIDER_FEEDBACK
+            && event.metadata.feedbackType === DELIVERY_FEEDBACK_TYPES.SOFT_BOUNCE
+          ) {
+            count += 1
+            if (count >= limit) break
+          }
+        }
+        return count
       },
       listEvents: async contactId =>
         this.state.events

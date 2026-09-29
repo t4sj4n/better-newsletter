@@ -404,6 +404,23 @@ function transactionAdapter<DB>(trx: Transaction<DB>): NewsletterStorageTransact
       `.execute(trx)
       return result.rows.length > 0
     },
+    async countSoftBouncesSinceUnsuppressed(contactId, limit) {
+      const result = await sql<{ count: string | number }>`
+        SELECT count(*) AS count FROM (
+          SELECT 1 FROM newsletter_events
+          WHERE contact_id = ${contactId}
+            AND event_type = 'PROVIDER_FEEDBACK'
+            AND metadata ->> 'feedbackType' = 'SOFT_BOUNCE'
+            AND sequence > COALESCE((
+              SELECT max(sequence) FROM newsletter_events
+              WHERE contact_id = ${contactId} AND event_type = 'UNSUPPRESSED'
+            ), 0)
+          ORDER BY sequence DESC
+          LIMIT ${limit}
+        ) AS bounded_feedback
+      `.execute(trx)
+      return Number(result.rows[0]?.count ?? 0)
+    },
     async listEvents(contactId) {
       const result = await sql<EventRow>`
         SELECT * FROM newsletter_events

@@ -125,6 +125,34 @@ describe.skipIf(!databaseUrl)('PostgreSQL integration', () => {
   describe('PostgreSQL-specific behavior', () => {
     beforeEach(reset)
 
+    it('bounds soft-bounce counts after the latest unsuppression', async () => {
+      const storage = postgresAdapter(db)
+      const now = new Date('2026-09-29T08:00:00.000Z')
+      await storage.transaction(async transaction => {
+        await transaction.createContact({
+          id: 'feedback-contact', capabilityGeneration: 1,
+          email: 'feedback@example.com', status: CONTACT_STATUSES.ENABLED,
+          subject: null, createdAt: now, updatedAt: now
+        })
+        for (const [index, type, feedbackType] of [
+          [1, NEWSLETTER_EVENT_TYPES.PROVIDER_FEEDBACK, 'SOFT_BOUNCE'],
+          [2, NEWSLETTER_EVENT_TYPES.PROVIDER_FEEDBACK, 'DELIVERED'],
+          [3, NEWSLETTER_EVENT_TYPES.UNSUPPRESSED, null],
+          [4, NEWSLETTER_EVENT_TYPES.PROVIDER_FEEDBACK, 'SOFT_BOUNCE'],
+          [5, NEWSLETTER_EVENT_TYPES.PROVIDER_FEEDBACK, 'SOFT_BOUNCE']
+        ] as const) {
+          await transaction.appendEvent({
+            id: `feedback-${index}`, contactId: 'feedback-contact',
+            type, occurredAt: now,
+            metadata: feedbackType == null ? {} : { feedbackType }
+          })
+        }
+        expect(await transaction.countSoftBouncesSinceUnsuppressed('feedback-contact', 1)).toBe(1)
+        expect(await transaction.countSoftBouncesSinceUnsuppressed('feedback-contact', 2)).toBe(2)
+        expect(await transaction.listEvents('feedback-contact')).toHaveLength(5)
+      })
+    })
+
     it('applies native normalization and uniqueness constraints from the migration', async () => {
       const now = new Date('2026-09-28T08:00:00.000Z')
 

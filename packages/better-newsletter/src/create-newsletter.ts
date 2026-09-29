@@ -859,15 +859,10 @@ export function createNewsletterWithSubscriptionBatch(config: BetterNewsletterOp
         )
         if (input.type === DELIVERY_FEEDBACK_TYPES.SOFT_BOUNCE
           && feedbackPolicy.softBounceThreshold !== undefined) {
-          const history = await transaction.listEvents(contact.id)
-          let lastUnsuppressed = -1
-          history.forEach((event, index) => {
-            if (event.type === NEWSLETTER_EVENT_TYPES.UNSUPPRESSED) lastUnsuppressed = index
-          })
-          const count = history.slice(lastUnsuppressed + 1).filter(event =>
-            event.type === NEWSLETTER_EVENT_TYPES.PROVIDER_FEEDBACK
-            && event.metadata.feedbackType === DELIVERY_FEEDBACK_TYPES.SOFT_BOUNCE
-          ).length
+          const count = await transaction.countSoftBouncesSinceUnsuppressed(
+            contact.id,
+            feedbackPolicy.softBounceThreshold
+          )
           suppress = count >= feedbackPolicy.softBounceThreshold
         }
         const updated = suppress

@@ -294,6 +294,11 @@ export const POSTGRES_NEWSLETTER_SCHEMA: PostgresSchemaModel = Object.freeze({
       definition: 'ON newsletter_events (subscription_id, sequence) WHERE subscription_id IS NOT NULL'
     },
     {
+      name: 'newsletter_events_soft_bounce_idx',
+      table: 'newsletter_events',
+      definition: "ON newsletter_events (contact_id, sequence DESC) WHERE event_type = 'PROVIDER_FEEDBACK' AND metadata ->> 'feedbackType' = 'SOFT_BOUNCE'"
+    },
+    {
       name: 'newsletter_rate_limits_expires_at_idx',
       table: 'newsletter_rate_limits',
       definition: 'ON newsletter_rate_limits (expires_at)'

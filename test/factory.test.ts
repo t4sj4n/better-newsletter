@@ -32,6 +32,8 @@ describe('betterNewsletter', () => {
       'confirm',
       'createManagePreferencesCapability',
       'createUnsubscribeCapability',
+      'eraseContactData',
+      'exportContactData',
       'getContact',
       'getSubscription',
       'importSubscription',

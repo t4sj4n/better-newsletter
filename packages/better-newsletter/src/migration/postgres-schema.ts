@@ -215,6 +215,16 @@ export const POSTGRES_NEWSLETTER_SCHEMA: PostgresSchemaModel = Object.freeze({
       ]
     },
     {
+      name: 'newsletter_suppression_keys',
+      columns: [
+        { name: 'key_hash', definition: 'text NOT NULL' }
+      ],
+      constraints: [
+        { name: 'newsletter_suppression_keys_pkey', definition: 'PRIMARY KEY (key_hash)' },
+        { name: 'newsletter_suppression_keys_key_hash_check', definition: "CHECK (key_hash <> '')" }
+      ]
+    },
+    {
       name: 'newsletter_rate_limits',
       columns: [
         { name: 'key_hash', definition: 'text NOT NULL' },

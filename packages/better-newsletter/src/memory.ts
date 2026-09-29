@@ -24,7 +24,8 @@ interface MemoryState {
   subscriptions: Map<string, Subscription>
   subscriptionByContactAudience: Map<string, string>
   events: NewsletterEvent[]
-  providerEvents: Set<string>
+  providerEvents: Map<string, string>
+  suppressionKeys: Set<string>
   confirmationTokens: Map<string, ConfirmationTokenRecord>
 }
 
@@ -45,7 +46,8 @@ export class MemoryNewsletterStorage implements NewsletterStorage {
     subscriptions: new Map(),
     subscriptionByContactAudience: new Map(),
     events: [],
-    providerEvents: new Set(),
+    providerEvents: new Map(),
+    suppressionKeys: new Set(),
     confirmationTokens: new Map()
   }
 
@@ -100,10 +102,10 @@ export class MemoryNewsletterStorage implements NewsletterStorage {
       appendEvent: async event => {
         this.state.events.push(clone(event))
       },
-      claimProviderEvent: async (provider, eventId) => {
+      claimProviderEvent: async (provider, eventId, contactId) => {
         const key = JSON.stringify([provider, eventId])
         if (this.state.providerEvents.has(key)) return false
-        this.state.providerEvents.add(key)
+        this.state.providerEvents.set(key, contactId)
         return true
       },
       countSoftBouncesSinceUnsuppressed: async (contactId, limit) => {
@@ -126,6 +128,49 @@ export class MemoryNewsletterStorage implements NewsletterStorage {
         this.state.events
           .filter(event => event.contactId === contactId)
           .map(clone),
+      listContactTokenMetadata: async contactId =>
+        [...this.state.confirmationTokens.values()]
+          .filter(token => token.contactId === contactId)
+          .map(({ purpose, subscriptionId, lifecycleGeneration, createdAt,
+            expiresAt, consumedAt, revokedAt }) => clone({
+            purpose, subscriptionId, lifecycleGeneration, createdAt,
+            expiresAt, consumedAt: consumedAt ?? null, revokedAt: revokedAt ?? null
+          })),
+      deleteContactTokens: async contactId => {
+        for (const [digest, token] of this.state.confirmationTokens) {
+          if (token.contactId === contactId) this.state.confirmationTokens.delete(digest)
+        }
+      },
+      deleteProviderEvents: async contactId => {
+        for (const [key, owner] of this.state.providerEvents) {
+          if (owner === contactId) this.state.providerEvents.delete(key)
+        }
+      },
+      minimizeEvents: async contactId => {
+        this.state.events = this.state.events.map(event =>
+          event.contactId === contactId ? { ...event, metadata: {} } : event
+        )
+      },
+      deleteContact: async contactId => {
+        const contact = this.state.contacts.get(contactId)
+        if (contact == null) return
+        this.state.contacts.delete(contactId)
+        this.state.contactByEmail.delete(contact.email)
+        for (const [id, subscription] of this.state.subscriptions) {
+          if (subscription.contactId !== contactId) continue
+          this.state.subscriptions.delete(id)
+          this.state.subscriptionByContactAudience.delete(subscriptionKey(contactId, subscription.audienceKey))
+        }
+        this.state.events = this.state.events.filter(event => event.contactId !== contactId)
+        for (const [digest, token] of this.state.confirmationTokens) {
+          if (token.contactId === contactId) this.state.confirmationTokens.delete(digest)
+        }
+        for (const [key, owner] of this.state.providerEvents) {
+          if (owner === contactId) this.state.providerEvents.delete(key)
+        }
+      },
+      hasSuppressionKey: async key => this.state.suppressionKeys.has(key),
+      retainSuppressionKey: async key => { this.state.suppressionKeys.add(key) },
       confirmationTokens: new MemoryConfirmationTokenStore(
         this.state.confirmationTokens
       )
@@ -156,6 +201,13 @@ export class MemoryNewsletterStorage implements NewsletterStorage {
     if (existing == null) throw new Error(`Unknown contact: ${id}`)
 
     const updated: Contact = clone({ ...existing, ...patch })
+    if (patch.email !== undefined && patch.email !== existing.email) {
+      if (this.state.contactByEmail.has(patch.email)) {
+        throw new StorageConflictError('Contact e-mail already exists.')
+      }
+      this.state.contactByEmail.delete(existing.email)
+      this.state.contactByEmail.set(patch.email, id)
+    }
     this.state.contacts.set(id, updated)
     return clone(updated)
   }
@@ -184,6 +236,14 @@ export class MemoryNewsletterStorage implements NewsletterStorage {
     if (existing == null) throw new Error(`Unknown subscription: ${id}`)
 
     const updated: Subscription = clone({ ...existing, ...patch })
+    if (patch.audienceKey !== undefined && patch.audienceKey !== existing.audienceKey) {
+      const key = subscriptionKey(existing.contactId, patch.audienceKey)
+      if (this.state.subscriptionByContactAudience.has(key)) {
+        throw new StorageConflictError('Subscription already exists for this contact and audience.')
+      }
+      this.state.subscriptionByContactAudience.delete(subscriptionKey(existing.contactId, existing.audienceKey))
+      this.state.subscriptionByContactAudience.set(key, id)
+    }
     this.state.subscriptions.set(id, updated)
     return clone(updated)
   }

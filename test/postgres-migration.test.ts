@@ -73,6 +73,7 @@ describe.skipIf(!databaseUrl)('PostgreSQL migration tooling', () => {
         'newsletter_tokens',
         'newsletter_events',
         'newsletter_provider_events',
+        'newsletter_suppression_keys',
         'newsletter_rate_limits'
       ])
       expect(migrations.sql).toContain(`SET search_path TO "${schema}", pg_catalog;`)
@@ -86,6 +87,7 @@ describe.skipIf(!databaseUrl)('PostgreSQL migration tooling', () => {
         'newsletter_provider_events',
         'newsletter_rate_limits',
         'newsletter_subscriptions',
+        'newsletter_suppression_keys',
         'newsletter_tokens'
       ])
 
@@ -208,7 +210,7 @@ describe.skipIf(!databaseUrl)('PostgreSQL migration tooling', () => {
         provider: postgresMigration(db, { schema })
       })
       await migrations.runMigrations()
-      expect(await tables(schema)).toHaveLength(6)
+      expect(await tables(schema)).toHaveLength(7)
     } finally {
       await db.destroy()
     }
@@ -226,7 +228,7 @@ describe.skipIf(!databaseUrl)('PostgreSQL migration tooling', () => {
       expect(initial.every(plan => !plan.isCurrent)).toBe(true)
 
       await Promise.all(initial.map(plan => plan.runMigrations()))
-      expect(await tables(schema)).toHaveLength(6)
+      expect(await tables(schema)).toHaveLength(7)
       expect((await getMigrations({
         provider: postgresMigration(first.db, { schema })
       })).isCurrent).toBe(true)

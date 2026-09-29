@@ -10,6 +10,7 @@ import type {
   SubscriptionStatus
 } from './domain.js'
 import type { ConfirmationTokenStore } from './security.js'
+import type { ContactTokenMetadata } from './operations.js'
 
 export interface CreateContactInput {
   readonly id: string
@@ -26,6 +27,7 @@ export interface CreateContactInput {
 
 export type ContactPatch = Partial<Pick<
   Contact,
+  | 'email'
   | 'status'
   | 'capabilityGeneration'
   | 'subject'
@@ -52,6 +54,7 @@ export interface CreateSubscriptionInput {
 
 export type SubscriptionPatch = Partial<Pick<
   Subscription,
+  | 'audienceKey'
   | 'status'
   | 'lifecycleGeneration'
   | 'confirmationDelivery'
@@ -87,6 +90,15 @@ export interface NewsletterStorageTransaction {
   countSoftBouncesSinceUnsuppressed(contactId: string, limit: number): Promise<number>
   /** Returns events in append order, including events sharing a timestamp. */
   listEvents(contactId: string): Promise<readonly NewsletterEvent[]>
+
+  /** Privacy operations run in the same transaction as lifecycle state. */
+  listContactTokenMetadata(contactId: string): Promise<readonly ContactTokenMetadata[]>
+  deleteContactTokens(contactId: string): Promise<void>
+  deleteProviderEvents(contactId: string): Promise<void>
+  minimizeEvents(contactId: string): Promise<void>
+  deleteContact(contactId: string): Promise<void>
+  hasSuppressionKey(key: string): Promise<boolean>
+  retainSuppressionKey(key: string): Promise<void>
 
   /**
    * Confirmation-token records bound to this transaction. Token replacement,

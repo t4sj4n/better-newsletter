@@ -417,6 +417,37 @@ AND unsubscribedAt is absent
 
 A deliberate trusted `unsuppressContact()` operation re-enables the Contact but does not reactivate or rewrite any Subscription.
 
+## Privacy export and erasure
+
+Call these methods only from authenticated, trusted server code. `exportContactData({ email })` or `exportContactData({ id })` returns the Contact profile and subject link, its Subscriptions and consent evidence, lifecycle events, suppression fields, and confirmation-token **metadata**. It omits token digests and raw tokens. The export can still contain personal data deliberately placed in Contact or event metadata; protect the resulting object and review host-supplied metadata before storing it.
+
+```ts
+const data = await newsletter.exportContactData({ email: 'person@example.com' })
+
+await newsletter.eraseContactData({
+  contact: { email: 'person@example.com' },
+  strategy: 'DELETE',
+  suppression: 'RETAIN_HASH'
+})
+```
+
+`DELETE` removes the Contact, its subject link, Subscriptions, tokens, provider-event IDs and lifecycle events in one transaction. `ANONYMIZE` keeps an inert Contact and minimized event rows: it replaces the e-mail with a random placeholder, clears the subject and metadata, removes confirmation tokens and provider-event IDs, clears event metadata, replaces audience keys and consent text, unsubscribes every Subscription, and advances capability generations. Repeating the same operation returns `{ erased: false }`; an anonymized Contact can later be deleted by ID. Ordinary public unsubscribe preserves consent and event history; it never calls erasure.
+
+The host chooses suppression retention per erasure call. Omit `suppression` (or use `NONE`) for full erasure. `RETAIN_HASH` stores only a keyed HMAC digest in `newsletter_suppression_keys`, with no Contact link, and future public signups for that e-mail are accepted without creating a Contact. Configure a stable, private key provider first:
+
+```ts
+import { createHmacSuppressionKeyProvider } from 'better-newsletter'
+
+const newsletter = betterNewsletter({
+  // storage, mailer, capabilities, ...
+  suppressionKeyProvider: createHmacSuppressionKeyProvider({
+    secret: process.env.NEWSLETTER_SUPPRESSION_SECRET!
+  })
+})
+```
+
+The secret must contain at least 32 bytes and stay stable across instances and restarts. Keep it outside the database. Changing it makes retained suppression keys ineffective. A plain SHA-256 e-mail hash is vulnerable to address guessing; use a keyed digest. Hosts can instead retain no local suppression key and use their own external suppression store. The library makes no legal retention decision. The host decides whether evidence must remain, whether suppression is needed, and how any external store or backup is handled. Anonymization retains internal IDs and timestamps, so use opaque generated IDs and choose `DELETE` when those fields could identify a person.
+
 ## Trusted import
 
 Existing applications can migrate known historical consent without manufacturing a new DOI:
@@ -571,13 +602,13 @@ const recipients = await listEligibleSubscriptions(db, 'default')
 
 `listEligibleSubscriptions()` is a read-only recipient-selection helper for one audience. It selects only enabled Contacts with active, confirmed, not-unsubscribed Subscriptions. Re-check eligibility when sending if recipient state may have changed since selection; no campaign sending or scheduler is provided. Hosts that need another database or storage design can implement `NewsletterStorage` and `RateLimiter` directly.
 
-The migration defines `newsletter_contacts`, `newsletter_subscriptions`, `newsletter_tokens`, `newsletter_events`, and `newsletter_rate_limits`. Contact, Subscription, and event IDs are application-generated `text` values: the core generates UUIDs by default, but injected generators may produce other unique strings. `email` must already be trimmed and lowercase and is globally unique; `(contact_id, audience_key)` is unique. Each Contact can link at most one external subject per newsletter instance through opaque `subject_namespace` and `subject_id` strings without a foreign key into the host application; the core controls replacement of an existing subject. Contact metadata and event metadata are JSON objects in `jsonb`; event types use the `event_type` text column. Subscription consent evidence is stored in `consent_version`, `consent_source`, `consent_locale`, and `consented_at`. Delivery work is stored in `confirmation_delivery_id`, `confirmation_attempt_id`, and `confirmation_lease_expires_at`. Both generation columns are positive `bigint` values and must remain within JavaScript's safe-integer range when mapped to the core.
+The migration defines `newsletter_contacts`, `newsletter_subscriptions`, `newsletter_tokens`, `newsletter_events`, `newsletter_provider_events`, `newsletter_suppression_keys`, and `newsletter_rate_limits`. Contact, Subscription, and event IDs are application-generated `text` values: the core generates UUIDs by default, but injected generators may produce other unique strings. `email` must already be trimmed and lowercase and is globally unique; `(contact_id, audience_key)` is unique. Each Contact can link at most one external subject per newsletter instance through opaque `subject_namespace` and `subject_id` strings without a foreign key into the host application; the core controls replacement of an existing subject. Contact metadata and event metadata are JSON objects in `jsonb`; event types use the `event_type` text column. Subscription consent evidence is stored in `consent_version`, `consent_source`, `consent_locale`, and `consented_at`. Delivery work is stored in `confirmation_delivery_id`, `confirmation_attempt_id`, and `confirmation_lease_expires_at`. Both generation columns are positive `bigint` values and must remain within JavaScript's safe-integer range when mapped to the core.
 
 Only confirmation-token digests, never raw confirmation tokens, belong in `newsletter_tokens`. Its identity `id` orders equal-timestamp records deterministically for bounded retention within `(subscription_id, lifecycle_generation)`; `sequence` gives events append order even when timestamps match. Store `capabilityGeneration` and `lifecycleGeneration` persistently; do not reset generations or reuse IDs. All state transitions, token mutations, and event appends must share one atomic transaction. Serialize conflicting transitions with `SERIALIZABLE` isolation or row locks, taking contact locks before subscription locks and token locks. Retry unique violations, serialization failures, and deadlocks through the storage conflict contract rather than continuing a failed transaction.
 
 `newsletter_rate_limits` is an optional SQL fixed-window counter keyed by `(key_hash, action, window_ms, bucket_start_ms)`, with `attempt_count` and `expires_at`; including the window length prevents different configured policies from sharing a bucket. `postgresRateLimiter(db)` performs atomic consumption across service instances and accepts any string returned by your `RateLimitKeyProvider` (including base64url HMACs); despite the `key_hash` column name, it stores the provided key as-is. Always supply a privacy-preserving opaque key rather than raw e-mail or IP data. Rate-limit counters and expired token rows need explicit scheduled cleanup; neither import nor the core starts a scheduler. Keep HMAC signing and rate-limit secrets stable across process restarts and protect them outside the database. Rotating a signing secret invalidates outstanding unsubscribe links; rotating the rate-limit secret resets effective buckets.
 
-Deleting a Contact cascades to its Subscriptions, token records, and lifecycle events, so intentional erasure removes historical evidence too. Events are otherwise append-only; the schema does not use an immutable-event trigger that would block erasure. Plan operational retention, exports, and erasure with that behavior in mind.
+Deleting a Contact cascades to its Subscriptions, token records, provider-event claims, and lifecycle events. Events are otherwise append-only; the schema does not use an immutable-event trigger that would block deliberate privacy minimization or erasure. The suppression-key table has no Contact foreign key so a chosen hash can survive deletion; the host owns its retention and removal policy.
 
 ## Nuxt 4 / Nitro
 

@@ -79,6 +79,8 @@ export interface BetterNewsletterOptions {
   readonly logger?: NewsletterLogger
   /** Attempts per transaction when storage reports a conflict. Defaults to 3. */
   readonly transactionMaxAttempts?: number
+  /** Required when retaining opaque suppression hashes during erasure. */
+  readonly suppressionKeyProvider?: (normalizedEmail: string) => Promise<string> | string
 }
 
 export type BetterNewsletter = NewsletterService

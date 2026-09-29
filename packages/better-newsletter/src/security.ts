@@ -425,6 +425,20 @@ export function createHmacRateLimitKeyProvider(
   }
 }
 
+/** Creates a stable, non-reversible suppression key from a normalized e-mail. */
+export function createHmacSuppressionKeyProvider(options: {
+  readonly secret: string | Uint8Array
+}): (normalizedEmail: string) => Promise<string> {
+  const hmacKey = importHmacKey(options.secret, ['sign'])
+  return async normalizedEmail => {
+    const signature = await crypto.subtle.sign(
+      'HMAC', await hmacKey,
+      textEncoder.encode(`suppression-v1\u0000${normalizedEmail}`)
+    )
+    return bytesToHex(new Uint8Array(signature))
+  }
+}
+
 export type {
   ConfirmationCapabilityTarget,
   ConfirmationReplacementResult,

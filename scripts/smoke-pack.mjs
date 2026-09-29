@@ -97,7 +97,7 @@ function checkConsumer(name, dependencies, peers, types, runtime) {
   writeFileSync(join(consumer, 'smoke.mts'), types)
   writeFileSync(join(consumer, 'smoke.mjs'), runtime)
 
-  run('pnpm', ['install', '--ignore-scripts', '--config.auto-install-peers=false'], consumer)
+  run('pnpm', ['install', '--no-frozen-lockfile', '--ignore-scripts', '--config.auto-install-peers=false'], consumer)
   for (const peer of Object.keys(runtimeManifest.peerDependencies ?? {})) {
     if (!Object.hasOwn(peers, peer) && existsSync(join(consumer, 'node_modules', peer))) {
       throw new Error(`Unexpected optional peer in ${name} consumer: ${peer}`)

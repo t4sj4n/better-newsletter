@@ -2,14 +2,16 @@ import { Resend } from 'resend'
 import { describe, expect, it, vi } from 'vitest'
 import {
   CONTACT_STATUSES,
-  MAIL_DELIVERY_FAILURES,
-  MAIL_DELIVERY_REASONS,
   NEWSLETTER_EVENT_TYPES,
   SUBSCRIPTION_STATUSES,
-  betterNewsletter,
+  betterNewsletter
+} from '../packages/better-newsletter/src/index.js'
+import {
+  MAIL_DELIVERY_FAILURES,
+  MAIL_DELIVERY_REASONS,
   type ConfirmationMailInput,
   type MailDeliveryReasonCode
-} from '../packages/better-newsletter/src/index.js'
+} from '../packages/better-newsletter/src/mailers/index.js'
 import { createSecureCapabilities } from '../packages/better-newsletter/src/security.js'
 import { memoryAdapter } from '../packages/better-newsletter/src/adapters/memory.js'
 import { resendMailer, type ResendEmailClient } from '../packages/better-newsletter/src/mailers/resend.js'

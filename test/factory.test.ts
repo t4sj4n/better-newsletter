@@ -1,7 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import {
   betterNewsletter,
-  DEFAULT_AUDIENCE_KEY,
   DEFAULT_CONFIRMATION_EXPIRES_IN_MS,
   NEWSLETTER_ERROR_CODES,
   NewsletterError
@@ -17,7 +16,7 @@ const mailer = {
 const tokenGenerator = { generate: () => 'token' }
 
 describe('betterNewsletter', () => {
-  it('constructs the core with provider-neutral test doubles', () => {
+  it('exposes only lifecycle operations, not injected implementation details', () => {
     const storage = memoryAdapter()
     const capabilities = memoryCapabilities()
 
@@ -28,49 +27,103 @@ describe('betterNewsletter', () => {
       tokenGenerator
     })
 
-    expect(newsletter.storage).toBe(storage)
-    expect(newsletter.mailer).toBe(mailer)
-    expect(newsletter.capabilities).toBe(capabilities)
-    expect(newsletter.defaultAudience).toBe(DEFAULT_AUDIENCE_KEY)
-    expect(newsletter.confirmation.expiresInMs)
-      .toBe(DEFAULT_CONFIRMATION_EXPIRES_IN_MS)
-    expect(newsletter.clock.now()).toBeInstanceOf(Date)
+    expect(Object.keys(newsletter).sort()).toEqual([
+      'cleanupConfirmationTokens',
+      'confirm',
+      'createManagePreferencesCapability',
+      'createUnsubscribeCapability',
+      'getContact',
+      'getSubscription',
+      'importSubscription',
+      'linkSubject',
+      'listEvents',
+      'listPreferences',
+      'listSubscriptions',
+      'resendConfirmation',
+      'subscribe',
+      'suppressContact',
+      'unsubscribe',
+      'unsubscribeAll',
+      'unsuppressContact'
+    ])
+    expect(Object.isFrozen(newsletter)).toBe(true)
   })
 
-  it('uses the secure Web Crypto token generator by default', () => {
+  it('uses the secure Web Crypto token generator by default', async () => {
+    const sent: string[] = []
+    const tasks: Promise<void>[] = []
+    const storage = memoryAdapter()
     const newsletter = betterNewsletter({
-      storage: memoryAdapter(),
+      storage,
       capabilities: memoryCapabilities(),
-      mailer
+      mailer: {
+        async sendConfirmation(input) {
+          sent.push(input.token)
+          return { accepted: true }
+        }
+      },
+      runBackground(task) {
+        tasks.push(task)
+      }
     })
 
-    const token = newsletter.tokenGenerator.generate()
-    expect(token).toMatch(/^[0-9a-f]{64}$/u)
+    await newsletter.subscribe({
+      email: 'person@example.com',
+      consent: { granted: true, version: 'v1' }
+    })
+    await Promise.all(tasks)
+    expect(sent).toHaveLength(1)
+    expect(sent[0]).toMatch(/^[0-9a-f]{64}$/u)
+    const [record] = storage.confirmationTokenSnapshot()
+    expect(record!.expiresAt.getTime() - record!.createdAt.getTime())
+      .toBe(DEFAULT_CONFIRMATION_EXPIRES_IN_MS)
   })
 
-  it('accepts injected deterministic dependencies', () => {
+  it('honors injected deterministic dependencies through lifecycle behavior', async () => {
     const now = new Date('2026-09-28T08:00:00.000Z')
     const deterministicTokenGenerator = { generate: () => 'deterministic-token' }
-    const idGenerator = { generate: () => 'deterministic-id' }
+    let id = 0
+    const idGenerator = { generate: () => `deterministic-${++id}` }
+    const storage = memoryAdapter()
+    const sent: string[] = []
+    const tasks: Promise<void>[] = []
 
     const newsletter = betterNewsletter({
-      storage: memoryAdapter(),
+      storage,
       capabilities: memoryCapabilities(),
-      mailer,
+      mailer: {
+        async sendConfirmation(input) {
+          sent.push(input.token)
+          return { accepted: true }
+        }
+      },
       clock: { now: () => now },
       tokenGenerator: deterministicTokenGenerator,
       idGenerator,
       defaultAudience: 'product-news',
       confirmation: {
         expiresInMs: 60_000
+      },
+      runBackground(task) {
+        tasks.push(task)
       }
     })
 
-    expect(newsletter.clock.now()).toBe(now)
-    expect(newsletter.tokenGenerator).toBe(deterministicTokenGenerator)
-    expect(newsletter.idGenerator).toBe(idGenerator)
-    expect(newsletter.defaultAudience).toBe('product-news')
-    expect(newsletter.confirmation.expiresInMs).toBe(60_000)
+    await newsletter.subscribe({
+      email: 'person@example.com',
+      consent: { granted: true, version: 'v1' }
+    })
+    await Promise.all(tasks)
+
+    const contact = await newsletter.getContact({ email: 'person@example.com' })
+    const subscription = await newsletter.getSubscription({ email: 'person@example.com' })
+    expect(contact?.id).toBe('deterministic-1')
+    expect(contact?.createdAt).toEqual(now)
+    expect(subscription?.id).toBe('deterministic-2')
+    expect(subscription?.audienceKey).toBe('product-news')
+    expect(sent).toEqual(['deterministic-token'])
+    expect(storage.confirmationTokenSnapshot()[0]?.expiresAt)
+      .toEqual(new Date(now.getTime() + 60_000))
   })
 
   it('rejects invalid confirmation configuration', () => {

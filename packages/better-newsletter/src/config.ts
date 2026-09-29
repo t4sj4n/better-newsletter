@@ -1,6 +1,4 @@
 import type { NewsletterCapabilities } from './capabilities.js'
-import type { Contact, Subscription } from './domain.js'
-import type { DeliveryEligibility } from './eligibility.js'
 import type { NewsletterMailer } from './mailer.js'
 import type { NewsletterService } from './operations.js'
 import type {
@@ -76,29 +74,4 @@ export interface BetterNewsletterOptions {
   readonly transactionMaxAttempts?: number
 }
 
-export interface BetterNewsletter extends NewsletterService {
-  readonly storage: NewsletterStorage
-  readonly mailer: NewsletterMailer
-  readonly capabilities: NewsletterCapabilities
-  readonly clock: Clock
-  readonly tokenGenerator: TokenGenerator
-  readonly idGenerator: IdGenerator
-  readonly defaultAudience: string
-  readonly abuseGuard: AbuseGuard | undefined
-  readonly rateLimiter: RateLimiter | undefined
-  readonly rateLimitKeyProvider: RateLimitKeyProvider | undefined
-  readonly logger: NewsletterLogger
-  readonly transactionMaxAttempts: number
-  readonly confirmation: {
-    readonly expiresInMs: number
-    readonly replacementStrategy: ConfirmationReplacementStrategy
-    readonly maxActiveTokens: number
-    readonly cleanupRetentionMs: number
-    readonly deliveryLeaseMs: number
-  }
-
-  getDeliveryEligibility(
-    contact: Contact,
-    subscription: Subscription
-  ): DeliveryEligibility
-}
+export type BetterNewsletter = NewsletterService

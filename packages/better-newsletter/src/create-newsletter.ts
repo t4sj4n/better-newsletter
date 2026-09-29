@@ -16,7 +16,6 @@ import {
   type NewsletterEventType,
   type Subscription
 } from './domain.js'
-import { getDeliveryEligibility } from './eligibility.js'
 import {
   NEWSLETTER_ERROR_CODES,
   NewsletterError,
@@ -770,27 +769,6 @@ export function createNewsletterWithSubscriptionBatch(config: BetterNewsletterOp
   }
 
   const service: BetterNewsletter = {
-    storage: config.storage,
-    mailer: config.mailer,
-    capabilities: config.capabilities,
-    clock,
-    tokenGenerator,
-    idGenerator,
-    defaultAudience,
-    abuseGuard: config.abuseGuard,
-    rateLimiter: config.rateLimiter,
-    rateLimitKeyProvider: config.rateLimitKeyProvider,
-    logger,
-    transactionMaxAttempts,
-    confirmation: Object.freeze({
-      expiresInMs,
-      replacementStrategy,
-      maxActiveTokens,
-      cleanupRetentionMs,
-      deliveryLeaseMs
-    }),
-    getDeliveryEligibility,
-
     subscribe(input) {
       return subscribe(input)
     },

@@ -6,18 +6,17 @@ import {
   StorageConflictError,
   SUBSCRIPTION_STATUSES,
   betterNewsletter,
-  type Clock,
-  type ConfirmationMailInput,
   type BetterNewsletterOptions,
-  type NewsletterMailer,
-  type NewsletterStorage,
-  type PublicAbuseAction,
-  type RateLimiter
 } from '../packages/better-newsletter/src/index.js'
+import type { Clock } from '../packages/better-newsletter/src/config.js'
+import type { ConfirmationMailInput, NewsletterMailer } from '../packages/better-newsletter/src/mailers/index.js'
+import type { NewsletterStorage } from '../packages/better-newsletter/src/storage.js'
 import {
   createHmacRateLimitKeyProvider,
   createSecureCapabilities,
-  sha256Digest
+  sha256Digest,
+  type PublicAbuseAction,
+  type RateLimiter
 } from '../packages/better-newsletter/src/security.js'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
@@ -717,12 +716,13 @@ export function registerStorageAdapterConformance(
       await service.subscribe({ email, consent: consent() })
       await settle()
       const capability = (await service.createUnsubscribeCapability({ email, all: true }))!
-      const other = makeService()
+      const capabilities = createSecureCapabilities({ hmacSecret: secret })
+      const other = makeService({ capabilities })
       const resolved = gate()
       const resume = gate()
-      const original = other.capabilities.resolveUnsubscribeCapability
+      const original = capabilities.resolveUnsubscribeCapability
 
-      vi.spyOn(other.capabilities, 'resolveUnsubscribeCapability')
+      vi.spyOn(capabilities, 'resolveUnsubscribeCapability')
         .mockImplementationOnce(async value => {
           const target = await original(value)
           resolved.release()

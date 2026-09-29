@@ -83,7 +83,7 @@ const newsletter = betterNewsletter({
 })
 ```
 
-Time, IDs, and confirmation-token generation can be injected for deterministic tests. When no token generator is supplied, the core uses a Web Crypto generator that produces 32 random bytes. The public configuration and service types are `BetterNewsletterOptions` and `BetterNewsletter`; the browser helper remains `createNewsletterClient()` from `better-newsletter/nuxt/client`.
+Time, IDs, and confirmation-token generation can be injected for deterministic tests. When no token generator is supplied, the core uses a Web Crypto generator that produces 32 random bytes. The public configuration and service types are `BetterNewsletterOptions` and `BetterNewsletter`. The service exposes lifecycle operations only; storage, mailer, signing capabilities, clocks, and generators are injected dependencies, not properties of the returned service. The browser helper remains `createNewsletterClient()` from `better-newsletter/nuxt/client`.
 
 The runtime and the development CLI are separate packages. The runtime is embedded in your application; the CLI runs only when explicitly invoked:
 
@@ -92,9 +92,10 @@ The runtime and the development CLI are separate packages. The runtime is embedd
 | `better-newsletter` | Service factory, public lifecycle/domain types and errors. |
 | `better-newsletter/adapters/memory` | In-memory storage and test helpers. |
 | `better-newsletter/adapters/postgres` | PostgreSQL storage, migrations, rate limiting and recipient selection. |
+| `better-newsletter/mailers` | Provider-neutral mailer and delivery contracts. |
 | `better-newsletter/mailers/resend` | Resend mail delivery. |
-| `better-newsletter/security` | Capability and security implementations. |
-| `better-newsletter/storage` | Transaction and record contracts for custom storage adapters. |
+| `better-newsletter/security` | Capability and abuse-protection implementation contracts and helpers. |
+| `better-newsletter/storage` | Storage and transaction contracts for custom adapters. |
 | `better-newsletter/db/migration` | Programmatic database migration API. |
 | `better-newsletter/nuxt`, `/nuxt/server`, `/nuxt/client` | Nuxt module, Nitro server helpers and browser client. |
 | `@better-newsletter/cli` | Explicit `better-newsletter` migration executable. |
@@ -254,7 +255,7 @@ Accepted delivery atomically sets `confirmationSentAt`, clears the work item, an
 - `PERMANENT`: the work item is dropped; a later `subscribe()` does not retry it, while `resendConfirmation()` starts new work.
 - `AMBIGUOUS` (also used when delivery throws): the provider may have sent the message. The claim is kept until its lease expires, so an immediate retry cannot add another message. The retry after expiry is a new attempt of the same work item.
 
-Each failure records `CONFIRMATION_SEND_FAILED` with its `outcome` and `stage`. Optional `reason` is limited to the exported `MAIL_DELIVERY_REASONS` codes (`INVALID_REQUEST`, `AUTH_FAILED`, `RATE_LIMITED`, `PROVIDER_UNAVAILABLE`, `TIMEOUT`, `RENDER_FAILED`, `TOKEN_SETUP_FAILED`, `UNKNOWN`); unexpected values are persisted as `UNKNOWN`, never as raw provider text. If the Contact was suppressed after the claim, the claim is released and the event records stage `ELIGIBILITY`. Failures do not discard possibly delivered tokens; the configured bounded retention policy still applies. A subsequent `subscribe()` or `resendConfirmation()` resumes unfinished work without replacing consent or incrementing generations.
+Each failure records `CONFIRMATION_SEND_FAILED` with its `outcome` and `stage`. Optional `reason` is limited to the `MAIL_DELIVERY_REASONS` codes from `better-newsletter/mailers` (`INVALID_REQUEST`, `AUTH_FAILED`, `RATE_LIMITED`, `PROVIDER_UNAVAILABLE`, `TIMEOUT`, `RENDER_FAILED`, `TOKEN_SETUP_FAILED`, `UNKNOWN`); unexpected values are persisted as `UNKNOWN`, never as raw provider text. If the Contact was suppressed after the claim, the claim is released and the event records stage `ELIGIBILITY`. Failures do not discard possibly delivered tokens; the configured bounded retention policy still applies. A subsequent `subscribe()` or `resendConfirmation()` resumes unfinished work without replacing consent or incrementing generations.
 
 Delivery result events carry `deliveryId`, `attemptId`, `lifecycleGeneration`, `authoritative`, and `outcome` (`ACCEPTED`, `TEMPORARY`, `PERMANENT`, or `AMBIGUOUS`). `CONFIRMATION_SENT` and `CONFIRMATION_SEND_FAILED` always mean `authoritative: true`: the result belongs to the attempt that currently owns the work and was allowed to finalize it. A result from a superseded attempt is recorded as `CONFIRMATION_STALE_RESULT` with `authoritative: false` and never changes Subscription state. An attempt is superseded when its lease was reclaimed by a newer attempt, or when the work ended in the meantime (confirmation, unsubscribe, or a new lifecycle generation).
 
@@ -704,6 +705,8 @@ pnpm typecheck
 pnpm test
 pnpm build
 ```
+
+The CLI's standalone typecheck resolves `better-newsletter/db/migration` from runtime source, so `pnpm check` also works in a fresh checkout without generated `dist/`. The CLI publish build clears that TypeScript path mapping and resolves the actual runtime package declarations after the runtime build. This keeps the checked import and the published dependency aligned.
 
 Set `DATABASE_URL` to a disposable PostgreSQL database to run the integration
 tests (the test user needs `CREATE SCHEMA`). The tests create and remove their

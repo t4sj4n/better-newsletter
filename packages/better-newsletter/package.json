@@ -48,6 +48,10 @@
       "types": "./dist/mailers/resend.d.ts",
       "import": "./dist/mailers/resend.js"
     },
+    "./mailers": {
+      "types": "./dist/mailers/index.d.ts",
+      "import": "./dist/mailers/index.js"
+    },
     "./security": {
       "types": "./dist/security.d.ts",
       "import": "./dist/security.js"

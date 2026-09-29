@@ -183,6 +183,8 @@ describe('Nuxt server integration', () => {
     })
     const event = { context: {} } as Parameters<typeof useBetterNewsletter>[0]
     const service = await useBetterNewsletter(event, config)
+    expect(service).not.toHaveProperty('storage')
+    expect(service).not.toHaveProperty('capabilities')
     expect((await http.request('preferences', { capability: 'invalid' })).body)
       .toEqual({ subscriptions: null })
     const manage = await service.createManagePreferencesCapability({ email: 'person@example.com' })

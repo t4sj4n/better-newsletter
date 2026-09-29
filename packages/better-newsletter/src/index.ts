@@ -6,25 +6,16 @@ export {
   DEFAULT_MAX_ACTIVE_CONFIRMATION_TOKENS,
   DEFAULT_RESEND_RATE_LIMIT,
   DEFAULT_SUBSCRIBE_RATE_LIMIT,
-  DEFAULT_TRANSACTION_MAX_ATTEMPTS,
-  systemClock,
-  systemIdGenerator
+  DEFAULT_TRANSACTION_MAX_ATTEMPTS
 } from './create-newsletter.js'
 
 export type {
-  BackgroundTaskRunner,
-  Clock,
   ConfirmationOptions,
-  IdGenerator,
   BetterNewsletterOptions,
   BetterNewsletter,
   NewsletterLogger,
-  NewsletterRateLimitCheck,
-  NewsletterRateLimits,
-  TokenGenerator
+  NewsletterRateLimits
 } from './config.js'
-
-export type { NewsletterCapabilities } from './capabilities.js'
 
 export {
   CONTACT_STATUSES,
@@ -68,16 +59,6 @@ export type {
   NewsletterErrorOptions
 } from './errors.js'
 
-export { MAIL_DELIVERY_FAILURES, MAIL_DELIVERY_REASONS } from './mailer.js'
-
-export type {
-  ConfirmationMailInput,
-  MailDeliveryFailure,
-  MailDeliveryReasonCode,
-  MailDeliveryResult,
-  NewsletterMailer
-} from './mailer.js'
-
 export {
   assertAudienceKey,
   DEFAULT_AUDIENCE_KEY,
@@ -93,7 +74,6 @@ export type {
   CreateUnsubscribeCapabilityInput,
   ImportSubscriptionInput,
   LinkSubjectInput,
-  NewsletterService,
   PublicRequestResult,
   PreferenceSubscription,
   ResendConfirmationInput,
@@ -105,19 +85,6 @@ export type {
   UnsuppressContactInput
 } from './operations.js'
 
-export type {
-  NewsletterStorage
-} from './storage.js'
-
 export {
   CONFIRMATION_REPLACEMENT_STRATEGIES
-} from './security.js'
-
-export type {
-  AbuseGuard,
-  ConfirmationReplacementStrategy,
-  PublicAbuseAction,
-  RateLimiter,
-  RateLimitKeyProvider,
-  RateLimitPolicy
 } from './security.js'

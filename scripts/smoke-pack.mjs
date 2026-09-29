@@ -150,7 +150,7 @@ export async function resolve(specifier, context, nextResolve) {
   const runtimeTarball = packedTarball(runtimeManifest)
   const cliTarball = packedTarball(cliManifest)
   const runtime = checkArchive(runtimeTarball, runtimeManifest, [
-    '.', './adapters/memory', './adapters/postgres', './mailers/resend',
+    '.', './adapters/memory', './adapters/postgres', './mailers', './mailers/resend',
     './security', './storage', './db/migration', './nuxt', './nuxt/server',
     './nuxt/client', './package.json'
   ], ['package/migrations/postgres/001_newsletter.sql'])
@@ -183,25 +183,49 @@ export async function resolve(specifier, context, nextResolve) {
   checkConsumer('core', runtimeDependency, {}, `
 import { betterNewsletter, type BetterNewsletterOptions, type BetterNewsletter } from 'better-newsletter'
 import { memoryAdapter } from 'better-newsletter/adapters/memory'
+import { MAIL_DELIVERY_REASONS, type NewsletterMailer, type ConfirmationMailInput } from 'better-newsletter/mailers'
+import type { NewsletterCapabilities, AbuseGuard, RateLimiter, RateLimitKeyProvider, NewsletterRateLimitCheck } from 'better-newsletter/security'
+import type { NewsletterStorage } from 'better-newsletter/storage'
 import * as security from 'better-newsletter/security'
 import * as storage from 'better-newsletter/storage'
 import { getMigrations, type BetterNewsletterMigrationConfig, type NewsletterMigrations } from 'better-newsletter/db/migration'
+// @ts-expect-error storage implementation contracts are exported from /storage
+import type { NewsletterStorage as RootNewsletterStorage } from 'better-newsletter'
+// @ts-expect-error capability implementation contracts are exported from /security
+import type { NewsletterCapabilities as RootNewsletterCapabilities } from 'better-newsletter'
+// @ts-expect-error abuse contracts are exported from /security
+import type { AbuseGuard as RootAbuseGuard } from 'better-newsletter'
+// @ts-expect-error rate limiting contracts are exported from /security
+import type { RateLimiter as RootRateLimiter } from 'better-newsletter'
+// @ts-expect-error key provider contracts are exported from /security
+import type { RateLimitKeyProvider as RootRateLimitKeyProvider } from 'better-newsletter'
+// @ts-expect-error rate-limit policy contracts are exported from /security
+import type { RateLimitPolicy as RootRateLimitPolicy } from 'better-newsletter'
+// @ts-expect-error advanced rate-limit checks are exported from /security
+import type { NewsletterRateLimitCheck as RootNewsletterRateLimitCheck } from 'better-newsletter'
+// @ts-expect-error mailer implementation contracts are exported from /mailers
+import type { NewsletterMailer as RootMailer } from 'better-newsletter'
+// @ts-expect-error mailer delivery inputs are exported from /mailers
+import type { ConfirmationMailInput as RootConfirmationMailInput } from 'better-newsletter'
 declare const options: BetterNewsletterOptions
 declare const migrationConfig: BetterNewsletterMigrationConfig
+declare const mailer: NewsletterMailer
 const create: (options: BetterNewsletterOptions) => BetterNewsletter = betterNewsletter
 const service: BetterNewsletter = create(options)
 const memory = memoryAdapter()
 const migrations: Promise<NewsletterMigrations> = getMigrations(migrationConfig)
-void [service, memory, migrations, security, storage]
+void [service, memory, migrations, security, storage, mailer, MAIL_DELIVERY_REASONS]
 `, `
 import { betterNewsletter } from 'better-newsletter'
 import { memoryAdapter } from 'better-newsletter/adapters/memory'
 import { getMigrations } from 'better-newsletter/db/migration'
 const modules = await Promise.all([
   import('better-newsletter/security'), import('better-newsletter/storage'),
+  import('better-newsletter/mailers')
 ])
 if (typeof betterNewsletter !== 'function' || typeof memoryAdapter !== 'function' ||
-    typeof getMigrations !== 'function' || !Object.keys(modules[0]).length) {
+    typeof getMigrations !== 'function' || !Object.keys(modules[0]).length ||
+    !Object.keys(modules[2]).length) {
   throw new Error('Core runtime imports are incomplete')
 }
 `)

@@ -9,11 +9,6 @@
     "exactOptionalPropertyTypes": true,
     "verbatimModuleSyntax": true,
     "skipLibCheck": true,
-    "paths": {
-      "better-newsletter/db/migration": [
-        "./packages/better-newsletter/src/db/migration.ts"
-      ]
-    },
     "forceConsistentCasingInFileNames": true
   },
   "include": [

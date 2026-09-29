@@ -10,7 +10,7 @@
   "scripts": {
     "build": "pnpm --filter better-newsletter build && pnpm --filter @better-newsletter/cli build",
     "prepack": "pnpm build",
-    "typecheck": "pnpm --filter better-newsletter typecheck && pnpm --filter @better-newsletter/cli typecheck && tsc -p tsconfig.json",
+    "typecheck": "pnpm --filter better-newsletter typecheck && pnpm --filter better-newsletter build && pnpm --filter @better-newsletter/cli typecheck && tsc -p tsconfig.json",
     "lint": "eslint . --max-warnings=0",
     "test": "vitest run",
     "check": "pnpm lint && pnpm typecheck && pnpm build && pnpm migration:snapshot:check && pnpm test",

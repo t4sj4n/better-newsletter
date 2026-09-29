@@ -189,7 +189,16 @@ export function postgresMigration<DB>(
       }
       if (plan.isCurrent) return
 
-      await db.transaction().execute(async trx => {
+      await db.transaction().setIsolationLevel('read committed').execute(async trx => {
+        await sql`
+          SELECT pg_advisory_xact_lock(hashtext('better-newsletter'), hashtext(${plan.namespace}))
+        `.execute(trx)
+        const current = await createPlan(trx, plan.namespace)
+        if (current.isCurrent) return
+        if (current.statements.length !== plan.statements.length
+          || current.statements.some((statement, index) => statement !== plan.statements[index])) {
+          throw new Error('PostgreSQL schema changed since the migration was planned. Re-plan and review before applying.')
+        }
         await sql.raw(
           `SET LOCAL search_path TO ${quoteIdentifier(plan.namespace)}, pg_catalog`
         ).execute(trx)

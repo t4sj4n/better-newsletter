@@ -24,11 +24,11 @@ describe.skipIf(!databaseUrl)('PostgreSQL migration tooling', () => {
     return schema
   }
 
-  function database(schema: string) {
+  function database(schema: string, max = 5) {
     const pool = new Pool({
       connectionString: databaseUrl,
       options: `-c search_path=${schema}`,
-      max: 5
+      max
     })
     const db = new Kysely<Record<string, never>>({
       dialect: new PostgresDialect({ pool })
@@ -212,6 +212,44 @@ describe.skipIf(!databaseUrl)('PostgreSQL migration tooling', () => {
     }
   })
 
+  it('serializes concurrent plans so the second migration sees the current schema', async () => {
+    const schema = await createSchema('concurrent')
+    const first = database(schema)
+    const second = database(schema, 1)
+    try {
+      await second.pool.query("SET default_transaction_isolation = 'repeatable read'")
+      const initial = await Promise.all([first, second].map(({ db }) =>
+        getMigrations({ provider: postgresMigration(db, { schema }) })
+      ))
+      expect(initial.every(plan => !plan.isCurrent)).toBe(true)
+
+      await Promise.all(initial.map(plan => plan.runMigrations()))
+      expect(await tables(schema)).toHaveLength(5)
+      expect((await getMigrations({
+        provider: postgresMigration(first.db, { schema })
+      })).isCurrent).toBe(true)
+    } finally {
+      await first.db.destroy()
+      await second.db.destroy()
+    }
+  })
+
+  it('rejects a changed plan rather than applying unreviewed changes', async () => {
+    const schema = await createSchema('changed')
+    const { db, pool } = database(schema)
+    try {
+      const migrations = await getMigrations({
+        provider: postgresMigration(db, { schema })
+      })
+      await pool.query('CREATE TABLE newsletter_contacts (id text PRIMARY KEY)')
+
+      await expect(migrations.runMigrations()).rejects.toThrow('Re-plan and review')
+      expect(await tables(schema)).toEqual(['newsletter_contacts'])
+    } finally {
+      await db.destroy()
+    }
+  })
+
   it('generated SQL and direct migration converge to the same current target', async () => {
     const generatedSchema = await createSchema('generated')
     const directSchema = await createSchema('direct')
@@ -244,23 +282,14 @@ describe.skipIf(!databaseUrl)('PostgreSQL migration tooling', () => {
 
   it('rolls back the complete direct migration when one statement fails', async () => {
     const schema = await createSchema('rollback')
-    const { db } = database(schema)
-    const provider = postgresMigration(db, { schema })
+    const { db, pool } = database(schema)
     try {
-      await expect(provider.apply({
-        dialect: 'postgres',
-        namespace: schema,
-        toBeCreated: ['transaction_probe'],
-        toBeAdded: [],
-        statements: [
-          'CREATE TABLE transaction_probe (id text)',
-          'THIS IS NOT VALID SQL'
-        ],
-        sql: '',
-        isCurrent: false
-      })).rejects.toThrow()
-
-      expect(await tables(schema)).not.toContain('transaction_probe')
+      await pool.query('CREATE VIEW newsletter_subscriptions AS SELECT 1 AS id')
+      const migrations = await getMigrations({
+        provider: postgresMigration(db, { schema })
+      })
+      await expect(migrations.runMigrations()).rejects.toThrow()
+      expect(await tables(schema)).not.toContain('newsletter_contacts')
     } finally {
       await db.destroy()
     }

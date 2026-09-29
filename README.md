@@ -476,7 +476,7 @@ npx better-newsletter migrate
 npx better-newsletter migrate --yes
 ```
 
-`migrate` inspects the live database, prints the required additive plan, asks for confirmation, and applies the whole PostgreSQL plan transactionally.
+`migrate` inspects the live database, prints the required additive plan, asks for confirmation, and applies the whole PostgreSQL plan transactionally. Direct PostgreSQL migrations take a schema-scoped advisory lock and recheck the approved plan before applying: if another migration has already brought the schema current, they finish without changes; if the schema changed in another way, they stop so you can review a new plan.
 
 For applications that own migration history:
 

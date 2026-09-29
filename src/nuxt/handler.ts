@@ -1,4 +1,4 @@
-import { createError, getMethod, readRawBody, type H3Event } from 'h3'
+import { createError, getMethod, type H3Event } from 'h3'
 import {
   NEWSLETTER_ERROR_CODES,
   NewsletterError,
@@ -19,10 +19,17 @@ function text(value: unknown, maxLength = 4096): string {
 }
 
 async function payload(event: H3Event): Promise<Record<string, unknown>> {
-  const raw = await readRawBody(event)
-  if (raw == null || raw.length > 8192) {
-    throw createError({ statusCode: 400, statusMessage: 'Invalid newsletter request.' })
+  const chunks: Uint8Array[] = []
+  let bytes = 0
+  const stream = event.web?.request?.body ?? event.node.req
+  for await (const chunk of stream) {
+    bytes += chunk.byteLength
+    if (bytes > 8192) {
+      throw createError({ statusCode: 400, statusMessage: 'Invalid newsletter request.' })
+    }
+    chunks.push(chunk)
   }
+  const raw = new TextDecoder().decode(Buffer.concat(chunks))
   try {
     const value: unknown = JSON.parse(raw)
     if (value == null || typeof value !== 'object' || Array.isArray(value)) {

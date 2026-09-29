@@ -27,6 +27,7 @@ export const NEWSLETTER_EVENT_TYPES = {
   CONFIRMED: 'CONFIRMED',
   UNSUBSCRIBED: 'UNSUBSCRIBED',
   SUPPRESSED: 'SUPPRESSED',
+  PROVIDER_FEEDBACK: 'PROVIDER_FEEDBACK',
   UNSUPPRESSED: 'UNSUPPRESSED',
   SUBJECT_LINKED: 'SUBJECT_LINKED',
   IMPORTED: 'IMPORTED'
@@ -34,6 +35,24 @@ export const NEWSLETTER_EVENT_TYPES = {
 
 export type NewsletterEventType =
   typeof NEWSLETTER_EVENT_TYPES[keyof typeof NEWSLETTER_EVENT_TYPES]
+
+export const DELIVERY_FEEDBACK_TYPES = {
+  SOFT_BOUNCE: 'SOFT_BOUNCE',
+  HARD_BOUNCE: 'HARD_BOUNCE',
+  COMPLAINT: 'COMPLAINT',
+  PROVIDER_SUPPRESSION: 'PROVIDER_SUPPRESSION',
+  DELIVERED: 'DELIVERED'
+} as const
+
+export type DeliveryFeedbackType = typeof DELIVERY_FEEDBACK_TYPES[keyof typeof DELIVERY_FEEDBACK_TYPES]
+
+export interface DeliveryFeedback {
+  readonly provider: string
+  readonly providerEventId?: string
+  readonly email: string
+  readonly type: DeliveryFeedbackType
+  readonly occurredAt: Date
+}
 
 export type JsonPrimitive = boolean | number | string | null
 export type JsonValue =

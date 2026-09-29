@@ -57,6 +57,13 @@ export interface BetterNewsletterOptions {
   readonly clock?: Clock
   readonly defaultAudience?: string
   readonly confirmation?: ConfirmationOptions
+  readonly feedbackPolicy?: {
+    readonly suppressOnComplaint?: boolean
+    readonly suppressOnHardBounce?: boolean
+    readonly suppressOnProviderSuppression?: boolean
+    /** Suppress on the Nth distinct soft bounce. Omit to record only. */
+    readonly softBounceThreshold?: number
+  }
   readonly abuseGuard?: AbuseGuard
   readonly rateLimiter?: RateLimiter
   readonly rateLimitKeyProvider?: RateLimitKeyProvider

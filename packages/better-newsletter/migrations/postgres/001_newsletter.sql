@@ -91,6 +91,14 @@ CREATE TABLE newsletter_events (
   CONSTRAINT newsletter_events_metadata_check CHECK (jsonb_typeof(metadata) = 'object')
 );
 
+CREATE TABLE newsletter_provider_events (
+  provider text NOT NULL,
+  event_id text NOT NULL,
+  contact_id text NOT NULL,
+  CONSTRAINT newsletter_provider_events_pkey PRIMARY KEY (provider, event_id),
+  CONSTRAINT newsletter_provider_events_contact_id_fkey FOREIGN KEY (contact_id) REFERENCES newsletter_contacts (id) ON DELETE CASCADE
+);
+
 CREATE TABLE newsletter_rate_limits (
   key_hash text NOT NULL,
   action text NOT NULL,
@@ -105,6 +113,8 @@ CREATE TABLE newsletter_rate_limits (
   CONSTRAINT newsletter_rate_limits_bucket_start_ms_check CHECK (bucket_start_ms >= 0),
   CONSTRAINT newsletter_rate_limits_attempt_count_check CHECK (attempt_count > 0)
 );
+
+CREATE INDEX newsletter_provider_events_contact_id_idx ON newsletter_provider_events (contact_id);
 
 CREATE INDEX newsletter_subscriptions_eligible_idx ON newsletter_subscriptions (audience_key, contact_id) WHERE status = 'ACTIVE' AND confirmed_at IS NOT NULL AND unsubscribed_at IS NULL;
 

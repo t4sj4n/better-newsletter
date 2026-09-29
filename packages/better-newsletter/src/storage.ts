@@ -81,6 +81,8 @@ export interface NewsletterStorageTransaction {
   listSubscriptions(contactId: string): Promise<readonly Subscription[]>
 
   appendEvent(event: NewsletterEvent): Promise<void>
+  /** Atomically claims a provider event ID; false means it was processed before. */
+  claimProviderEvent(provider: string, eventId: string, contactId: string): Promise<boolean>
   /** Returns events in append order, including events sharing a timestamp. */
   listEvents(contactId: string): Promise<readonly NewsletterEvent[]>
 

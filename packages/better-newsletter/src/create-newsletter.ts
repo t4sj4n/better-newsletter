@@ -6,11 +6,13 @@ import type {
 } from './config.js'
 import {
   CONTACT_STATUSES,
+  DELIVERY_FEEDBACK_TYPES,
   NEWSLETTER_EVENT_TYPES,
   SUBSCRIPTION_STATUSES,
   type ConfirmationDelivery,
   type ConsentEvidence,
   type Contact,
+  type DeliveryFeedback,
   type ExternalSubject,
   type JsonValue,
   type NewsletterEventType,
@@ -262,6 +264,16 @@ export function createNewsletterWithSubscriptionBatch(config: BetterNewsletterOp
       'transactionMaxAttempts must be a positive safe integer.'
     )
   }
+  const feedbackPolicy = config.feedbackPolicy ?? {}
+  if (feedbackPolicy.softBounceThreshold !== undefined && (
+    !Number.isSafeInteger(feedbackPolicy.softBounceThreshold)
+    || feedbackPolicy.softBounceThreshold < 1
+  )) {
+    throw new NewsletterError(
+      NEWSLETTER_ERROR_CODES.INVALID_CONFIGURATION,
+      'feedbackPolicy.softBounceThreshold must be a positive safe integer.'
+    )
+  }
   if ((config.rateLimiter == null) !== (config.rateLimitKeyProvider == null)) {
     throw new NewsletterError(
       NEWSLETTER_ERROR_CODES.INVALID_CONFIGURATION,
@@ -431,6 +443,36 @@ export function createNewsletterWithSubscriptionBatch(config: BetterNewsletterOp
       )
     }
     return transaction.getContactById(lookup.id)
+  }
+
+  const suppressInTransaction = async (
+    transaction: NewsletterStorageTransaction,
+    contact: Contact,
+    reason: string,
+    now: Date
+  ): Promise<Contact> => {
+    if (contact.status === CONTACT_STATUSES.SUPPRESSED) return contact
+    const updated = await transaction.updateContact(contact.id, {
+      status: CONTACT_STATUSES.SUPPRESSED,
+      suppressedAt: now,
+      suppressionReason: reason,
+      updatedAt: now
+    })
+    await appendEvent(transaction, {
+      contactId: contact.id,
+      type: NEWSLETTER_EVENT_TYPES.SUPPRESSED,
+      occurredAt: now,
+      metadata: { reason }
+    })
+    for (const subscription of await transaction.listSubscriptions(contact.id)) {
+      await config.capabilities.revokeConfirmations(
+        subscription.id,
+        subscription.lifecycleGeneration,
+        now,
+        transaction.confirmationTokens
+      )
+    }
+    return updated
   }
 
   const requestConfirmation = async (
@@ -769,6 +811,71 @@ export function createNewsletterWithSubscriptionBatch(config: BetterNewsletterOp
   }
 
   const service: BetterNewsletter = {
+    async processFeedback(input: DeliveryFeedback) {
+      const email = normalizeAndValidateEmail(input.email)
+      const provider = input.provider.trim()
+      const providerEventId = input.providerEventId?.trim()
+      if (
+        provider.length === 0 || provider.length > 128
+        || (providerEventId !== undefined && (providerEventId.length === 0 || providerEventId.length > 255))
+        || !Object.values(DELIVERY_FEEDBACK_TYPES).includes(input.type)
+        || !(input.occurredAt instanceof Date)
+        || Number.isNaN(input.occurredAt.getTime())
+      ) {
+        throw new NewsletterError(
+          NEWSLETTER_ERROR_CODES.INVALID_CONFIGURATION,
+          'Invalid normalized delivery feedback.'
+        )
+      }
+      return runTransaction(async transaction => {
+        const contact = await transaction.getContactByEmail(email)
+        if (contact == null) return { processed: false, suppressed: false }
+        if (providerEventId !== undefined && !await transaction.claimProviderEvent(
+          provider, providerEventId, contact.id
+        )) {
+          return { processed: false, suppressed: contact.status === CONTACT_STATUSES.SUPPRESSED }
+        }
+        const now = clock.now()
+        await appendEvent(transaction, {
+          contactId: contact.id,
+          type: NEWSLETTER_EVENT_TYPES.PROVIDER_FEEDBACK,
+          occurredAt: now,
+          metadata: {
+            provider,
+            feedbackType: input.type,
+            feedbackOccurredAt: input.occurredAt.toISOString(),
+            ...(providerEventId === undefined ? {} : { providerEventId })
+          }
+        })
+        let suppress = (
+          input.type === DELIVERY_FEEDBACK_TYPES.COMPLAINT
+            && feedbackPolicy.suppressOnComplaint !== false
+        ) || (
+          input.type === DELIVERY_FEEDBACK_TYPES.HARD_BOUNCE
+            && feedbackPolicy.suppressOnHardBounce !== false
+        ) || (
+          input.type === DELIVERY_FEEDBACK_TYPES.PROVIDER_SUPPRESSION
+            && feedbackPolicy.suppressOnProviderSuppression !== false
+        )
+        if (input.type === DELIVERY_FEEDBACK_TYPES.SOFT_BOUNCE
+          && feedbackPolicy.softBounceThreshold !== undefined) {
+          const history = await transaction.listEvents(contact.id)
+          let lastUnsuppressed = -1
+          history.forEach((event, index) => {
+            if (event.type === NEWSLETTER_EVENT_TYPES.UNSUPPRESSED) lastUnsuppressed = index
+          })
+          const count = history.slice(lastUnsuppressed + 1).filter(event =>
+            event.type === NEWSLETTER_EVENT_TYPES.PROVIDER_FEEDBACK
+            && event.metadata.feedbackType === DELIVERY_FEEDBACK_TYPES.SOFT_BOUNCE
+          ).length
+          suppress = count >= feedbackPolicy.softBounceThreshold
+        }
+        const updated = suppress
+          ? await suppressInTransaction(transaction, contact, `provider:${provider}:${input.type}`, now)
+          : contact
+        return { processed: true, suppressed: updated.status === CONTACT_STATUSES.SUPPRESSED }
+      })
+    },
     subscribe(input) {
       return subscribe(input)
     },
@@ -1150,31 +1257,7 @@ export function createNewsletterWithSubscriptionBatch(config: BetterNewsletterOp
       return runTransaction(async transaction => {
         const contact = await transaction.getContactByEmail(email)
         if (contact == null) return null
-        if (contact.status === CONTACT_STATUSES.SUPPRESSED) return contact
-
-        const now = clock.now()
-        const updated = await transaction.updateContact(contact.id, {
-          status: CONTACT_STATUSES.SUPPRESSED,
-          suppressedAt: now,
-          suppressionReason: reason,
-          updatedAt: now
-        })
-        await appendEvent(transaction, {
-          contactId: contact.id,
-          type: NEWSLETTER_EVENT_TYPES.SUPPRESSED,
-          occurredAt: now,
-          metadata: { reason }
-        })
-        const subscriptions = await transaction.listSubscriptions(contact.id)
-        for (const subscription of subscriptions) {
-          await config.capabilities.revokeConfirmations(
-            subscription.id,
-            subscription.lifecycleGeneration,
-            now,
-            transaction.confirmationTokens
-          )
-        }
-        return updated
+        return suppressInTransaction(transaction, contact, reason, clock.now())
       })
     },
 

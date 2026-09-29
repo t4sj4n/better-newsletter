@@ -395,6 +395,15 @@ function transactionAdapter<DB>(trx: Transaction<DB>): NewsletterStorageTransact
                 ${event.type}, ${event.occurredAt}, ${json(event.metadata)})
       `.execute(trx)
     },
+    async claimProviderEvent(provider, eventId, contactId) {
+      const result = await sql<{ event_id: string }>`
+        INSERT INTO newsletter_provider_events (provider, event_id, contact_id)
+        VALUES (${provider}, ${eventId}, ${contactId})
+        ON CONFLICT (provider, event_id) DO NOTHING
+        RETURNING event_id
+      `.execute(trx)
+      return result.rows.length > 0
+    },
     async listEvents(contactId) {
       const result = await sql<EventRow>`
         SELECT * FROM newsletter_events

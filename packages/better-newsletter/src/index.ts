@@ -19,6 +19,7 @@ export type {
 
 export {
   CONTACT_STATUSES,
+  DELIVERY_FEEDBACK_TYPES,
   NEWSLETTER_EVENT_TYPES,
   SUBSCRIPTION_STATUSES
 } from './domain.js'
@@ -28,6 +29,8 @@ export type {
   ConfirmationDelivery,
   Contact,
   ContactStatus,
+  DeliveryFeedback,
+  DeliveryFeedbackType,
   ExternalSubject,
   JsonPrimitive,
   JsonValue,

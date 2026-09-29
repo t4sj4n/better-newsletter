@@ -22,6 +22,7 @@ interface MemoryState {
   subscriptions: Map<string, Subscription>
   subscriptionByContactAudience: Map<string, string>
   events: NewsletterEvent[]
+  providerEvents: Set<string>
   confirmationTokens: Map<string, ConfirmationTokenRecord>
 }
 
@@ -42,6 +43,7 @@ export class MemoryNewsletterStorage implements NewsletterStorage {
     subscriptions: new Map(),
     subscriptionByContactAudience: new Map(),
     events: [],
+    providerEvents: new Set(),
     confirmationTokens: new Map()
   }
 
@@ -95,6 +97,12 @@ export class MemoryNewsletterStorage implements NewsletterStorage {
           .map(clone),
       appendEvent: async event => {
         this.state.events.push(clone(event))
+      },
+      claimProviderEvent: async (provider, eventId) => {
+        const key = JSON.stringify([provider, eventId])
+        if (this.state.providerEvents.has(key)) return false
+        this.state.providerEvents.add(key)
+        return true
       },
       listEvents: async contactId =>
         this.state.events

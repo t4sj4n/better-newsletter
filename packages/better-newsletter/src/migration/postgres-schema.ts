@@ -203,6 +203,18 @@ export const POSTGRES_NEWSLETTER_SCHEMA: PostgresSchemaModel = Object.freeze({
       ]
     },
     {
+      name: 'newsletter_provider_events',
+      columns: [
+        { name: 'provider', definition: 'text NOT NULL' },
+        { name: 'event_id', definition: 'text NOT NULL' },
+        { name: 'contact_id', definition: 'text NOT NULL' }
+      ],
+      constraints: [
+        { name: 'newsletter_provider_events_pkey', definition: 'PRIMARY KEY (provider, event_id)' },
+        { name: 'newsletter_provider_events_contact_id_fkey', definition: 'FOREIGN KEY (contact_id) REFERENCES newsletter_contacts (id) ON DELETE CASCADE' }
+      ]
+    },
+    {
       name: 'newsletter_rate_limits',
       columns: [
         { name: 'key_hash', definition: 'text NOT NULL' },
@@ -241,6 +253,11 @@ export const POSTGRES_NEWSLETTER_SCHEMA: PostgresSchemaModel = Object.freeze({
     }
   ],
   indexes: [
+    {
+      name: 'newsletter_provider_events_contact_id_idx',
+      table: 'newsletter_provider_events',
+      definition: 'ON newsletter_provider_events (contact_id)'
+    },
     {
       name: 'newsletter_subscriptions_eligible_idx',
       table: 'newsletter_subscriptions',

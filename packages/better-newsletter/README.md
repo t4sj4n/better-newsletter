@@ -94,6 +94,7 @@ The runtime and the development CLI are separate packages. The runtime is embedd
 | `better-newsletter/adapters/postgres` | PostgreSQL storage, migrations, rate limiting and recipient selection. |
 | `better-newsletter/mailers` | Provider-neutral mailer and delivery contracts. |
 | `better-newsletter/mailers/resend` | Resend mail delivery. |
+| `better-newsletter/webhooks/resend` | Verified Resend delivery feedback; requires the optional `resend` peer. |
 | `better-newsletter/security` | Capability and abuse-protection implementation contracts and helpers. |
 | `better-newsletter/storage` | Storage and transaction contracts for custom adapters. |
 | `better-newsletter/db/migration` | Programmatic database migration API. |
@@ -296,9 +297,32 @@ const newsletter = betterNewsletter({
 })
 ```
 
-The renderer receives the Contact and Subscription (including locale, consent source and metadata), audience key, token, expiry, stable delivery ID, attempt ID and lifecycle generation. It owns all copy and the confirmation URL; the adapter never infers a hostname from request headers. Supply exactly one of `apiKey` or a compatible `client`; `fetch` may be injected for custom transport or tests. The default transport never logs provider response bodies (the standalone Resend SDK may log API errors in non-production environments when you inject it). Resend handles email transport only; local Contact/Subscription state and consent evidence remain authoritative. This adapter does not send campaigns or process bounce/complaint webhooks.
+The renderer receives the Contact and Subscription (including locale, consent source and metadata), audience key, token, expiry, stable delivery ID, attempt ID and lifecycle generation. It owns all copy and the confirmation URL; the adapter never infers a hostname from request headers. Supply exactly one of `apiKey` or a compatible `client`; `fetch` may be injected for custom transport or tests. The default transport never logs provider response bodies (the standalone Resend SDK may log API errors in non-production environments when you inject it). Resend handles email transport only; local Contact/Subscription state and consent evidence remain authoritative. This mailer does not send campaigns; delivery feedback uses the separate webhook adapter below.
 
 Resend receives a SHA-256 idempotency key derived from the stable work ID, *individual attempt* ID and lifecycle generation, not from the recipient, body or bearer token. Replaying the **same attempt with the same payload** can be deduplicated by Resend for [up to 24 hours](https://resend.com/docs/dashboard/emails/idempotency-keys). New leased attempts carry new tokens and new keys, so Resend cannot guarantee exactly-once delivery across attempts. A 409 for an in-flight idempotent request, a generic 5xx or an unknown transport outcome is `AMBIGUOUS`: the core holds the claim until its lease expires instead of starting a new attempt immediately. A new attempt after lease expiry still uses a fresh key; the adapter cannot promise cross-attempt deduplication. Known API-key errors map to `AUTH_FAILED`; other 403 responses, including sender-domain validation failures, map to `INVALID_REQUEST`. Provider rejection is never recorded as an accepted send. The adapter emits only bounded failure codes and does not log API keys, tokens or rendered bodies or persist provider payloads. The host remains responsible for its privacy policy and provider agreement.
+
+### Delivery feedback and Resend webhooks
+
+The trusted `processFeedback()` service method accepts normalized provider feedback. Complaints, permanent bounces, and provider suppression suppress the Contact by default. Transient bounces are recorded only; set `feedbackPolicy.softBounceThreshold` to suppress after a chosen number of distinct soft bounces. `feedbackPolicy.suppressOnComplaint`, `suppressOnHardBounce`, and `suppressOnProviderSuppression` can disable the respective default action. A delivered event never unsuppresses a Contact. Subscription consent and status remain unchanged. Provider event IDs are claimed in the same storage transaction as the feedback and suppression events; custom storage adapters must implement `claimProviderEvent()` atomically. They must also implement `countSoftBouncesSinceUnsuppressed(contactId, limit)` as a bounded count of appended soft-bounce feedback after the latest `UNSUPPRESSED` event, including the current feedback event and returning no more than `limit`.
+
+Install `resend` alongside the optional webhook subpath, configure a Resend webhook signing secret, and register `email.bounced`, `email.complained`, `email.suppressed`, `email.delivered`, and optionally `suppression.added` with Resend. Pass the **raw** body and Svix headers to the handler:
+
+```ts
+import { resendWebhook } from 'better-newsletter/webhooks/resend'
+
+const handleFeedback = resendWebhook({
+  newsletter,
+  webhookSecret: process.env.RESEND_WEBHOOK_SECRET!
+})
+
+// In a server-only POST route:
+const result = await handleFeedback({
+  payload: await request.text(),
+  headers: Object.fromEntries(request.headers)
+})
+```
+
+The handler verifies Resend's signature before parsing or changing state. It returns `processed: false` for duplicate or unrelated events. Invalid signatures yield a bounded `INVALID_WEBHOOK` error without returning the raw body or signing secret. Only the provider, event ID, feedback type and timestamp are stored; raw webhook bodies and provider messages are discarded. Resend bounce types other than `Permanent` are treated as soft bounces. An unknown recipient is not created automatically and can be retried after the Contact exists.
 
 At the core level, `subscribe()` and `resendConfirmation()` enqueue confirmation delivery and normally answer before it finishes, so delivery errors do not reveal whether an address has pending work. Pass `runBackground` to hand the work to the runtime, for example to `event.waitUntil()` on serverless platforms. The tasks it receives never reject. Background failures are reported through `logger.error` (default: `console`); failures of the synchronous state transition propagate to the caller. The Nuxt server helper handles runtimes without `waitUntil` differently, as described below.
 

@@ -48,6 +48,10 @@
       "types": "./dist/mailers/resend.d.ts",
       "import": "./dist/mailers/resend.js"
     },
+    "./webhooks/resend": {
+      "types": "./dist/webhooks/resend.d.ts",
+      "import": "./dist/webhooks/resend.js"
+    },
     "./mailers": {
       "types": "./dist/mailers/index.d.ts",
       "import": "./dist/mailers/index.js"
@@ -87,7 +91,8 @@
     "@nuxt/kit": "^4.5.2",
     "h3": "^1.15.11",
     "kysely": "^0.28.17",
-    "nuxt": "^4.5.2"
+    "nuxt": "^4.5.2",
+    "resend": "^6.30.0"
   },
   "peerDependenciesMeta": {
     "@nuxt/kit": {
@@ -100,6 +105,9 @@
       "optional": true
     },
     "nuxt": {
+      "optional": true
+    },
+    "resend": {
       "optional": true
     }
   }

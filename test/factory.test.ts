@@ -39,6 +39,7 @@ describe('betterNewsletter', () => {
       'listEvents',
       'listPreferences',
       'listSubscriptions',
+      'processFeedback',
       'resendConfirmation',
       'subscribe',
       'suppressContact',

@@ -7,6 +7,7 @@ import type {
   Subscription,
   SubscriptionStatus
 } from './domain.js'
+import type { DeliveryFeedback } from './domain.js'
 
 export interface SubscribeInput {
   readonly email: string
@@ -104,6 +105,7 @@ export interface PublicRequestResult {
 }
 
 export interface NewsletterService {
+  processFeedback(input: DeliveryFeedback): Promise<{ readonly processed: boolean; readonly suppressed: boolean }>
   subscribe(input: SubscribeInput): Promise<PublicRequestResult>
   resendConfirmation(
     input: ResendConfirmationInput

@@ -91,6 +91,14 @@ CREATE TABLE newsletter_events (
   CONSTRAINT newsletter_events_metadata_check CHECK (jsonb_typeof(metadata) = 'object')
 );
 
+CREATE TABLE newsletter_provider_events (
+  provider text NOT NULL,
+  event_id text NOT NULL,
+  contact_id text NOT NULL,
+  CONSTRAINT newsletter_provider_events_pkey PRIMARY KEY (provider, event_id),
+  CONSTRAINT newsletter_provider_events_contact_id_fkey FOREIGN KEY (contact_id) REFERENCES newsletter_contacts (id) ON DELETE CASCADE
+);
+
 CREATE TABLE newsletter_rate_limits (
   key_hash text NOT NULL,
   action text NOT NULL,
@@ -106,6 +114,8 @@ CREATE TABLE newsletter_rate_limits (
   CONSTRAINT newsletter_rate_limits_attempt_count_check CHECK (attempt_count > 0)
 );
 
+CREATE INDEX newsletter_provider_events_contact_id_idx ON newsletter_provider_events (contact_id);
+
 CREATE INDEX newsletter_subscriptions_eligible_idx ON newsletter_subscriptions (audience_key, contact_id) WHERE status = 'ACTIVE' AND confirmed_at IS NOT NULL AND unsubscribed_at IS NULL;
 
 CREATE INDEX newsletter_tokens_subscription_generation_retention_idx ON newsletter_tokens (subscription_id, lifecycle_generation, created_at DESC, id DESC);
@@ -119,5 +129,7 @@ CREATE INDEX newsletter_tokens_cleanup_idx ON newsletter_tokens (COALESCE(consum
 CREATE INDEX newsletter_events_contact_sequence_idx ON newsletter_events (contact_id, sequence);
 
 CREATE INDEX newsletter_events_subscription_sequence_idx ON newsletter_events (subscription_id, sequence) WHERE subscription_id IS NOT NULL;
+
+CREATE INDEX newsletter_events_soft_bounce_idx ON newsletter_events (contact_id, sequence DESC) WHERE event_type = 'PROVIDER_FEEDBACK' AND metadata ->> 'feedbackType' = 'SOFT_BOUNCE';
 
 CREATE INDEX newsletter_rate_limits_expires_at_idx ON newsletter_rate_limits (expires_at);

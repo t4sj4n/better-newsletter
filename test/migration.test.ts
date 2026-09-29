@@ -215,6 +215,33 @@ export const migration = {
     expect(readFileSync(join(directory, 'closed.txt'), 'utf8')).toBe('yes')
   })
 
+  it('uses schema.sql by default and accepts Better Auth-style -y', async () => {
+    const directory = tempDirectory()
+    writeConfig(directory)
+    const { env, stderr } = environment(directory)
+
+    await expect(runBetterNewsletterCli(['generate', '-y'], env)).resolves.toBe(0)
+
+    expect(stderr).toEqual([])
+    expect(readFileSync(join(directory, 'schema.sql'), 'utf8'))
+      .toBe('CREATE TABLE newsletter_fixture (id text);\n')
+  })
+
+  it('redacts database credentials from CLI errors', async () => {
+    const directory = tempDirectory()
+    writeFileSync(
+      join(directory, 'better-newsletter.config.ts'),
+      "throw new Error('failed postgresql://user:super-secret@localhost/newsletter')\n",
+      'utf8'
+    )
+    const { env, stderr } = environment(directory)
+
+    await expect(runBetterNewsletterCli(['generate', '--yes'], env)).resolves.toBe(1)
+
+    expect(stderr.join('')).not.toContain('super-secret')
+    expect(stderr.join('')).toContain('postgresql://***@localhost/newsletter')
+  })
+
   it('requires explicit overwrite approval for an existing generated file', async () => {
     const directory = tempDirectory()
     writeConfig(directory)

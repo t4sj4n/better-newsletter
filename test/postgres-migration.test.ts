@@ -208,7 +208,7 @@ describe.skipIf(!databaseUrl)('PostgreSQL migration tooling', () => {
         provider: postgresMigration(db, { schema })
       })
       await migrations.runMigrations()
-      expect(await tables(schema)).toHaveLength(5)
+      expect(await tables(schema)).toHaveLength(6)
     } finally {
       await db.destroy()
     }
@@ -226,7 +226,7 @@ describe.skipIf(!databaseUrl)('PostgreSQL migration tooling', () => {
       expect(initial.every(plan => !plan.isCurrent)).toBe(true)
 
       await Promise.all(initial.map(plan => plan.runMigrations()))
-      expect(await tables(schema)).toHaveLength(5)
+      expect(await tables(schema)).toHaveLength(6)
       expect((await getMigrations({
         provider: postgresMigration(first.db, { schema })
       })).isCurrent).toBe(true)

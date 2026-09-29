@@ -6,12 +6,12 @@ import {
   CONTACT_STATUSES,
   NEWSLETTER_EVENT_TYPES,
   SUBSCRIPTION_STATUSES
-} from '../src/index.js'
+} from '../packages/better-newsletter/src/index.js'
 import {
   listEligibleSubscriptions,
   postgresRateLimiter,
-  postgresStorage
-} from '../src/postgres.js'
+  postgresAdapter
+} from '../packages/better-newsletter/src/adapters/postgres.js'
 import {
   registerStorageAdapterConformance,
   type StoredConfirmationTokenSnapshot,
@@ -88,7 +88,7 @@ describe.skipIf(!databaseUrl)('PostgreSQL integration', () => {
   beforeAll(async () => {
     await admin.query(`CREATE SCHEMA "${schema}"`)
     const migration = readFileSync(
-      new URL('../migrations/postgres/001_newsletter.sql', import.meta.url),
+      new URL('../packages/better-newsletter/migrations/postgres/001_newsletter.sql', import.meta.url),
       'utf8'
     )
     const client = await pool.connect()
@@ -116,7 +116,7 @@ describe.skipIf(!databaseUrl)('PostgreSQL integration', () => {
   registerStorageAdapterConformance({
     name: 'PostgreSQL',
     reset,
-    createStorage: () => postgresStorage(db),
+    createStorage: () => postgresAdapter(db),
     createRateLimiter: clock => postgresRateLimiter(db, clock),
     inspectConfirmationTokens,
     inspectRateLimits
@@ -165,7 +165,7 @@ describe.skipIf(!databaseUrl)('PostgreSQL integration', () => {
     })
 
     it('selects only PostgreSQL recipients that satisfy core delivery eligibility', async () => {
-      const storage = postgresStorage(db)
+      const storage = postgresAdapter(db)
       const now = new Date('2026-09-28T08:00:00.000Z')
 
       await storage.transaction(async transaction => {
@@ -280,7 +280,7 @@ describe.skipIf(!databaseUrl)('PostgreSQL integration', () => {
     })
 
     it('cascades explicit PostgreSQL Contact erasure to dependent persistence', async () => {
-      const storage = postgresStorage(db)
+      const storage = postgresAdapter(db)
       const now = new Date('2026-09-28T08:00:00.000Z')
 
       await storage.transaction(async transaction => {

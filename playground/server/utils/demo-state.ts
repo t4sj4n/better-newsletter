@@ -1,4 +1,4 @@
-import type { ConfirmationMailInput, MailDeliveryResult } from 'better-newsletter'
+import type { ConfirmationMailInput, MailDeliveryResult } from 'better-newsletter/mailers'
 
 export interface DemoMessage {
   audience: string

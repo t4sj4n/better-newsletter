@@ -6,7 +6,7 @@ import {
   SUBSCRIPTION_STATUSES,
   type Contact,
   type Subscription
-} from '../src/index.js'
+} from '../packages/better-newsletter/src/index.js'
 
 const now = new Date('2026-09-28T08:00:00.000Z')
 

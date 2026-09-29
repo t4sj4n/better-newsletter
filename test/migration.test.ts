@@ -6,12 +6,12 @@ import {
   defineBetterNewsletterMigrationConfig,
   getMigrations,
   type MigrationPlan
-} from '../src/migration.js'
+} from '../packages/better-newsletter/src/db/migration.js'
 import {
   runBetterNewsletterCli,
   type BetterNewsletterCliEnvironment
-} from '../src/cli/run.js'
-import { loadMigrationConfig } from '../src/migration/config-loader.js'
+} from '../packages/cli/src/cli/run.js'
+import { loadMigrationConfig } from '../packages/cli/src/migration/config-loader.js'
 
 const scratch: string[] = []
 

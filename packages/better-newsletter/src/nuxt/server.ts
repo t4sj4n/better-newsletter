@@ -1,15 +1,14 @@
 import { createNewsletterWithSubscriptionBatch } from '../create-newsletter.js'
 import type { SubscribeInput } from '../operations.js'
 import type { H3Event } from 'h3'
-import {
-  createHmacRateLimitKeyProvider,
-  type NewsletterConfig,
-  type NewsletterCore,
-  type RateLimiter,
-  type NewsletterRateLimits
-} from '../index.js'
+import type {
+  BetterNewsletterOptions,
+  BetterNewsletter,
+  NewsletterRateLimits
+} from '../config.js'
+import { createHmacRateLimitKeyProvider, type RateLimiter } from '../security.js'
 
-export interface BetterNewsletterServerConfig extends Omit<NewsletterConfig, 'runBackground' | 'rateLimitChecks'> {
+export interface BetterNewsletterServerConfig extends Omit<BetterNewsletterOptions, 'runBackground' | 'rateLimitChecks'> {
   /** Absolute trusted application origin, never computed from request headers. */
   readonly origin: string
   /** Host-approved client identity; never read arbitrary forwarded headers here. */
@@ -33,7 +32,7 @@ export const defineBetterNewsletterConfig = (
 ): typeof factory => factory
 
 const requestServices = new WeakMap<H3Event, {
-  service: Promise<NewsletterCore>
+  service: Promise<BetterNewsletter>
   tasks: Promise<void>[]
 }>()
 const requestBatches = new WeakMap<H3Event, ReturnType<typeof createNewsletterWithSubscriptionBatch>['subscribeMany']>()
@@ -63,7 +62,7 @@ export function newsletterUrl(origin: string, path: string, token: string): stri
 export async function useBetterNewsletter(
   event: H3Event,
   configuration?: BetterNewsletterServerConfig | (() => BetterNewsletterServerConfig | Promise<BetterNewsletterServerConfig>)
-): Promise<NewsletterCore> {
+): Promise<BetterNewsletter> {
   const existing = requestServices.get(event)
   if (existing != null) return existing.service
   const tasks: Promise<void>[] = []
@@ -106,7 +105,7 @@ export async function useBetterNewsletter(
     })
     requestBatches.set(event, batch.subscribeMany)
     const core = batch.service
-    const safeService: NewsletterCore = {
+    const safeService: BetterNewsletter = {
       ...core,
       async subscribe(input) {
         try {

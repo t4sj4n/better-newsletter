@@ -1,18 +1,20 @@
 import { describe, expect, it, vi } from 'vitest'
 import {
   CONFIRMATION_REPLACEMENT_STRATEGIES,
-  MAIL_DELIVERY_FAILURES,
-  MAIL_DELIVERY_REASONS,
   NEWSLETTER_EVENT_TYPES,
   StorageConflictError,
   SUBSCRIPTION_STATUSES,
-  createNewsletter,
-  createSecureCapabilities,
-  type ConfirmationMailInput,
-  type ConfirmationOptions,
-  type NewsletterStorage
-} from '../src/index.js'
-import { memoryStorage } from '../src/memory.js'
+  betterNewsletter,
+  type ConfirmationOptions
+} from '../packages/better-newsletter/src/index.js'
+import {
+  MAIL_DELIVERY_FAILURES,
+  MAIL_DELIVERY_REASONS,
+  type ConfirmationMailInput
+} from '../packages/better-newsletter/src/mailers/index.js'
+import { createSecureCapabilities } from '../packages/better-newsletter/src/security.js'
+import type { NewsletterStorage } from '../packages/better-newsletter/src/storage.js'
+import { memoryAdapter } from '../packages/better-newsletter/src/adapters/memory.js'
 
 const email = 'person@example.com'
 const signup = { email, consent: { granted: true, version: 'v1' } }
@@ -46,8 +48,15 @@ function delayedStorage(
 function setup(confirmation: ConfirmationOptions = {}) {
   let nowMs = Date.parse('2026-09-28T10:00:00.000Z')
   let token = 0
-  const storage = memoryStorage()
-  const background = new WeakMap<object, Promise<void>[]>()
+  const storage = memoryAdapter()
+  const newTokenGenerator = () => ({
+    generate: vi.fn((): string | Promise<string> => `token-${++token}`)
+  })
+  const dependencies = new WeakMap<object, {
+    tasks: Promise<void>[]
+    tokenGenerator: ReturnType<typeof newTokenGenerator>
+    capabilities: ReturnType<typeof createSecureCapabilities>
+  }>()
   const messages: ConfirmationMailInput[] = []
   const mailer = {
     sendConfirmation: vi.fn(async (input: ConfirmationMailInput) => {
@@ -57,22 +66,25 @@ function setup(confirmation: ConfirmationOptions = {}) {
   }
   const createInstance = (instanceStorage: NewsletterStorage = storage) => {
     const tasks: Promise<void>[] = []
-    const instance = createNewsletter({
+    const capabilities = createSecureCapabilities({ hmacSecret: secret })
+    const tokenGenerator = newTokenGenerator()
+    const instance = betterNewsletter({
       storage: instanceStorage,
-      capabilities: createSecureCapabilities({ hmacSecret: secret }),
+      capabilities,
       mailer,
-      tokenGenerator: { generate: (): string | Promise<string> => `token-${++token}` },
+      tokenGenerator,
       clock: { now: () => new Date(nowMs) },
       confirmation: { deliveryLeaseMs: 1_000, ...confirmation },
       runBackground: task => { tasks.push(task) }
     })
-    background.set(instance, tasks)
+    dependencies.set(instance, { tasks, tokenGenerator, capabilities })
     return instance
   }
   const newsletter = createInstance()
+  const { tokenGenerator, capabilities } = dependencies.get(newsletter)!
   /** Awaits background delivery started by one service instance. */
   const settle = async (instance: object = newsletter) => {
-    const tasks = background.get(instance)!
+    const tasks = dependencies.get(instance)!.tasks
     while (tasks.length > 0) await Promise.all(tasks.splice(0))
   }
   const waitForEvents = async (type: string, count: number) => {
@@ -83,6 +95,8 @@ function setup(confirmation: ConfirmationOptions = {}) {
   }
   return {
     newsletter, createInstance, storage, mailer, messages, waitForEvents, settle,
+    tokenGenerator, capabilities,
+    capabilitiesFor: (instance: object) => dependencies.get(instance)!.capabilities,
     tokens: () => storage.confirmationTokenSnapshot(),
     advance: (ms: number) => { nowMs += ms }
   }
@@ -92,7 +106,7 @@ describe('generation-bound lifecycle concurrency', () => {
   it.each(['confirm', 'unsubscribe', 'unsubscribeAll'] as const)(
     'rejects an old resolved %s target after another instance starts a new cycle',
     async action => {
-      const { newsletter, createInstance, storage, messages, waitForEvents } = setup()
+      const { newsletter, createInstance, storage, messages, waitForEvents, capabilitiesFor } = setup()
       await newsletter.subscribe(signup)
       await waitForEvents(NEWSLETTER_EVENT_TYPES.CONFIRMATION_SENT, 1)
       const single = (await newsletter.createUnsubscribeCapability({ email }))!
@@ -106,8 +120,9 @@ describe('generation-bound lifecycle concurrency', () => {
         : storage)
 
       if (action !== 'confirm') {
-        const original = reader.capabilities.resolveUnsubscribeCapability
-        vi.spyOn(reader.capabilities, 'resolveUnsubscribeCapability').mockImplementationOnce(async value => {
+        const readerCapabilities = capabilitiesFor(reader)
+        const original = readerCapabilities.resolveUnsubscribeCapability
+        vi.spyOn(readerCapabilities, 'resolveUnsubscribeCapability').mockImplementationOnce(async value => {
           const target = await original(value)
           expect(target).not.toBeNull()
           resolved.release()
@@ -144,7 +159,7 @@ describe('generation-bound lifecycle concurrency', () => {
   )
 
   it('invalidates an in-flight unsubscribe-all target when an existing contact starts a new audience', async () => {
-    const { newsletter, createInstance, waitForEvents } = setup()
+    const { newsletter, createInstance, waitForEvents, capabilitiesFor } = setup()
     await newsletter.subscribe(signup)
     await waitForEvents(NEWSLETTER_EVENT_TYPES.CONFIRMATION_SENT, 1)
 
@@ -155,9 +170,10 @@ describe('generation-bound lifecycle concurrency', () => {
     const reader = createInstance()
     const resolved = gate()
     const resume = gate()
-    const original = reader.capabilities.resolveUnsubscribeCapability
+    const readerCapabilities = capabilitiesFor(reader)
+    const original = readerCapabilities.resolveUnsubscribeCapability
 
-    vi.spyOn(reader.capabilities, 'resolveUnsubscribeCapability')
+    vi.spyOn(readerCapabilities, 'resolveUnsubscribeCapability')
       .mockImplementationOnce(async value => {
         const target = await original(value)
         expect(target).toMatchObject({
@@ -203,7 +219,7 @@ describe('generation-bound lifecycle concurrency', () => {
   })
 
   it('issues valid identical links concurrently across independent signers', async () => {
-    const { newsletter, createInstance, waitForEvents } = setup()
+    const { newsletter, createInstance, waitForEvents, capabilitiesFor } = setup()
     await newsletter.subscribe(signup)
     await waitForEvents(NEWSLETTER_EVENT_TYPES.CONFIRMATION_SENT, 1)
     const other = createInstance()
@@ -214,7 +230,7 @@ describe('generation-bound lifecycle concurrency', () => {
       ))
       expect(new Set(links).size).toBe(1)
       for (const link of links) {
-        await expect(other.capabilities.resolveUnsubscribeCapability(link!))
+        await expect(capabilitiesFor(other).resolveUnsubscribeCapability(link!))
           .resolves.toMatchObject(all
             ? { scope: 'ALL', capabilityGeneration: 1 }
             : { scope: 'SUBSCRIPTION', lifecycleGeneration: 1 })
@@ -266,13 +282,13 @@ describe('generation-bound lifecycle concurrency', () => {
   })
 
   it('does not let delayed old token setup replace or mark new-generation delivery', async () => {
-    const { newsletter, createInstance, tokens, messages, waitForEvents, settle } = setup()
+    const { newsletter, createInstance, tokens, messages, waitForEvents, settle, tokenGenerator } = setup()
     await newsletter.subscribe(signup)
     await waitForEvents(NEWSLETTER_EVENT_TYPES.CONFIRMATION_SENT, 1)
     const started = gate()
     const resume = gate()
-    const generate = newsletter.tokenGenerator.generate
-    vi.spyOn(newsletter.tokenGenerator, 'generate').mockImplementationOnce(async () => {
+    const generate = tokenGenerator.generate
+    tokenGenerator.generate.mockImplementationOnce(async () => {
       started.release()
       await resume.promise
       return generate()
@@ -299,15 +315,15 @@ describe('generation-bound lifecycle concurrency', () => {
   })
 
   it('fences stale same-generation setup before it can replace a newer delivered token', async () => {
-    const { newsletter, createInstance, messages, advance, waitForEvents, settle } = setup({
+    const { newsletter, createInstance, messages, advance, waitForEvents, settle, tokenGenerator } = setup({
       replacementStrategy: CONFIRMATION_REPLACEMENT_STRATEGIES.REPLACE_PREVIOUS
     })
     await newsletter.subscribe(signup)
     await waitForEvents(NEWSLETTER_EVENT_TYPES.CONFIRMATION_SENT, 1)
     const started = gate()
     const resume = gate()
-    const generate = newsletter.tokenGenerator.generate
-    vi.spyOn(newsletter.tokenGenerator, 'generate').mockImplementationOnce(async () => {
+    const generate = tokenGenerator.generate
+    tokenGenerator.generate.mockImplementationOnce(async () => {
       started.release()
       await resume.promise
       return generate()
@@ -360,11 +376,11 @@ describe('generation-bound lifecycle concurrency', () => {
 
 describe('transactional capability state', () => {
   it('rolls back confirmation when token consumption fails', async () => {
-    const { newsletter, messages, waitForEvents } = setup()
+    const { newsletter, messages, waitForEvents, capabilities } = setup()
     await newsletter.subscribe(signup)
     await waitForEvents(NEWSLETTER_EVENT_TYPES.CONFIRMATION_SENT, 1)
 
-    vi.spyOn(newsletter.capabilities, 'consumeConfirmation')
+    vi.spyOn(capabilities, 'consumeConfirmation')
       .mockRejectedValueOnce(new Error('token store unavailable'))
 
     await expect(newsletter.confirm({ token: messages[0]!.token }))
@@ -376,12 +392,12 @@ describe('transactional capability state', () => {
   })
 
   it('rolls back unsubscribe when token revocation fails', async () => {
-    const { newsletter, waitForEvents, tokens } = setup()
+    const { newsletter, waitForEvents, tokens, capabilities } = setup()
     await newsletter.subscribe(signup)
     await waitForEvents(NEWSLETTER_EVENT_TYPES.CONFIRMATION_SENT, 1)
     const capability = (await newsletter.createUnsubscribeCapability({ email }))!
 
-    vi.spyOn(newsletter.capabilities, 'revokeConfirmations')
+    vi.spyOn(capabilities, 'revokeConfirmations')
       .mockRejectedValueOnce(new Error('token store unavailable'))
 
     await expect(newsletter.unsubscribe({ capability }))
@@ -427,7 +443,7 @@ describe('durable confirmation retries', () => {
   it.each(['token-generation', 'token-persistence', 'provider-rejection', 'provider-timeout'] as const)(
     'resumes failed re-subscription after %s from another service instance',
     async failure => {
-      const { newsletter, createInstance, mailer, messages, waitForEvents, advance } = setup()
+      const { newsletter, createInstance, mailer, messages, waitForEvents, advance, tokenGenerator, capabilities } = setup()
       await newsletter.subscribe(signup)
       await waitForEvents(NEWSLETTER_EVENT_TYPES.CONFIRMATION_SENT, 1)
       const single = (await newsletter.createUnsubscribeCapability({ email }))!
@@ -435,10 +451,9 @@ describe('durable confirmation retries', () => {
       await newsletter.unsubscribe({ capability: single })
 
       if (failure === 'token-generation') {
-        vi.spyOn(newsletter.tokenGenerator, 'generate')
-          .mockImplementationOnce(() => { throw new Error('entropy unavailable') })
+        tokenGenerator.generate.mockImplementationOnce(() => { throw new Error('entropy unavailable') })
       } else if (failure === 'token-persistence') {
-        vi.spyOn(newsletter.capabilities, 'replaceConfirmation')
+        vi.spyOn(capabilities, 'replaceConfirmation')
           .mockRejectedValueOnce(new Error('token store unavailable'))
       } else if (failure === 'provider-rejection') {
         mailer.sendConfirmation.mockResolvedValueOnce({ accepted: false })
@@ -696,7 +711,7 @@ describe('storage conflicts', () => {
 
   it.each([undefined, 1, 5])('gives up after the configured attempts: %s', async maxAttempts => {
     let calls = 0
-    const newsletter = createNewsletter({
+    const newsletter = betterNewsletter({
       storage: {
         async transaction() {
           calls += 1
@@ -714,7 +729,7 @@ describe('storage conflicts', () => {
 
   it('does not retry non-conflict storage errors', async () => {
     let calls = 0
-    const newsletter = createNewsletter({
+    const newsletter = betterNewsletter({
       storage: {
         async transaction() {
           calls += 1
@@ -880,11 +895,11 @@ describe('delivery outcomes', () => {
   })
 
   it('releases the claim when the contact is suppressed before token setup', async () => {
-    const { newsletter, messages, settle } = setup()
+    const { newsletter, messages, settle, tokenGenerator } = setup()
     const started = gate()
     const resume = gate()
-    const generate = newsletter.tokenGenerator.generate
-    vi.spyOn(newsletter.tokenGenerator, 'generate').mockImplementationOnce(async () => {
+    const generate = tokenGenerator.generate
+    tokenGenerator.generate.mockImplementationOnce(async () => {
       started.release()
       await resume.promise
       return generate()

@@ -8,4 +8,4 @@ These are small, copyable consumers of the **public** `better-newsletter` packag
 
 Future examples can illustrate other hosts and production storage/mail adapters without adding controls to the basic example.
 
-Until the first npm prerelease in issue #16, `basic` uses `better-newsletter: link:../..`. Issue #16 will switch it to the published package and add a StackBlitz link. There is no live StackBlitz example yet.
+Until the first npm prerelease in issue #16, `basic` uses `better-newsletter: workspace:*`. Issue #16 will switch it to the published package and add a StackBlitz link. There is no live StackBlitz example yet.

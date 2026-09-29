@@ -2,9 +2,9 @@ import { readFileSync } from 'node:fs'
 import { Kysely, PostgresDialect } from 'kysely'
 import { Pool } from 'pg'
 import { afterAll, beforeAll, describe, expect, it } from 'vitest'
-import { getMigrations } from '../src/migration.js'
-import { postgresMigration } from '../src/postgres.js'
-import { renderPostgresSchemaSql } from '../src/migration/postgres-schema.js'
+import { getMigrations } from '../packages/better-newsletter/src/db/migration.js'
+import { postgresMigration } from '../packages/better-newsletter/src/adapters/postgres.js'
+import { renderPostgresSchemaSql } from '../packages/better-newsletter/src/migration/postgres-schema.js'
 
 const databaseUrl = process.env.DATABASE_URL
 
@@ -101,7 +101,7 @@ describe.skipIf(!databaseUrl)('PostgreSQL migration tooling', () => {
     const { db, pool } = database(schema)
     try {
       const snapshot = readFileSync(
-        new URL('../migrations/postgres/001_newsletter.sql', import.meta.url),
+        new URL('../packages/better-newsletter/migrations/postgres/001_newsletter.sql', import.meta.url),
         'utf8'
       )
       expect(snapshot).toBe(renderPostgresSchemaSql())

@@ -1,4 +1,4 @@
-import type { ConfirmationMailInput, MailDeliveryResult } from 'better-newsletter'
+import type { ConfirmationMailInput, MailDeliveryResult } from 'better-newsletter/mailers'
 import { newsletterUrl } from 'better-newsletter/nuxt/server'
 
 interface FakeMail {

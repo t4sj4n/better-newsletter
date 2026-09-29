@@ -1,0 +1,43 @@
+{
+  "name": "@better-newsletter/cli",
+  "version": "0.0.0",
+  "description": "Database migration CLI for better-newsletter.",
+  "type": "module",
+  "license": "MIT",
+  "homepage": "https://github.com/t4sj4n/better-newsletter#readme",
+  "keywords": [
+    "newsletter",
+    "migrations",
+    "postgres",
+    "cli",
+    "typescript"
+  ],
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/t4sj4n/better-newsletter.git",
+    "directory": "packages/cli"
+  },
+  "publishConfig": {
+    "access": "public"
+  },
+  "engines": {
+    "node": ">=20.11"
+  },
+  "files": [
+    "dist",
+    "README.md",
+    "LICENSE"
+  ],
+  "bin": {
+    "better-newsletter": "./dist/cli.js"
+  },
+  "scripts": {
+    "build": "tsc -p tsconfig.build.json",
+    "prepack": "pnpm -w build",
+    "typecheck": "tsc -p tsconfig.json"
+  },
+  "dependencies": {
+    "better-newsletter": "workspace:0.0.0",
+    "jiti": "^2.7.0"
+  }
+}

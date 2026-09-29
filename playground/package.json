@@ -9,7 +9,7 @@
     "typecheck": "nuxt typecheck"
   },
   "dependencies": {
-    "better-newsletter": "link:..",
+    "better-newsletter": "workspace:*",
     "kysely": "^0.28.17",
     "nuxt": "^4.5.2",
     "pg": "^8.23.0",

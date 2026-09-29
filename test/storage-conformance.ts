@@ -5,18 +5,19 @@ import {
   NEWSLETTER_EVENT_TYPES,
   StorageConflictError,
   SUBSCRIPTION_STATUSES,
+  betterNewsletter,
+  type BetterNewsletterOptions,
+} from '../packages/better-newsletter/src/index.js'
+import type { Clock } from '../packages/better-newsletter/src/config.js'
+import type { ConfirmationMailInput, NewsletterMailer } from '../packages/better-newsletter/src/mailers/index.js'
+import type { NewsletterStorage } from '../packages/better-newsletter/src/storage.js'
+import {
   createHmacRateLimitKeyProvider,
-  createNewsletter,
   createSecureCapabilities,
   sha256Digest,
-  type Clock,
-  type ConfirmationMailInput,
-  type NewsletterConfig,
-  type NewsletterMailer,
-  type NewsletterStorage,
   type PublicAbuseAction,
   type RateLimiter
-} from '../src/index.js'
+} from '../packages/better-newsletter/src/security.js'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
 export interface ConformanceRateLimiter extends RateLimiter {
@@ -147,8 +148,8 @@ export function registerStorageAdapterConformance(
           return deliver(input)
         }
       }
-      const makeService = (overrides: Partial<NewsletterConfig> = {}) =>
-        createNewsletter({
+      const makeService = (overrides: Partial<BetterNewsletterOptions> = {}) =>
+        betterNewsletter({
           storage: harness.createStorage(),
           capabilities: createSecureCapabilities({ hmacSecret: secret }),
           mailer,
@@ -715,12 +716,13 @@ export function registerStorageAdapterConformance(
       await service.subscribe({ email, consent: consent() })
       await settle()
       const capability = (await service.createUnsubscribeCapability({ email, all: true }))!
-      const other = makeService()
+      const capabilities = createSecureCapabilities({ hmacSecret: secret })
+      const other = makeService({ capabilities })
       const resolved = gate()
       const resume = gate()
-      const original = other.capabilities.resolveUnsubscribeCapability
+      const original = capabilities.resolveUnsubscribeCapability
 
-      vi.spyOn(other.capabilities, 'resolveUnsubscribeCapability')
+      vi.spyOn(capabilities, 'resolveUnsubscribeCapability')
         .mockImplementationOnce(async value => {
           const target = await original(value)
           resolved.release()

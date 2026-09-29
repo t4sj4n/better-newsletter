@@ -54,8 +54,8 @@ Commands:
 Options:
   -c, --cwd <path>      Project working directory.
       --config <path>   Explicit migration config file.
-      --output <path>   Write generated SQL to a file (generate only).
-      --yes             Skip confirmation prompts.
+      --output <path>   Generated SQL path (default: schema.sql).
+  -y, --yes             Skip confirmation prompts.
   -h, --help            Show this help.
 `
 
@@ -93,7 +93,7 @@ function parseArgs(argv: readonly string[], initialCwd: string): ParsedArgs {
     } else if (argument === '--output') {
       output = valueAfter(argv, index, argument)
       index += 1
-    } else if (argument === '--yes') {
+    } else if (argument === '-y' || argument === '--yes') {
       yes = true
     } else {
       throw new Error(`Unknown option: ${argument}`)
@@ -174,22 +174,14 @@ export async function runBetterNewsletterCli(
     if (migrations.isCurrent) return 0
 
     if (parsed.command === 'generate') {
-      if (parsed.output == null) {
-        env.stdout(migrations.sql)
+      const output = resolve(parsed.cwd, parsed.output ?? 'schema.sql')
+      const question = env.exists(output)
+        ? `Overwrite existing migration file ${output}?`
+        : `Generate Better Newsletter migration at ${output}?`
+      const write = await requireConfirmation(env, parsed.yes, question)
+      if (!write) {
+        env.stdout('Migration generation cancelled.\n')
         return 0
-      }
-
-      const output = resolve(parsed.cwd, parsed.output)
-      if (env.exists(output)) {
-        const overwrite = await requireConfirmation(
-          env,
-          parsed.yes,
-          `Overwrite existing migration file ${output}?`
-        )
-        if (!overwrite) {
-          env.stdout('Migration generation cancelled.\n')
-          return 0
-        }
       }
       env.writeFile(output, migrations.sql)
       env.stdout(`Wrote migration SQL to ${output}.\n`)

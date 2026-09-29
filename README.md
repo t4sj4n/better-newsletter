@@ -436,13 +436,67 @@ Production storage must provide transaction semantics strong enough to serialize
 
 ## PostgreSQL
 
-The PostgreSQL adapter targets PostgreSQL 14 or newer, Kysely 0.28.x, `pg` 8.x, and Node.js 20.11 or newer. It is implemented with Kysely but supports PostgreSQL specifically; the public adapter does not imply compatibility with other Kysely dialects. If you use the optional `/postgres` subpath, install a supported Kysely version and a PostgreSQL driver in your application (for example, `pnpm add kysely@^0.28.17 pg@^8`). Kysely is an optional peer dependency; `pg` is only a development dependency of this package. Core-only consumers do not need either. Provide your own configured Kysely database instance and connection pool; the library does not own their lifecycle. From a checkout of this repository, apply the inspectable V1 migration **before** using the adapter:
+The PostgreSQL adapter targets PostgreSQL 14 or newer, Kysely 0.28.x, `pg` 8.x, and Node.js 20.11 or newer. It is implemented with Kysely but supports PostgreSQL specifically; the public adapter does not imply compatibility with other Kysely dialects. If you use the optional `/postgres` subpath, install a supported Kysely version and a PostgreSQL driver in your application (for example, `pnpm add kysely@^0.28.17 pg@^8`). Kysely is an optional peer dependency; `pg` is only a development dependency of this package. Core-only consumers do not need either. Provide your own configured Kysely database instance and connection pool; the library does not own their lifecycle.
 
-```bash
-psql "$DATABASE_URL" --single-transaction -v ON_ERROR_STOP=1 -f migrations/postgres/001_newsletter.sql
+### Database migrations
+
+Better Newsletter never creates or alters database objects during normal application startup. Configure a migration provider next to your server configuration and choose either the direct or host-managed workflow:
+
+```ts
+// server/better-newsletter.config.ts
+import { defineBetterNewsletterMigrationConfig } from 'better-newsletter/migration'
+import {
+  postgresMigration,
+  postgresStorage
+} from 'better-newsletter/postgres'
+
+const db = createApplicationDatabase()
+
+export const migration = defineBetterNewsletterMigrationConfig({
+  provider: postgresMigration(db),
+  // Optional but useful for CLI processes that own this database client.
+  close: () => db.destroy()
+})
+
+export default defineBetterNewsletterConfig(async () => ({
+  origin,
+  storage: postgresStorage(db),
+  capabilities,
+  mailer
+}))
 ```
 
-In deployments, review and run that SQL inside your host migration runner's transaction instead. The migration contains no `BEGIN` or `COMMIT`, so it does not prematurely commit an enclosing transaction. Importing `better-newsletter/postgres` does not create or alter tables. Apply future schema changes as new forward migrations; V1 does not promise a destructive rollback.
+The CLI discovers `better-newsletter.config.ts` or `server/better-newsletter.config.ts` by default. Use `--config <path>` for another TypeScript/JavaScript config file. It reads the named `migration` export and does not invoke the runtime newsletter factory, so mail providers and signing secrets are not needed merely to inspect the schema.
+
+For direct schema management:
+
+```bash
+npx better-newsletter migrate
+# non-interactive deployment:
+npx better-newsletter migrate --yes
+```
+
+`migrate` inspects the live database, prints the required additive plan, asks for confirmation, and applies the whole PostgreSQL plan transactionally.
+
+For applications that own migration history:
+
+```bash
+npx better-newsletter generate --output ./migrations/better-newsletter.sql
+```
+
+`generate` inspects the same live database but only writes the required SQL. Review/check that SQL into the host migration system and apply it with the host's normal deployment ordering. Existing compatible objects are not recreated and unrelated host tables/columns are left untouched. Destructive or data-transforming future upgrades are not inferred from a schema diff; they require an explicit reviewed Better Newsletter upgrade step.
+
+The same engine is available programmatically:
+
+```ts
+import { getMigrations } from 'better-newsletter/migration'
+
+const migrations = await getMigrations(migration)
+console.log(migrations.toBeCreated, migrations.toBeAdded)
+await migrations.runMigrations()
+```
+
+`migrations/postgres/001_newsletter.sql` remains an inspectable generated snapshot of the current empty-database target, not the primary installation/upgrade API and not an independent schema source. `pnpm migration:snapshot:check` verifies it against the canonical schema model; contributors update the model first and regenerate the snapshot with `pnpm migration:snapshot:write`.
 
 ```ts
 import { createNewsletter } from 'better-newsletter'
@@ -576,7 +630,7 @@ abuseGuard: {
 
 The handler passes this transient context to the core `abuseGuard` and `rateLimitKeyProvider`; it does not itself persist raw IPs or CAPTCHA tokens. Never trust a client-supplied IP or session claim in `body`. If you add a trusted network identity from `event`, hash/HMAC it before writing any rate-limit key; do not include raw IPs or CAPTCHA tokens in contact metadata, events or logs.
 
-For production, replace memory adapters with `postgresStorage(db)` and `postgresRateLimiter(db)` from `better-newsletter/postgres` (apply `migrations/postgres/001_newsletter.sql` first), `createSecureCapabilities({ hmacSecret })`, `createHmacRateLimitKeyProvider({ secret })`, and `resendMailer({ apiKey, from, renderConfirmation })` from `better-newsletter/resend`. Configure a verified sender, durable PostgreSQL connection, stable server-side signing/rate-limit secrets, a trusted origin for URLs, and runtime-safe background delivery (`waitUntil`, an awaited fallback or a durable worker). See the adapter sections above for integration details; the example deliberately uses none of these external services.
+For production, replace memory adapters with `postgresStorage(db)` and `postgresRateLimiter(db)` from `better-newsletter/postgres`, configure `postgresMigration(db)`, and apply the schema with `better-newsletter migrate` or your host-managed `generate` workflow, `createSecureCapabilities({ hmacSecret })`, `createHmacRateLimitKeyProvider({ secret })`, and `resendMailer({ apiKey, from, renderConfirmation })` from `better-newsletter/resend`. Configure a verified sender, durable PostgreSQL connection, stable server-side signing/rate-limit secrets, a trusted origin for URLs, and runtime-safe background delivery (`waitUntil`, an awaited fallback or a durable worker). See the adapter sections above for integration details; the example deliberately uses none of these external services.
 
 ### Consumer example and maintainer playground
 
@@ -610,7 +664,7 @@ Repository layout:
 | `playground/` | Full maintainer development/debugging Nuxt app, excluded from the npm artifact. |
 | `examples/basic/` | Minimal, copyable consumer integration example, excluded from the npm artifact. |
 | `test/` | Automated tests; `test/fixtures/` contains automated consumers, not documentation examples. |
-| `migrations/` | Database-specific SQL migrations shipped with the package. |
+| `migrations/` | Generated/verified database-specific schema snapshots shipped with the package. |
 | `dist/` | Generated package output, not committed to Git. |
 
 ```bash

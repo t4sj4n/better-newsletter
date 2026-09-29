@@ -1,6 +1,6 @@
 # Nuxt 4 / Nitro development playground
 
-This playground consumes the repository's public package exports through a local link (`link:..`). Storage defaults to process-local `memoryStorage()` and delivery defaults to a server-only fake mailer, so no database, Resend account, API key or real email is needed. PostgreSQL storage and real Resend delivery can each be enabled independently with server-only environment variables. It is **not a production starter**: memory mode loses consent on restart, the demo capability signing key is always ephemeral, and production builds cannot use the demo service or development-only inbox/control endpoints.
+This playground consumes the repository's public package exports through a workspace link (`workspace:*`). Storage defaults to process-local `memoryAdapter()` and delivery defaults to a server-only fake mailer, so no database, Resend account, API key or real email is needed. PostgreSQL storage and real Resend delivery can each be enabled independently with server-only environment variables. It is **not a production starter**: memory mode loses consent on restart, the demo capability signing key is always ephemeral, and production builds cannot use the demo service or development-only inbox/control endpoints.
 
 ## Run locally
 
@@ -30,7 +30,7 @@ Apply the PostgreSQL migration from the repository root before starting the play
 ```bash
 . ./playground/.env
 export DATABASE_URL
-psql "$DATABASE_URL" --single-transaction -v ON_ERROR_STOP=1 -f migrations/postgres/001_newsletter.sql
+psql "$DATABASE_URL" --single-transaction -v ON_ERROR_STOP=1 -f packages/better-newsletter/migrations/postgres/001_newsletter.sql
 ```
 
 Then start the playground normally with `pnpm --dir playground dev`. The connection string is read only by the server configuration and is never exposed through Nuxt public runtime config.
@@ -82,9 +82,9 @@ For a published-artifact smoke test from the repository root:
 
 ```bash
 pnpm build
-pnpm pack --pack-destination playground
+pnpm --dir packages/better-newsletter pack --pack-destination ../../playground
 pnpm --dir playground add ./better-newsletter-<version>.tgz
 pnpm --dir playground build
 ```
 
-Replace `<version>` with the tarball name printed by `pnpm pack`. This changes the example's dependency for your local test; revert it to `"link:.."` afterward and remove the test tarball. Do not commit packed artifacts. The root README documents production PostgreSQL + Resend configuration, route overrides/disablement, trusted origins, abuse protection and deployment background-task requirements.
+Replace `<version>` with the tarball name printed by `pnpm pack`. This changes the example's dependency for your local test; revert it to `"workspace:*"` afterward and remove the test tarball. Do not commit packed artifacts. The root README documents production PostgreSQL + Resend configuration, route overrides/disablement, trusted origins, abuse protection and deployment background-task requirements.

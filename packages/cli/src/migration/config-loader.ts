@@ -1,7 +1,7 @@
 import { existsSync } from 'node:fs'
 import { isAbsolute, resolve } from 'node:path'
 import { createJiti } from 'jiti'
-import type { BetterNewsletterMigrationConfig } from '../migration.js'
+import type { BetterNewsletterMigrationConfig } from 'better-newsletter/db/migration'
 
 const defaultConfigFiles = [
   'better-newsletter.config.ts',

@@ -424,3 +424,9 @@ export function createHmacRateLimitKeyProvider(
     }
   }
 }
+export type {
+  ConfirmationCapabilityTarget,
+  ConfirmationReplacementResult,
+  NewsletterCapabilities,
+  UnsubscribeCapabilityTarget
+} from './capabilities.js'

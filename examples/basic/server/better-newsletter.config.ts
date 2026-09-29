@@ -1,8 +1,8 @@
-import { memoryCapabilities, memoryStorage } from 'better-newsletter/memory'
+import { memoryCapabilities, memoryAdapter } from 'better-newsletter/adapters/memory'
 import { defineBetterNewsletterConfig } from 'better-newsletter/nuxt/server'
 import { basicMailer, getBasicOrigin } from './utils/basic-state'
 
-const storage = memoryStorage()
+const storage = memoryAdapter()
 const capabilities = memoryCapabilities()
 
 export default defineBetterNewsletterConfig(() => {

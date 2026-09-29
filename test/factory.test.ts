@@ -1,12 +1,12 @@
 import { describe, expect, it } from 'vitest'
 import {
-  createNewsletter,
+  betterNewsletter,
   DEFAULT_AUDIENCE_KEY,
   DEFAULT_CONFIRMATION_EXPIRES_IN_MS,
   NEWSLETTER_ERROR_CODES,
   NewsletterError
-} from '../src/index.js'
-import { memoryCapabilities, memoryStorage } from '../src/memory.js'
+} from '../packages/better-newsletter/src/index.js'
+import { memoryCapabilities, memoryAdapter } from '../packages/better-newsletter/src/adapters/memory.js'
 
 const mailer = {
   async sendConfirmation() {
@@ -16,12 +16,12 @@ const mailer = {
 
 const tokenGenerator = { generate: () => 'token' }
 
-describe('createNewsletter', () => {
+describe('betterNewsletter', () => {
   it('constructs the core with provider-neutral test doubles', () => {
-    const storage = memoryStorage()
+    const storage = memoryAdapter()
     const capabilities = memoryCapabilities()
 
-    const newsletter = createNewsletter({
+    const newsletter = betterNewsletter({
       storage,
       capabilities,
       mailer,
@@ -38,8 +38,8 @@ describe('createNewsletter', () => {
   })
 
   it('uses the secure Web Crypto token generator by default', () => {
-    const newsletter = createNewsletter({
-      storage: memoryStorage(),
+    const newsletter = betterNewsletter({
+      storage: memoryAdapter(),
       capabilities: memoryCapabilities(),
       mailer
     })
@@ -53,8 +53,8 @@ describe('createNewsletter', () => {
     const deterministicTokenGenerator = { generate: () => 'deterministic-token' }
     const idGenerator = { generate: () => 'deterministic-id' }
 
-    const newsletter = createNewsletter({
-      storage: memoryStorage(),
+    const newsletter = betterNewsletter({
+      storage: memoryAdapter(),
       capabilities: memoryCapabilities(),
       mailer,
       clock: { now: () => now },
@@ -74,8 +74,8 @@ describe('createNewsletter', () => {
   })
 
   it('rejects invalid confirmation configuration', () => {
-    expect(() => createNewsletter({
-      storage: memoryStorage(),
+    expect(() => betterNewsletter({
+      storage: memoryAdapter(),
       capabilities: memoryCapabilities(),
       mailer,
       tokenGenerator,
@@ -85,8 +85,8 @@ describe('createNewsletter', () => {
     })).toThrowError(NewsletterError)
 
     try {
-      createNewsletter({
-        storage: memoryStorage(),
+      betterNewsletter({
+        storage: memoryAdapter(),
         capabilities: memoryCapabilities(),
         mailer,
         tokenGenerator,
@@ -104,8 +104,8 @@ describe('createNewsletter', () => {
   it.each([0, -1, 1.5, Infinity, Number.MAX_SAFE_INTEGER + 1])(
     'rejects an invalid confirmation delivery lease: %s',
     deliveryLeaseMs => {
-      expect(() => createNewsletter({
-        storage: memoryStorage(),
+      expect(() => betterNewsletter({
+        storage: memoryAdapter(),
         capabilities: memoryCapabilities(),
         mailer,
         confirmation: { deliveryLeaseMs }
@@ -116,8 +116,8 @@ describe('createNewsletter', () => {
   it.each([0, -1, 1.5, Infinity])(
     'rejects invalid transactionMaxAttempts: %s',
     transactionMaxAttempts => {
-      expect(() => createNewsletter({
-        storage: memoryStorage(),
+      expect(() => betterNewsletter({
+        storage: memoryAdapter(),
         capabilities: memoryCapabilities(),
         mailer,
         transactionMaxAttempts

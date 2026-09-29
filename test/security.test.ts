@@ -3,18 +3,20 @@ import {
   CONFIRMATION_REPLACEMENT_STRATEGIES,
   NEWSLETTER_ERROR_CODES,
   SUBSCRIPTION_STATUSES,
+  betterNewsletter
+} from '../packages/better-newsletter/src/index.js'
+import {
   createHmacRateLimitKeyProvider,
-  createNewsletter,
   createSecureCapabilities,
   secureTokenGenerator,
   sha256Digest
-} from '../src/index.js'
-import { createNewsletterWithSubscriptionBatch } from '../src/create-newsletter.js'
+} from '../packages/better-newsletter/src/security.js'
+import { createNewsletterWithSubscriptionBatch } from '../packages/better-newsletter/src/create-newsletter.js'
 import {
   memoryConfirmationTokenStore,
   memoryRateLimiter,
-  memoryStorage
-} from '../src/memory.js'
+  memoryAdapter
+} from '../packages/better-newsletter/src/adapters/memory.js'
 
 const secret = '0123456789abcdef0123456789abcdef'
 const now = new Date('2026-09-28T10:00:00.000Z')
@@ -247,7 +249,7 @@ describe('abuse protection', () => {
     const audienceConsume = vi.fn(async (input: { key: string }) => ({ allowed: input.key.length > 0 }))
     const emailConsume = vi.fn(async (input: { key: string }) => ({ allowed: input.key.length > 0 }))
     const { subscribeMany } = createNewsletterWithSubscriptionBatch({
-      storage: memoryStorage(),
+      storage: memoryAdapter(),
       capabilities: secureCapabilities().capabilities,
       mailer: { async sendConfirmation() { return { accepted: true } } },
       rateLimitChecks: [
@@ -314,13 +316,13 @@ describe('abuse protection', () => {
   })
 
   it('runs the abuse guard before persistence and mail delivery', async () => {
-    const storage = memoryStorage()
+    const storage = memoryAdapter()
     const { capabilities } = secureCapabilities()
     const mailer = { sendConfirmation: vi.fn(async () => ({ accepted: true })) }
     const guard = {
       verify: vi.fn(async () => ({ allowed: false }))
     }
-    const newsletter = createNewsletter({
+    const newsletter = betterNewsletter({
       storage,
       capabilities,
       mailer,
@@ -342,10 +344,10 @@ describe('abuse protection', () => {
   })
 
   it('rate-limits signup without leaking a raw e-mail key', async () => {
-    const storage = memoryStorage()
+    const storage = memoryAdapter()
     const { capabilities } = secureCapabilities()
     const limiter = memoryRateLimiter({ now: () => now })
-    const newsletter = createNewsletter({
+    const newsletter = betterNewsletter({
       storage,
       capabilities,
       mailer: { async sendConfirmation() { return { accepted: true } } },
@@ -373,8 +375,8 @@ describe('abuse protection', () => {
   })
 
   it('exposes the limiter retry delay on rate-limit errors', async () => {
-    const newsletter = createNewsletter({
-      storage: memoryStorage(),
+    const newsletter = betterNewsletter({
+      storage: memoryAdapter(),
       capabilities: secureCapabilities().capabilities,
       mailer: { async sendConfirmation() { return { accepted: true } } },
       rateLimiter: memoryRateLimiter({ now: () => now }),
@@ -394,7 +396,7 @@ describe('abuse protection', () => {
 describe('secure lifecycle integration', () => {
   it('does not burn a confirmation token when the state transaction fails', async () => {
     const messages: string[] = []
-    const baseStorage = memoryStorage()
+    const baseStorage = memoryAdapter()
     let failNextTransaction = false
     const storage = {
       transaction: async <T>(
@@ -408,7 +410,7 @@ describe('secure lifecycle integration', () => {
       }
     }
     const capabilities = createSecureCapabilities({ hmacSecret: secret })
-    const newsletter = createNewsletter({
+    const newsletter = betterNewsletter({
       storage,
       capabilities,
       mailer: {
@@ -435,8 +437,8 @@ describe('secure lifecycle integration', () => {
   it('binds unsubscribe capabilities to one audience and invalidates old links after resubscribe', async () => {
     const messages: Array<{ token: string; audience: string }> = []
     const capabilities = createSecureCapabilities({ hmacSecret: secret })
-    const newsletter = createNewsletter({
-      storage: memoryStorage(),
+    const newsletter = betterNewsletter({
+      storage: memoryAdapter(),
       capabilities,
       mailer: {
         async sendConfirmation(input) {

@@ -4,14 +4,14 @@ import {
   NEWSLETTER_ERROR_CODES,
   NEWSLETTER_EVENT_TYPES,
   SUBSCRIPTION_STATUSES,
-  createNewsletter,
+  betterNewsletter,
   type ConfirmationMailInput,
   type NewsletterStorage
-} from '../src/index.js'
+} from '../packages/better-newsletter/src/index.js'
 import {
   memoryCapabilities,
-  memoryStorage
-} from '../src/memory.js'
+  memoryAdapter
+} from '../packages/better-newsletter/src/adapters/memory.js'
 
 /**
  * Creates an isolated lifecycle fixture with deterministic time, IDs, and tokens.
@@ -24,8 +24,8 @@ function setup() {
   let failMail = false
   const messages: ConfirmationMailInput[] = []
 
-  const newsletter = createNewsletter({
-    storage: memoryStorage(),
+  const newsletter = betterNewsletter({
+    storage: memoryAdapter(),
     capabilities: memoryCapabilities(),
     mailer: {
       async sendConfirmation(input) {
@@ -470,7 +470,7 @@ describe('newsletter lifecycle', () => {
   })
 
   it('treats null and omitted consent fields as equal on repeated import', async () => {
-    const storage = memoryStorage()
+    const storage = memoryAdapter()
     // SQL adapters read omitted optional columns back as null.
     const sqlLike: NewsletterStorage = {
       transaction: operation => storage.transaction(transaction => operation({
@@ -483,7 +483,7 @@ describe('newsletter lifecycle', () => {
         }
       }))
     }
-    const newsletter = createNewsletter({
+    const newsletter = betterNewsletter({
       storage: sqlLike,
       capabilities: memoryCapabilities(),
       mailer: { async sendConfirmation() { return { accepted: true } } }
@@ -507,10 +507,10 @@ describe('newsletter lifecycle', () => {
   })
 
   it('hands background work to runBackground and reports failures through the logger', async () => {
-    const storage = memoryStorage()
+    const storage = memoryAdapter()
     const tasks: Promise<void>[] = []
     const logger = { error: vi.fn() }
-    const newsletter = createNewsletter({
+    const newsletter = betterNewsletter({
       storage: {
         transaction: operation => storage.transaction(transaction => operation({
           ...transaction,

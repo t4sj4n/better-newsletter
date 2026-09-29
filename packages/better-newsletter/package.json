@@ -1,0 +1,102 @@
+{
+  "name": "better-newsletter",
+  "version": "0.0.0",
+  "description": "Framework-agnostic newsletter subscription and consent lifecycle infrastructure for TypeScript.",
+  "type": "module",
+  "license": "MIT",
+  "homepage": "https://github.com/t4sj4n/better-newsletter#readme",
+  "keywords": [
+    "newsletter",
+    "subscriptions",
+    "consent",
+    "typescript",
+    "nuxt"
+  ],
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/t4sj4n/better-newsletter.git",
+    "directory": "packages/better-newsletter"
+  },
+  "publishConfig": {
+    "access": "public"
+  },
+  "engines": {
+    "node": ">=20.11"
+  },
+  "files": [
+    "dist",
+    "migrations",
+    "README.md",
+    "LICENSE"
+  ],
+  "sideEffects": false,
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js"
+    },
+    "./adapters/memory": {
+      "types": "./dist/adapters/memory.d.ts",
+      "import": "./dist/adapters/memory.js"
+    },
+    "./adapters/postgres": {
+      "types": "./dist/adapters/postgres.d.ts",
+      "import": "./dist/adapters/postgres.js"
+    },
+    "./mailers/resend": {
+      "types": "./dist/mailers/resend.d.ts",
+      "import": "./dist/mailers/resend.js"
+    },
+    "./security": {
+      "types": "./dist/security.d.ts",
+      "import": "./dist/security.js"
+    },
+    "./storage": {
+      "types": "./dist/storage.d.ts",
+      "import": "./dist/storage.js"
+    },
+    "./db/migration": {
+      "types": "./dist/db/migration.d.ts",
+      "import": "./dist/db/migration.js"
+    },
+    "./nuxt": {
+      "types": "./dist/nuxt.d.ts",
+      "import": "./dist/nuxt.js"
+    },
+    "./nuxt/server": {
+      "types": "./dist/nuxt/server.d.ts",
+      "import": "./dist/nuxt/server.js"
+    },
+    "./nuxt/client": {
+      "types": "./dist/nuxt/client.d.ts",
+      "import": "./dist/nuxt/client.js"
+    },
+    "./package.json": "./package.json"
+  },
+  "scripts": {
+    "build": "tsc -p tsconfig.build.json",
+    "prepack": "pnpm build",
+    "typecheck": "tsc -p tsconfig.json"
+  },
+  "peerDependencies": {
+    "@nuxt/kit": "^4.5.2",
+    "h3": "^1.15.11",
+    "kysely": "^0.28.17",
+    "nuxt": "^4.5.2"
+  },
+  "peerDependenciesMeta": {
+    "@nuxt/kit": {
+      "optional": true
+    },
+    "h3": {
+      "optional": true
+    },
+    "kysely": {
+      "optional": true
+    },
+    "nuxt": {
+      "optional": true
+    }
+  }
+}

@@ -6,13 +6,13 @@ import {
   NEWSLETTER_EVENT_TYPES,
   StorageConflictError,
   SUBSCRIPTION_STATUSES,
-  createNewsletter,
-  createSecureCapabilities,
+  betterNewsletter,
   type ConfirmationMailInput,
   type ConfirmationOptions,
   type NewsletterStorage
-} from '../src/index.js'
-import { memoryStorage } from '../src/memory.js'
+} from '../packages/better-newsletter/src/index.js'
+import { createSecureCapabilities } from '../packages/better-newsletter/src/security.js'
+import { memoryAdapter } from '../packages/better-newsletter/src/adapters/memory.js'
 
 const email = 'person@example.com'
 const signup = { email, consent: { granted: true, version: 'v1' } }
@@ -46,7 +46,7 @@ function delayedStorage(
 function setup(confirmation: ConfirmationOptions = {}) {
   let nowMs = Date.parse('2026-09-28T10:00:00.000Z')
   let token = 0
-  const storage = memoryStorage()
+  const storage = memoryAdapter()
   const background = new WeakMap<object, Promise<void>[]>()
   const messages: ConfirmationMailInput[] = []
   const mailer = {
@@ -57,7 +57,7 @@ function setup(confirmation: ConfirmationOptions = {}) {
   }
   const createInstance = (instanceStorage: NewsletterStorage = storage) => {
     const tasks: Promise<void>[] = []
-    const instance = createNewsletter({
+    const instance = betterNewsletter({
       storage: instanceStorage,
       capabilities: createSecureCapabilities({ hmacSecret: secret }),
       mailer,
@@ -696,7 +696,7 @@ describe('storage conflicts', () => {
 
   it.each([undefined, 1, 5])('gives up after the configured attempts: %s', async maxAttempts => {
     let calls = 0
-    const newsletter = createNewsletter({
+    const newsletter = betterNewsletter({
       storage: {
         async transaction() {
           calls += 1
@@ -714,7 +714,7 @@ describe('storage conflicts', () => {
 
   it('does not retry non-conflict storage errors', async () => {
     let calls = 0
-    const newsletter = createNewsletter({
+    const newsletter = betterNewsletter({
       storage: {
         async transaction() {
           calls += 1

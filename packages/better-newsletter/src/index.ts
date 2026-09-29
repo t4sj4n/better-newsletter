@@ -1,5 +1,5 @@
 export {
-  createNewsletter,
+  betterNewsletter,
   DEFAULT_CONFIRMATION_CLEANUP_RETENTION_MS,
   DEFAULT_CONFIRMATION_DELIVERY_LEASE_MS,
   DEFAULT_CONFIRMATION_EXPIRES_IN_MS,
@@ -16,20 +16,15 @@ export type {
   Clock,
   ConfirmationOptions,
   IdGenerator,
-  NewsletterConfig,
-  NewsletterCore,
+  BetterNewsletterOptions,
+  BetterNewsletter,
   NewsletterLogger,
   NewsletterRateLimitCheck,
   NewsletterRateLimits,
   TokenGenerator
 } from './config.js'
 
-export type {
-  ConfirmationCapabilityTarget,
-  ConfirmationReplacementResult,
-  NewsletterCapabilities,
-  UnsubscribeCapabilityTarget
-} from './capabilities.js'
+export type { NewsletterCapabilities } from './capabilities.js'
 
 export {
   CONTACT_STATUSES,
@@ -111,33 +106,18 @@ export type {
 } from './operations.js'
 
 export type {
-  ContactPatch,
-  CreateContactInput,
-  CreateSubscriptionInput,
-  NewsletterStorage,
-  NewsletterStorageTransaction,
-  SubscriptionPatch
+  NewsletterStorage
 } from './storage.js'
 
 export {
-  CAPABILITY_PURPOSES,
-  CONFIRMATION_REPLACEMENT_STRATEGIES,
-  createHmacRateLimitKeyProvider,
-  createSecureCapabilities,
-  secureTokenGenerator,
-  sha256Digest
+  CONFIRMATION_REPLACEMENT_STRATEGIES
 } from './security.js'
 
 export type {
   AbuseGuard,
-  CapabilityPurpose,
   ConfirmationReplacementStrategy,
-  ConfirmationTokenRecord,
-  ConfirmationTokenStore,
-  HmacRateLimitKeyProviderOptions,
   PublicAbuseAction,
   RateLimiter,
   RateLimitKeyProvider,
-  RateLimitPolicy,
-  SecureCapabilitiesOptions
+  RateLimitPolicy
 } from './security.js'

@@ -1,8 +1,8 @@
 import { Kysely, PostgresDialect } from 'kysely'
 import { Pool } from 'pg'
-import { memoryCapabilities, memoryStorage } from 'better-newsletter/memory'
-import { postgresStorage } from 'better-newsletter/postgres'
-import { resendMailer } from 'better-newsletter/resend'
+import { memoryCapabilities, memoryAdapter } from 'better-newsletter/adapters/memory'
+import { postgresAdapter } from 'better-newsletter/adapters/postgres'
+import { resendMailer } from 'better-newsletter/mailers/resend'
 import { defineBetterNewsletterConfig, newsletterUrl } from 'better-newsletter/nuxt/server'
 import {
   demoClock,
@@ -15,7 +15,7 @@ import {
 type DemoDatabase = Record<string, never>
 
 function createDemoStorage() {
-  if (getDemoStorageMode() === 'memory') return memoryStorage()
+  if (getDemoStorageMode() === 'memory') return memoryAdapter()
 
   const connectionString = process.env.DATABASE_URL?.trim()
   if (!connectionString) {
@@ -27,7 +27,7 @@ function createDemoStorage() {
       pool: new Pool({ connectionString })
     })
   })
-  return postgresStorage(db)
+  return postgresAdapter(db)
 }
 
 // Long-lived adapters live outside the per-request configuration factory.

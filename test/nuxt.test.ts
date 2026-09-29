@@ -5,13 +5,13 @@ import { afterEach, describe, expect, it, vi } from 'vitest'
 import {
   CONTACT_STATUSES,
   NEWSLETTER_EVENT_TYPES,
-  SUBSCRIPTION_STATUSES,
-  createHmacRateLimitKeyProvider
-} from '../src/index.js'
-import { memoryCapabilities, memoryRateLimiter, memoryStorage } from '../src/memory.js'
-import { handleNewsletterRequest } from '../src/nuxt/handler.js'
-import { newsletterUrl, useBetterNewsletter, type BetterNewsletterServerConfig } from '../src/nuxt/server.js'
-import type { BetterNewsletterModuleOptions, NewsletterRoute } from '../src/nuxt.js'
+  SUBSCRIPTION_STATUSES
+} from '../packages/better-newsletter/src/index.js'
+import { createHmacRateLimitKeyProvider } from '../packages/better-newsletter/src/security.js'
+import { memoryCapabilities, memoryRateLimiter, memoryAdapter } from '../packages/better-newsletter/src/adapters/memory.js'
+import { handleNewsletterRequest } from '../packages/better-newsletter/src/nuxt/handler.js'
+import { newsletterUrl, useBetterNewsletter, type BetterNewsletterServerConfig } from '../packages/better-newsletter/src/nuxt/server.js'
+import type { BetterNewsletterModuleOptions, NewsletterRoute } from '../packages/better-newsletter/src/nuxt.js'
 
 const options: Pick<BetterNewsletterModuleOptions, 'defaultAudience' | 'audiences' | 'consent'> = {
   defaultAudience: 'default',
@@ -55,7 +55,7 @@ async function fixture(config: BetterNewsletterServerConfig) {
 }
 
 function configuration() {
-  const storage = memoryStorage()
+  const storage = memoryAdapter()
   const sent: string[] = []
   const config: BetterNewsletterServerConfig = {
     origin: 'https://newsletter.example',

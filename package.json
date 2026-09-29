@@ -1,77 +1,28 @@
 {
-  "name": "better-newsletter",
+  "name": "better-newsletter-workspace",
+  "private": true,
   "version": "0.0.0",
-  "description": "Framework-agnostic newsletter subscription and consent lifecycle infrastructure for TypeScript.",
   "type": "module",
-  "license": "MIT",
-  "repository": {
-    "type": "git",
-    "url": "git+https://github.com/t4sj4n/better-newsletter.git"
-  },
+  "packageManager": "pnpm@10.17.1",
   "engines": {
     "node": ">=20.11"
   },
-  "packageManager": "pnpm@10.17.1",
-  "files": [
-    "dist",
-    "migrations",
-    "README.md",
-    "LICENSE"
-  ],
-  "sideEffects": false,
-  "exports": {
-    ".": {
-      "types": "./dist/index.d.ts",
-      "import": "./dist/index.js"
-    },
-    "./memory": {
-      "types": "./dist/memory.d.ts",
-      "import": "./dist/memory.js"
-    },
-    "./resend": {
-      "types": "./dist/resend.d.ts",
-      "import": "./dist/resend.js"
-    },
-    "./postgres": {
-      "types": "./dist/postgres.d.ts",
-      "import": "./dist/postgres.js"
-    },
-    "./nuxt": {
-      "types": "./dist/nuxt.d.ts",
-      "import": "./dist/nuxt.js"
-    },
-    "./nuxt/server": {
-      "types": "./dist/nuxt/server.d.ts",
-      "import": "./dist/nuxt/server.js"
-    },
-    "./nuxt/client": {
-      "types": "./dist/nuxt/client.d.ts",
-      "import": "./dist/nuxt/client.js"
-    },
-    "./package.json": "./package.json",
-    "./security": {
-      "types": "./dist/security.d.ts",
-      "import": "./dist/security.js"
-    },
-    "./migration": {
-      "types": "./dist/migration.d.ts",
-      "import": "./dist/migration.js"
-    }
-  },
   "scripts": {
-    "build": "tsc -p tsconfig.build.json",
+    "build": "pnpm --filter better-newsletter build && pnpm --filter @better-newsletter/cli build",
     "prepack": "pnpm build",
-    "typecheck": "tsc -p tsconfig.json",
+    "typecheck": "pnpm --filter better-newsletter typecheck && pnpm --filter @better-newsletter/cli typecheck && tsc -p tsconfig.json",
     "lint": "eslint . --max-warnings=0",
     "test": "vitest run",
     "check": "pnpm lint && pnpm typecheck && pnpm build && pnpm migration:snapshot:check && pnpm test",
     "migration:snapshot:check": "node scripts/check-postgres-migration.mjs",
-    "migration:snapshot:write": "pnpm build && node scripts/check-postgres-migration.mjs --write"
+    "migration:snapshot:write": "pnpm --filter better-newsletter build && node scripts/check-postgres-migration.mjs --write"
   },
   "devDependencies": {
+    "@arethetypeswrong/cli": "^0.18.5",
     "@eslint/js": "^9.35.0",
     "@nuxt/kit": "^4.5.2",
     "@types/pg": "^8.23.1",
+    "better-newsletter": "workspace:*",
     "eslint": "^9.35.0",
     "h3": "^1.15.11",
     "kysely": "^0.28.17",
@@ -82,36 +33,5 @@
     "typescript": "^5.9.2",
     "typescript-eslint": "^8.42.0",
     "vitest": "^3.2.4"
-  },
-  "types": "./dist/index.d.ts",
-  "peerDependencies": {
-    "@nuxt/kit": "^4.5.2",
-    "h3": "^1.15.11",
-    "kysely": "^0.28.17",
-    "nuxt": "^4.5.2",
-    "resend": "^6.30.0"
-  },
-  "peerDependenciesMeta": {
-    "@nuxt/kit": {
-      "optional": true
-    },
-    "h3": {
-      "optional": true
-    },
-    "kysely": {
-      "optional": true
-    },
-    "nuxt": {
-      "optional": true
-    },
-    "resend": {
-      "optional": true
-    }
-  },
-  "bin": {
-    "better-newsletter": "./dist/cli.js"
-  },
-  "dependencies": {
-    "jiti": "^2.7.0"
   }
 }

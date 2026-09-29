@@ -50,7 +50,7 @@ export interface NewsletterRateLimitCheck {
   readonly rateLimits?: NewsletterRateLimits
 }
 
-export interface NewsletterConfig {
+export interface BetterNewsletterOptions {
   readonly storage: NewsletterStorage
   readonly mailer: NewsletterMailer
   readonly capabilities: NewsletterCapabilities
@@ -76,7 +76,7 @@ export interface NewsletterConfig {
   readonly transactionMaxAttempts?: number
 }
 
-export interface NewsletterCore extends NewsletterService {
+export interface BetterNewsletter extends NewsletterService {
   readonly storage: NewsletterStorage
   readonly mailer: NewsletterMailer
   readonly capabilities: NewsletterCapabilities

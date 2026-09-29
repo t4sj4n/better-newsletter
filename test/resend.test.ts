@@ -6,13 +6,13 @@ import {
   MAIL_DELIVERY_REASONS,
   NEWSLETTER_EVENT_TYPES,
   SUBSCRIPTION_STATUSES,
-  createNewsletter,
-  createSecureCapabilities,
+  betterNewsletter,
   type ConfirmationMailInput,
   type MailDeliveryReasonCode
-} from '../src/index.js'
-import { memoryStorage } from '../src/memory.js'
-import { resendMailer, type ResendEmailClient } from '../src/resend.js'
+} from '../packages/better-newsletter/src/index.js'
+import { createSecureCapabilities } from '../packages/better-newsletter/src/security.js'
+import { memoryAdapter } from '../packages/better-newsletter/src/adapters/memory.js'
+import { resendMailer, type ResendEmailClient } from '../packages/better-newsletter/src/mailers/resend.js'
 
 const secret = '0123456789abcdef0123456789abcdef'
 const now = new Date('2026-09-28T08:00:00.000Z')
@@ -277,8 +277,8 @@ describe('Resend confirmation mailer', () => {
         })
       let nowMs = now.getTime()
       const background: Promise<void>[] = []
-      const newsletter = createNewsletter({
-        storage: memoryStorage(),
+      const newsletter = betterNewsletter({
+        storage: memoryAdapter(),
         mailer,
         capabilities: createSecureCapabilities({ hmacSecret: secret }),
         clock: { now: () => new Date(nowMs) },
@@ -392,9 +392,9 @@ describe('Resend confirmation mailer', () => {
 
   it('persists only sanitized reasons and marks sends accepted only on provider success', async () => {
     const { send, mailer } = setup()
-    const storage = memoryStorage()
+    const storage = memoryAdapter()
     const background: Promise<void>[] = []
-    const newsletter = createNewsletter({
+    const newsletter = betterNewsletter({
       storage,
       mailer,
       capabilities: createSecureCapabilities({ hmacSecret: secret }),
@@ -429,9 +429,9 @@ describe('Resend confirmation mailer', () => {
   })
 
   it('normalizes an untrusted mailer reason instead of persisting raw provider text', async () => {
-    const storage = memoryStorage()
+    const storage = memoryAdapter()
     const background: Promise<void>[] = []
-    const newsletter = createNewsletter({
+    const newsletter = betterNewsletter({
       storage,
       capabilities: createSecureCapabilities({ hmacSecret: secret }),
       mailer: {

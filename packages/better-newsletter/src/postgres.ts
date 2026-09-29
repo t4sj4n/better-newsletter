@@ -412,7 +412,7 @@ function isPgConflict(error: unknown): boolean {
 }
 
 /** Uses the caller's pool; PostgreSQL SERIALIZABLE aborts competing stale transitions. */
-export function postgresStorage<DB>(db: Kysely<DB>): NewsletterStorage {
+export function postgresAdapter<DB>(db: Kysely<DB>): NewsletterStorage {
   return {
     async transaction<T>(operation: (transaction: NewsletterStorageTransaction) => Promise<T>) {
       try {

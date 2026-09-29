@@ -5,18 +5,20 @@ import {
   NEWSLETTER_EVENT_TYPES,
   StorageConflictError,
   SUBSCRIPTION_STATUSES,
-  createHmacRateLimitKeyProvider,
-  createNewsletter,
-  createSecureCapabilities,
-  sha256Digest,
+  betterNewsletter,
   type Clock,
   type ConfirmationMailInput,
-  type NewsletterConfig,
+  type BetterNewsletterOptions,
   type NewsletterMailer,
   type NewsletterStorage,
   type PublicAbuseAction,
   type RateLimiter
-} from '../src/index.js'
+} from '../packages/better-newsletter/src/index.js'
+import {
+  createHmacRateLimitKeyProvider,
+  createSecureCapabilities,
+  sha256Digest
+} from '../packages/better-newsletter/src/security.js'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
 export interface ConformanceRateLimiter extends RateLimiter {
@@ -147,8 +149,8 @@ export function registerStorageAdapterConformance(
           return deliver(input)
         }
       }
-      const makeService = (overrides: Partial<NewsletterConfig> = {}) =>
-        createNewsletter({
+      const makeService = (overrides: Partial<BetterNewsletterOptions> = {}) =>
+        betterNewsletter({
           storage: harness.createStorage(),
           capabilities: createSecureCapabilities({ hmacSecret: secret }),
           mailer,

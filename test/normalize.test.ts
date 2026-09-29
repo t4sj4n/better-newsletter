@@ -5,7 +5,7 @@ import {
   NewsletterError,
   normalizeAndValidateEmail,
   normalizeEmail
-} from '../src/index.js'
+} from '../packages/better-newsletter/src/index.js'
 
 describe('normalization', () => {
   it('normalizes e-mail consistently', () => {

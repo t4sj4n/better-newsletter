@@ -151,6 +151,7 @@ export async function resolve(specifier, context, nextResolve) {
   const cliTarball = packedTarball(cliManifest)
   const runtime = checkArchive(runtimeTarball, runtimeManifest, [
     '.', './adapters/memory', './adapters/postgres', './mailers', './mailers/resend',
+    './webhooks/resend',
     './security', './storage', './db/migration', './nuxt', './nuxt/server',
     './nuxt/client', './package.json'
   ], ['package/migrations/postgres/001_newsletter.sql'])

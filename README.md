@@ -15,21 +15,25 @@ Instead of rebuilding the same edge cases in every app, you get predictable beha
 
 ## Installation
 
-Until the first npm prerelease, install a packed artifact from a local checkout:
+Until the first npm prerelease, install packed artifacts from a local checkout:
 
 ```bash
-# better-newsletter
+# better-newsletter repository
 pnpm install --frozen-lockfile
-pnpm pack
+mkdir -p artifacts
+pnpm --dir packages/better-newsletter pack --pack-destination ../../artifacts
+pnpm --dir packages/cli pack --pack-destination ../../artifacts
 
 # your application
-pnpm add /path/to/better-newsletter-0.0.0.tgz
+pnpm add /path/to/artifacts/better-newsletter-0.0.0.tgz
+pnpm add -D /path/to/artifacts/better-newsletter-cli-0.0.0.tgz
 ```
 
 After the first prerelease is published:
 
 ```bash
 pnpm add better-newsletter
+pnpm add -D @better-newsletter/cli
 ```
 
 Node.js 20.11 or newer is required.
@@ -41,8 +45,8 @@ Better Newsletter never changes your database schema during normal application s
 For PostgreSQL, expose a migration config from `better-newsletter.config.ts` or `server/better-newsletter.config.ts`:
 
 ```ts
-import { defineBetterNewsletterMigrationConfig } from 'better-newsletter/migration'
-import { postgresMigration } from 'better-newsletter/postgres'
+import { defineBetterNewsletterMigrationConfig } from 'better-newsletter/db/migration'
+import { postgresMigration } from 'better-newsletter/adapters/postgres'
 
 export const migration = defineBetterNewsletterMigrationConfig({
   provider: postgresMigration(db)
@@ -70,12 +74,10 @@ Both commands are safe to run again when the schema is already current. Use `--y
 Create a newsletter instance by providing storage, mail delivery and secure capabilities:
 
 ```ts
-import {
-  createNewsletter,
-  createSecureCapabilities
-} from 'better-newsletter'
+import { betterNewsletter } from 'better-newsletter'
+import { createSecureCapabilities } from 'better-newsletter/security'
 
-const newsletter = createNewsletter({
+const newsletter = betterNewsletter({
   storage,
   mailer,
   capabilities: createSecureCapabilities({
@@ -122,10 +124,10 @@ if (capability) {
 ### PostgreSQL and Resend
 
 ```ts
-import { postgresStorage } from 'better-newsletter/postgres'
-import { resendMailer } from 'better-newsletter/resend'
+import { postgresAdapter } from 'better-newsletter/adapters/postgres'
+import { resendMailer } from 'better-newsletter/mailers/resend'
 
-const storage = postgresStorage(db)
+const storage = postgresAdapter(db)
 
 const mailer = resendMailer({
   apiKey: process.env.RESEND_API_KEY!,

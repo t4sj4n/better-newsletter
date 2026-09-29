@@ -31,7 +31,7 @@ function checkArchive(tarball) {
   }
 
   for (const subpath of [
-    '.', './memory', './security', './postgres', './resend',
+    '.', './memory', './security', './postgres', './resend', './migration',
     './nuxt', './nuxt/server', './nuxt/client'
   ]) {
     if (!packed.exports?.[subpath]) {
@@ -41,11 +41,15 @@ function checkArchive(tarball) {
   if (packed.exports?.['./kysely']) {
     throw new Error('The unpublished ./kysely export must not be shipped')
   }
+  if (packed.bin?.['better-newsletter'] !== './dist/cli.js') {
+    throw new Error('Missing better-newsletter CLI binary')
+  }
 
   const required = new Set([
     'package/package.json',
     'package/README.md',
     'package/LICENSE',
+    'package/dist/cli.js',
     'package/migrations/postgres/001_newsletter.sql'
   ])
   for (const [subpath, entry] of Object.entries(packed.exports)) {
@@ -110,6 +114,7 @@ function checkConsumer(name, tarball, peers, types, runtime) {
   run('pnpm', ['exec', 'tsc', '-p', 'tsconfig.json'], consumer)
   run('node', ['--no-warnings=ExperimentalWarning', '--loader', join(scratch, 'isolate.mjs'), 'smoke.mjs'],
     consumer, { ...process.env, SMOKE_CONSUMER_ROOT: consumer })
+  return consumer
 }
 
 for (const signal of ['SIGINT', 'SIGTERM']) {
@@ -143,36 +148,43 @@ export async function resolve(specifier, context, nextResolve) {
   checkArchive(tarball)
   run('pnpm', ['exec', 'publint', tarball, '--strict'])
 
-  checkConsumer('core', tarball, {}, `
+  const coreConsumer = checkConsumer('core', tarball, {}, `
 import * as core from 'better-newsletter'
 import * as memory from 'better-newsletter/memory'
 import * as security from 'better-newsletter/security'
-const imports: [typeof core, typeof memory, typeof security] = [core, memory, security]
+import * as migration from 'better-newsletter/migration'
+const imports: [typeof core, typeof memory, typeof security, typeof migration] =
+  [core, memory, security, migration]
 void imports
 `, `
-const [core, memory, security] = await Promise.all([
+const [core, memory, security, migration] = await Promise.all([
   import('better-newsletter'),
   import('better-newsletter/memory'),
-  import('better-newsletter/security')
+  import('better-newsletter/security'),
+  import('better-newsletter/migration')
 ])
 if (typeof core.createNewsletter !== 'function' ||
-    !Object.keys(memory).length || !Object.keys(security).length) {
+    !Object.keys(memory).length || !Object.keys(security).length ||
+    typeof migration.getMigrations !== 'function') {
   throw new Error('Core runtime imports are incomplete')
 }
 `)
+  run('pnpm', ['exec', 'better-newsletter', '--help'], coreConsumer)
 
   checkConsumer('postgres', tarball, {
     kysely: manifest.peerDependencies.kysely
   }, `
-import { postgresStorage, postgresRateLimiter } from 'better-newsletter/postgres'
+import { postgresMigration, postgresStorage, postgresRateLimiter } from 'better-newsletter/postgres'
 import type { Kysely } from 'kysely'
 declare const hostDb: Kysely<{}>
 const storage = postgresStorage(hostDb)
 const limiter = postgresRateLimiter(hostDb)
-void [storage, limiter]
+const migration = postgresMigration(hostDb)
+void [storage, limiter, migration]
 `, `
-import { postgresStorage, postgresRateLimiter } from 'better-newsletter/postgres'
-if (typeof postgresStorage !== 'function' || typeof postgresRateLimiter !== 'function') {
+import { postgresMigration, postgresStorage, postgresRateLimiter } from 'better-newsletter/postgres'
+if (typeof postgresStorage !== 'function' || typeof postgresRateLimiter !== 'function' ||
+    typeof postgresMigration !== 'function') {
   throw new Error('PostgreSQL adapter runtime exports are missing')
 }
 if (typeof postgresStorage({})?.transaction !== 'function' ||

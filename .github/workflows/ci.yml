@@ -6,8 +6,7 @@ on:
       - main
   push:
     branches:
-      - 'feat/**'
-      - 'fix/**'
+      - main
 
 permissions:
   contents: read

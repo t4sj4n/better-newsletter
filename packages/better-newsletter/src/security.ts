@@ -115,7 +115,11 @@ export interface ConfirmationTokenStore {
 }
 
 export interface SecureCapabilitiesOptions {
-  readonly hmacSecret: string | Uint8Array
+  readonly hmacSecret?: string | Uint8Array
+  readonly secrets?: readonly {
+    readonly version: number
+    readonly value: string | Uint8Array
+  }[]
 }
 
 export interface HmacRateLimitKeyProviderOptions {
@@ -180,6 +184,12 @@ function base64UrlToString(value: string): string | null {
 }
 
 function secretBytes(secret: string | Uint8Array): Uint8Array {
+  if (typeof secret !== 'string' && !(secret instanceof Uint8Array)) {
+    throw new NewsletterError(
+      NEWSLETTER_ERROR_CODES.INVALID_CONFIGURATION,
+      'HMAC secrets must contain at least 32 bytes.'
+    )
+  }
   const bytes = typeof secret === 'string'
     ? textEncoder.encode(secret)
     : new Uint8Array(secret)
@@ -254,7 +264,10 @@ export async function sha256Digest(value: string): Promise<string> {
   return bytesToHex(new Uint8Array(digest))
 }
 
-function capabilityPayload(target: UnsubscribeCapabilityTarget): string {
+function capabilityPayload(
+  target: UnsubscribeCapabilityTarget,
+  keyVersion: number | undefined
+): string {
   const generation = target.scope === 'SUBSCRIPTION'
     ? target.lifecycleGeneration
     : target.capabilityGeneration
@@ -265,7 +278,8 @@ function capabilityPayload(target: UnsubscribeCapabilityTarget): string {
     )
   }
   return [
-    'bn2',
+    keyVersion == null ? 'bn2' : 'bn3',
+    ...(keyVersion == null ? [] : [String(keyVersion)]),
     target.scope === 'SUBSCRIPTION' ? 'u' : target.scope === 'MANAGE' ? 'm' : 'a',
     stringToBase64Url(target.contactId),
     stringToBase64Url(
@@ -279,19 +293,28 @@ function parseCapability(capability: string): {
   target: UnsubscribeCapabilityTarget
   payload: string
   signature: string
+  keyVersion: number | undefined
 } | null {
   const parts = capability.split('.')
-  if (parts.length !== 6 || parts[0] !== 'bn2') return null
-  const code = parts[1]
+  const versioned = parts[0] === 'bn3' && parts.length === 7
+  if (!versioned && (parts[0] !== 'bn2' || parts.length !== 6)) return null
+  const keyVersionText = versioned ? parts[1]! : undefined
+  const keyVersion = keyVersionText == null ? undefined : Number(keyVersionText)
+  if (keyVersionText != null && (
+    !/^(0|[1-9][0-9]*)$/u.test(keyVersionText)
+    || !Number.isSafeInteger(keyVersion)
+  )) return null
+  const offset = versioned ? 1 : 0
+  const code = parts[1 + offset]
   if (code !== 'u' && code !== 'a' && code !== 'm') return null
 
-  const contactId = base64UrlToString(parts[2]!)
-  const targetId = base64UrlToString(parts[3]!)
-  const generation = Number(parts[4])
+  const contactId = base64UrlToString(parts[2 + offset]!)
+  const targetId = base64UrlToString(parts[3 + offset]!)
+  const generation = Number(parts[4 + offset])
   if (
     contactId == null || contactId.length === 0
     || targetId == null || targetId.length === 0
-    || !/^[1-9][0-9]*$/u.test(parts[4]!)
+    || !/^[1-9][0-9]*$/u.test(parts[4 + offset]!)
     || !Number.isSafeInteger(generation)
     || (code !== 'u' && targetId !== contactId)
   ) {
@@ -302,21 +325,53 @@ function parseCapability(capability: string): {
     target: code === 'u'
       ? { scope: 'SUBSCRIPTION', contactId, subscriptionId: targetId, lifecycleGeneration: generation }
       : { scope: code === 'm' ? 'MANAGE' : 'ALL', contactId, capabilityGeneration: generation },
-    payload: parts.slice(0, 5).join('.'),
-    signature: parts[5]!
+    payload: parts.slice(0, 5 + offset).join('.'),
+    signature: parts[5 + offset]!,
+    keyVersion
   }
 }
 
 export function createSecureCapabilities(
   options: SecureCapabilitiesOptions
 ): NewsletterCapabilities {
-  const hmacKey = importHmacKey(options.hmacSecret, ['sign', 'verify'])
+  const legacyKey = options.hmacSecret == null
+    ? undefined
+    : importHmacKey(options.hmacSecret, ['sign', 'verify'])
+  const versionedKeys = new Map<number, Promise<CryptoKey>>()
+  if (options.secrets !== undefined) {
+    if (!Array.isArray(options.secrets) || options.secrets.length === 0) {
+      throw new NewsletterError(
+        NEWSLETTER_ERROR_CODES.INVALID_CONFIGURATION,
+        'At least one versioned HMAC secret is required.'
+      )
+    }
+    for (const entry of options.secrets) {
+      if (
+        entry == null || !Number.isSafeInteger(entry.version)
+        || entry.version < 0 || versionedKeys.has(entry.version)
+      ) {
+        throw new NewsletterError(
+          NEWSLETTER_ERROR_CODES.INVALID_CONFIGURATION,
+          'HMAC secret versions must be unique non-negative safe integers.'
+        )
+      }
+      versionedKeys.set(entry.version, importHmacKey(entry.value, ['sign', 'verify']))
+    }
+  }
+  if (legacyKey == null && versionedKeys.size === 0) {
+    throw new NewsletterError(
+      NEWSLETTER_ERROR_CODES.INVALID_CONFIGURATION,
+      'An HMAC secret is required.'
+    )
+  }
+  const currentVersion = options.secrets?.[0]?.version
+  const signingKey = currentVersion == null ? legacyKey! : versionedKeys.get(currentVersion)!
 
   const issueSignedCapability = async (
     target: UnsubscribeCapabilityTarget
   ): Promise<string> => {
-    const payload = capabilityPayload(target)
-    return `${payload}.${await signHmac(await hmacKey, payload)}`
+    const payload = capabilityPayload(target, currentVersion)
+    return `${payload}.${await signHmac(await signingKey, payload)}`
   }
 
   return {
@@ -390,8 +445,12 @@ export function createSecureCapabilities(
       const parsed = parseCapability(capability)
       if (parsed == null) return null
 
+      const key = parsed.keyVersion == null
+        ? legacyKey
+        : versionedKeys.get(parsed.keyVersion)
+      if (key == null) return null
       const valid = await verifyHmac(
-        await hmacKey,
+        await key,
         parsed.payload,
         parsed.signature
       )

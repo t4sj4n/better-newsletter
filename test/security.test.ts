@@ -19,7 +19,13 @@ import {
 } from '../packages/better-newsletter/src/adapters/memory.js'
 
 const secret = '0123456789abcdef0123456789abcdef'
+const newerSecret = 'abcdef0123456789abcdef0123456789'
 const now = new Date('2026-09-28T10:00:00.000Z')
+const target = {
+  contactId: 'contact-1',
+  subscriptionId: 'subscription-1',
+  lifecycleGeneration: 1
+}
 
 function secureCapabilities() {
   const confirmationStore = memoryConfirmationTokenStore()
@@ -243,6 +249,102 @@ describe('secure token primitives', () => {
   })
 })
 
+describe('versioned capability secrets', () => {
+  it('keeps singular secret issuance and verification on bn2', async () => {
+    const capabilities = createSecureCapabilities({ hmacSecret: secret })
+    const link = await capabilities.issueUnsubscribeCapability(target)
+    expect(link).toMatch(/^bn2\./u)
+    await expect(capabilities.resolveUnsubscribeCapability(link))
+      .resolves.toEqual({ scope: 'SUBSCRIPTION', ...target })
+  })
+
+  it('signs with the first entry and directly selects older versions for verification', async () => {
+    const old = createSecureCapabilities({ secrets: [{ version: 1, value: secret }] })
+    const oldLink = await old.issueUnsubscribeCapability(target)
+    const rotated = createSecureCapabilities({ secrets: [
+      { version: 9, value: newerSecret }, { version: 1, value: secret }
+    ] })
+    const newLink = await rotated.issueUnsubscribeCapability(target)
+    expect(oldLink).toMatch(/^bn3\.1\./u)
+    expect(newLink).toMatch(/^bn3\.9\./u)
+    expect(newLink).not.toContain(secret)
+    expect(newLink).not.toContain(newerSecret)
+    await expect(rotated.resolveUnsubscribeCapability(oldLink))
+      .resolves.toEqual({ scope: 'SUBSCRIPTION', ...target })
+    await expect(old.resolveUnsubscribeCapability(newLink)).resolves.toBeNull()
+    await expect(createSecureCapabilities({ secrets: [{ version: 9, value: newerSecret }] })
+      .resolveUnsubscribeCapability(oldLink)).resolves.toBeNull()
+
+    const tampered = oldLink.replace('bn3.1.', 'bn3.9.')
+    await expect(rotated.resolveUnsubscribeCapability(tampered)).resolves.toBeNull()
+    await expect(rotated.resolveUnsubscribeCapability(oldLink.replace('bn3.1.', 'bn3.2.')))
+      .resolves.toBeNull()
+
+    const unordered = createSecureCapabilities({ secrets: [
+      { version: 0, value: newerSecret }, { version: 9, value: secret }
+    ] })
+    expect(await unordered.issueUnsubscribeCapability(target)).toMatch(/^bn3\.0\./u)
+  })
+
+  it('uses hmacSecret only for bn2 migration', async () => {
+    const legacy = createSecureCapabilities({ hmacSecret: secret })
+    const legacyLink = await legacy.issueUnsubscribeCapability(target)
+    const migrated = createSecureCapabilities({
+      hmacSecret: secret,
+      secrets: [{ version: 2, value: newerSecret }, { version: 1, value: secret }]
+    })
+    await expect(migrated.resolveUnsubscribeCapability(legacyLink))
+      .resolves.toEqual({ scope: 'SUBSCRIPTION', ...target })
+    const versionedLink = await migrated.issueUnsubscribeCapability(target)
+    expect(versionedLink).toMatch(/^bn3\.2\./u)
+    await expect(legacy.resolveUnsubscribeCapability(versionedLink)).resolves.toBeNull()
+    const noLegacy = createSecureCapabilities({ secrets: [{ version: 1, value: secret }] })
+    await expect(noLegacy.resolveUnsubscribeCapability(legacyLink)).resolves.toBeNull()
+    await expect(migrated.resolveUnsubscribeCapability(
+      versionedLink.replace('bn3.2.', 'bn3.1.')
+    )).resolves.toBeNull()
+  })
+
+  it('keeps purposes, generations, and cross-instance verification intact', async () => {
+    const options = { secrets: [{ version: 2, value: newerSecret }] }
+    const issuer = createSecureCapabilities(options)
+    const verifier = createSecureCapabilities(options)
+    const link = await issuer.issueUnsubscribeCapability(target)
+    await expect(verifier.resolveUnsubscribeCapability(link))
+      .resolves.toEqual({ scope: 'SUBSCRIPTION', ...target })
+    const parts = link.split('.')
+    for (const [index, replacement] of [[2, 'a'], [5, '2']] as const) {
+      const changed = [...parts]
+      changed[index] = replacement
+      await expect(verifier.resolveUnsubscribeCapability(changed.join('.')))
+        .resolves.toBeNull()
+    }
+  })
+
+  const invalidKeyRings = [
+    [],
+    [{ version: 1, value: secret }, { version: 1, value: newerSecret }],
+    ...[-1, 1.5, Number.MAX_SAFE_INTEGER + 1, NaN, Infinity, '1'].map(version =>
+      [{ version, value: secret }]
+    ),
+    [{ version: 1, value: '' }],
+    [{ version: 1, value: 'short' }],
+    [{ version: 1, value: new Uint8Array(31) }]
+  ]
+  it.each(invalidKeyRings.map(entries => [entries] as const))(
+    'rejects invalid key rings synchronously without revealing secrets', entries => {
+      try {
+        createSecureCapabilities({ secrets: entries as never })
+        throw new Error('Expected invalid configuration')
+      } catch (error) {
+        expect(error).toMatchObject({ code: NEWSLETTER_ERROR_CODES.INVALID_CONFIGURATION })
+        expect(String(error)).not.toContain(secret)
+        expect(String(error)).not.toContain(newerSecret)
+      }
+    }
+  )
+})
+
 describe('abuse protection', () => {
   it('consumes each batch rate-limit check once per derived key', async () => {
     const clientConsume = vi.fn(async (input: { key: string }) => ({ allowed: input.key.length > 0 }))
@@ -436,7 +538,9 @@ describe('secure lifecycle integration', () => {
 
   it('binds unsubscribe capabilities to one audience and invalidates old links after resubscribe', async () => {
     const messages: Array<{ token: string; audience: string }> = []
-    const capabilities = createSecureCapabilities({ hmacSecret: secret })
+    const capabilities = createSecureCapabilities({ secrets: [
+      { version: 2, value: newerSecret }, { version: 1, value: secret }
+    ] })
     const newsletter = betterNewsletter({
       storage: memoryAdapter(),
       capabilities,
@@ -480,6 +584,7 @@ describe('secure lifecycle integration', () => {
       email: 'person@example.com',
       audience: 'product-news'
     })
+    expect(productCapability).toMatch(/^bn3\.2\./u)
     await expect(newsletter.unsubscribeAll({ capability: productCapability! }))
       .resolves.toEqual({ unsubscribed: false })
     await newsletter.unsubscribe({ capability: productCapability! })

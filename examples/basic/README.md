@@ -28,4 +28,4 @@ StackBlitz runs `nuxt dev` in an in-browser WebContainer, executing the memory a
 
 ## Version Maintenance
 
-For prereleases, this example specifies an exact pinned dependency on the published release (`"better-newsletter": "0.1.0-alpha.3"`). Once a stable release is reached, the version should either be pinned to the documented version or updated to `latest` deliberately.
+For prereleases, this example specifies an exact pinned dependency on the published release in `package.json`. Once a stable release is reached, the version should either be pinned to the documented version or updated to `latest` deliberately.

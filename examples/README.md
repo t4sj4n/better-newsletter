@@ -17,5 +17,5 @@ The demo runs completely in the browser using the in-memory adapter and fake mai
 
 ## Version Maintenance
 
-- **During prereleases (`alpha`, `beta`, `next`):** Examples must explicitly pin the exact published prerelease version (e.g. `"better-newsletter": "0.1.0-alpha.3"`) to guarantee reproducible builds and avoid breaking when uncoordinated changes land.
+- **During prereleases (`alpha`, `beta`, `next`):** Examples must explicitly pin the published prerelease version in `package.json` to guarantee reproducible builds and avoid breaking when uncoordinated changes land.
 - **After stable release (`1.0.0+`):** The repository maintainers can decide whether the example should remain pinned to the current documented release or use `latest` / `^1.0.0` for automatic currency. For standalone reproducibility on StackBlitz, explicit pinning remains preferred.

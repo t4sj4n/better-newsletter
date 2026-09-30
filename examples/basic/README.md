@@ -18,6 +18,14 @@ Visit `http://localhost:3000`. To run on another origin, set a **fixed** trusted
 2. Refresh the **local development inbox** for that address. The host's fake mailer renders confirmation email text and HTML in memory and sends nothing. Open the confirmation link: GET only renders a landing page. Press **Confirm subscription** to POST the token, then return and refresh the inbox to see `ACTIVE`.
 3. Open the inbox's unsubscribe link. GET is side-effect free; press **Unsubscribe** to POST the capability, then refresh the inbox to see `UNSUBSCRIBED`.
 
-The module owns the lifecycle POST routes. The host owns the fake mailer, fixed origin, development inbox route, and safe GET pages. Storage, signing keys and fake mail are process-local and disappear on restart. `POST /api/example/inbox` can reveal bearer links and subscription status for any address: it returns 404 outside development, and the example's server config also refuses production use. **Do not deploy this example** or expose the inbox in production. Production apps should use durable PostgreSQL/Kysely storage, stable secure capabilities, and a real provider such as Resend instead of the memory/fake adapters; add abuse protection and trusted rate limiting appropriate to your deployment. Never log or publish bearer URLs.
+## StackBlitz
+[![Open in StackBlitz](https://developer.stackblitz.com/img/open_in_stackblitz.svg)](https://stackblitz.com/github/t4sj4n/better-newsletter/tree/main/examples/basic)
 
-Until the first npm prerelease, `package.json` links the runtime with `workspace:*`. Issue #16 will replace that link with the published dependency and add a StackBlitz link; none is available yet.
+You can run this example directly in your browser without local installation:
+[https://stackblitz.com/github/t4sj4n/better-newsletter/tree/main/examples/basic](https://stackblitz.com/github/t4sj4n/better-newsletter/tree/main/examples/basic)
+
+StackBlitz runs `nuxt dev` in an in-browser WebContainer, executing the memory adapter and fake mailer completely offline.
+
+## Version Maintenance
+
+For prereleases, this example specifies an exact pinned dependency on the published release (`"better-newsletter": "0.1.0-alpha.1"`). Once a stable release is reached, the version should either be pinned to the documented version or updated to `latest` deliberately.

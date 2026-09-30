@@ -59,6 +59,16 @@ async function subscribe() {
     busy.value = false
   }
 }
+
+function toRelative(url: string | null): string {
+  if (!url) return ''
+  try {
+    const parsed = new URL(url)
+    return `${parsed.pathname}${parsed.search}${parsed.hash}`
+  } catch {
+    return url
+  }
+}
 </script>
 
 <template>
@@ -84,10 +94,10 @@ async function subscribe() {
         <template v-if="inbox.mail">
           <h3>{{ inbox.mail.subject }}</h3>
           <pre>{{ inbox.mail.text }}</pre>
-          <a :href="inbox.mail.confirmationUrl" target="_blank" rel="noopener noreferrer">Open confirmation page</a>
+          <NuxtLink :to="toRelative(inbox.mail.confirmationUrl)" target="_blank">Open confirmation page</NuxtLink>
         </template>
         <p v-if="inbox.unsubscribeUrl">
-          <a :href="inbox.unsubscribeUrl" target="_blank" rel="noopener noreferrer">Open unsubscribe page</a>
+          <NuxtLink :to="toRelative(inbox.unsubscribeUrl)" target="_blank">Open unsubscribe page</NuxtLink>
         </p>
       </template>
     </section>

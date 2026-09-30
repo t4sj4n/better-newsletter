@@ -120,6 +120,24 @@ describe.skipIf(!databaseUrl)('PostgreSQL migration tooling', () => {
     }
   })
 
+  it('adds occurrence-time indexes to a schema with the old soft-bounce index', async () => {
+    const schema = await createSchema('feedback_index')
+    const { db, pool } = database(schema)
+    try {
+      await pool.query(renderPostgresSchemaSql())
+      await pool.query('DROP INDEX newsletter_events_soft_bounce_occurred_at_idx, newsletter_events_unsuppressed_idx')
+      await pool.query("CREATE INDEX newsletter_events_soft_bounce_idx ON newsletter_events (contact_id, sequence DESC) WHERE event_type = 'PROVIDER_FEEDBACK' AND metadata ->> 'feedbackType' = 'SOFT_BOUNCE'")
+      const config = { provider: postgresMigration(db, { schema }) }
+      const migrations = await getMigrations(config)
+      expect(migrations.sql).toContain('newsletter_events_soft_bounce_occurred_at_idx')
+      expect(migrations.sql).toContain('newsletter_events_unsuppressed_idx')
+      await migrations.runMigrations()
+      expect((await getMigrations(config)).isCurrent).toBe(true)
+    } finally {
+      await db.destroy()
+    }
+  })
+
   it('generates only missing additive changes for a partially initialized schema', async () => {
     const schema = await createSchema('partial')
     const { db, pool } = database(schema)

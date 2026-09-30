@@ -445,21 +445,32 @@ export function createNewsletterWithSubscriptionBatch(config: BetterNewsletterOp
     return transaction.getContactById(lookup.id)
   }
 
-  const suppressionKey = async (email: string): Promise<string> => {
+  const suppressionKeys = async (email: string): Promise<readonly string[]> => {
     if (config.suppressionKeyProvider == null) {
       throw new NewsletterError(
         NEWSLETTER_ERROR_CODES.INVALID_CONFIGURATION,
-        'RETAIN_HASH requires a suppressionKeyProvider.'
+        'Suppression operations require a suppressionKeyProvider.'
       )
     }
-    const key = await config.suppressionKeyProvider(email)
-    if (!/^[a-f0-9]{64}$/u.test(key)) {
+    let derived: string | readonly string[]
+    try {
+      derived = await config.suppressionKeyProvider(email)
+    } catch {
       throw new NewsletterError(
         NEWSLETTER_ERROR_CODES.INVALID_CONFIGURATION,
-        'A suppression key must be a lowercase 64-character keyed digest.'
+        'Suppression key derivation failed.'
       )
     }
-    return key
+    const keys = typeof derived === 'string' ? [derived] : derived
+    if (!Array.isArray(keys) || keys.length === 0
+      || keys.some(key => typeof key !== 'string' || !/^[a-f0-9]{64}$/u.test(key))
+      || new Set(keys).size !== keys.length) {
+      throw new NewsletterError(
+        NEWSLETTER_ERROR_CODES.INVALID_CONFIGURATION,
+        'Suppression keys must be distinct lowercase 64-character keyed digests.'
+      )
+    }
+    return [...keys]
   }
 
   const suppressInTransaction = async (
@@ -700,7 +711,7 @@ export function createNewsletterWithSubscriptionBatch(config: BetterNewsletterOp
     const audienceKey = assertAudienceKey(input.audience ?? defaultAudience)
     const now = clock.now()
     const consent = consentFromPublicInput(input.consent, now)
-    const key = config.suppressionKeyProvider == null ? null : await suppressionKey(email)
+    const keys = config.suppressionKeyProvider == null ? [] : await suppressionKeys(email)
     if (!securityChecked) await enforcePublicSecurity(
       'subscribe',
       email,
@@ -709,7 +720,9 @@ export function createNewsletterWithSubscriptionBatch(config: BetterNewsletterOp
     )
 
     const transition = await runTransaction(async transaction => {
-      if (key != null && await transaction.hasSuppressionKey(key)) return null
+      for (const key of keys) {
+        if (await transaction.hasSuppressionKey(key)) return null
+      }
       let contact = await transaction.getContactByEmail(email)
       let contactCreated = false
 
@@ -866,6 +879,8 @@ export function createNewsletterWithSubscriptionBatch(config: BetterNewsletterOp
             ...(providerEventId === undefined ? {} : { providerEventId })
           }
         })
+        const unsuppressedAt = await transaction.latestUnsuppressedAt(contact.id)
+        const stale = unsuppressedAt != null && input.occurredAt <= unsuppressedAt
         let suppress = (
           input.type === DELIVERY_FEEDBACK_TYPES.COMPLAINT
             && feedbackPolicy.suppressOnComplaint !== false
@@ -876,10 +891,12 @@ export function createNewsletterWithSubscriptionBatch(config: BetterNewsletterOp
           input.type === DELIVERY_FEEDBACK_TYPES.PROVIDER_SUPPRESSION
             && feedbackPolicy.suppressOnProviderSuppression !== false
         )
-        if (input.type === DELIVERY_FEEDBACK_TYPES.SOFT_BOUNCE
+        if (stale) suppress = false
+        if (!stale && input.type === DELIVERY_FEEDBACK_TYPES.SOFT_BOUNCE
           && feedbackPolicy.softBounceThreshold !== undefined) {
-          const count = await transaction.countSoftBouncesSinceUnsuppressed(
+          const count = await transaction.countSoftBouncesAfter(
             contact.id,
+            unsuppressedAt,
             feedbackPolicy.softBounceThreshold
           )
           suppress = count >= feedbackPolicy.softBounceThreshold
@@ -1257,56 +1274,90 @@ export function createNewsletterWithSubscriptionBatch(config: BetterNewsletterOp
           'RETAIN_HASH requires a suppressionKeyProvider.'
         )
       }
-      return runTransaction(async transaction => {
-        const contact = await resolveContact(transaction, input.contact)
-        if (contact == null) return { erased: false }
-        if (/^erased-[0-9a-f-]+@erased\.invalid$/u.test(contact.email)) {
-          if (input.strategy === 'ANONYMIZE') return { erased: false }
-          if (input.suppression === 'RETAIN_HASH') {
-            throw new NewsletterError(
-              NEWSLETTER_ERROR_CODES.INVALID_CONFIGURATION,
-              'The original e-mail is unavailable for a suppression hash.'
-            )
-          }
-          await transaction.deleteContact(contact.id)
-          return { erased: true }
-        }
+      for (let attempt = 1; attempt <= transactionMaxAttempts; attempt += 1) {
+        let expectedEmail: string | null = null
+        let retainedKeys: readonly string[] = []
         if (input.suppression === 'RETAIN_HASH') {
-          await transaction.retainSuppressionKey(await suppressionKey(contact.email))
+          if ('email' in input.contact) {
+            expectedEmail = normalizeAndValidateEmail(input.contact.email)
+          } else {
+            const contactId = input.contact.id
+            const initial = await runTransaction(transaction => transaction.getContactById(contactId))
+            if (initial == null) return { erased: false }
+            expectedEmail = initial.email
+          }
+          if (!/^erased-[0-9a-f-]+@erased\.invalid$/u.test(expectedEmail)) {
+            retainedKeys = await suppressionKeys(expectedEmail)
+          }
         }
-        await transaction.deleteContactTokens(contact.id)
-        if (input.strategy === 'DELETE') {
-          await transaction.deleteContact(contact.id)
-          return { erased: true }
-        }
+        const result = await runTransaction(async transaction => {
+          const contact = await resolveContact(transaction, input.contact)
+          if (contact == null) return { erased: false, retry: false }
+          if (expectedEmail != null && contact.email !== expectedEmail) {
+            return { erased: false, retry: true }
+          }
+          if (/^erased-[0-9a-f-]+@erased\.invalid$/u.test(contact.email)) {
+            if (input.strategy === 'ANONYMIZE') return { erased: false, retry: false }
+            if (input.suppression === 'RETAIN_HASH') {
+              throw new NewsletterError(
+                NEWSLETTER_ERROR_CODES.INVALID_CONFIGURATION,
+                'The original e-mail is unavailable for a suppression hash.'
+              )
+            }
+            await transaction.deleteContact(contact.id)
+            return { erased: true, retry: false }
+          }
+          if (input.suppression === 'RETAIN_HASH') {
+            await transaction.retainSuppressionKey(retainedKeys[0]!)
+          }
+          await transaction.deleteContactTokens(contact.id)
+          if (input.strategy === 'DELETE') {
+            await transaction.deleteContact(contact.id)
+            return { erased: true, retry: false }
+          }
 
-        const now = clock.now()
-        const subscriptions = await transaction.listSubscriptions(contact.id)
-        await transaction.deleteProviderEvents(contact.id)
-        await transaction.minimizeEvents(contact.id)
-        for (const subscription of subscriptions) {
-          await transaction.updateSubscription(subscription.id, {
-            audienceKey: `erased-${crypto.randomUUID()}`,
-            lifecycleGeneration: nextGeneration(subscription.lifecycleGeneration),
-            status: SUBSCRIPTION_STATUSES.UNSUBSCRIBED,
-            consent: { version: '[erased]', consentedAt: subscription.consent.consentedAt },
-            confirmationDelivery: null,
-            confirmationSentAt: null,
-            unsubscribedAt: now,
+          const now = clock.now()
+          const subscriptions = await transaction.listSubscriptions(contact.id)
+          await transaction.deleteProviderEvents(contact.id)
+          await transaction.minimizeEvents(contact.id)
+          for (const subscription of subscriptions) {
+            await transaction.updateSubscription(subscription.id, {
+              audienceKey: `erased-${crypto.randomUUID()}`,
+              lifecycleGeneration: nextGeneration(subscription.lifecycleGeneration),
+              status: SUBSCRIPTION_STATUSES.UNSUBSCRIBED,
+              consent: { version: '[erased]', consentedAt: subscription.consent.consentedAt },
+              confirmationDelivery: null,
+              confirmationSentAt: null,
+              unsubscribedAt: now,
+              updatedAt: now
+            })
+          }
+          await transaction.updateContact(contact.id, {
+            email: `erased-${crypto.randomUUID()}@erased.invalid`,
+            capabilityGeneration: nextGeneration(contact.capabilityGeneration),
+            subject: null,
+            metadata: {},
+            status: CONTACT_STATUSES.SUPPRESSED,
+            suppressedAt: now,
+            suppressionReason: null,
             updatedAt: now
           })
-        }
-        await transaction.updateContact(contact.id, {
-          email: `erased-${crypto.randomUUID()}@erased.invalid`,
-          capabilityGeneration: nextGeneration(contact.capabilityGeneration),
-          subject: null,
-          metadata: {},
-          status: CONTACT_STATUSES.SUPPRESSED,
-          suppressedAt: now,
-          suppressionReason: null,
-          updatedAt: now
+          return { erased: true, retry: false }
         })
-        return { erased: true }
+        if (!result.retry) return { erased: result.erased }
+      }
+      throw new StorageConflictError('Contact changed during erasure.')
+    },
+
+    async removeRetainedSuppression(input) {
+      const email = normalizeAndValidateEmail(input.email)
+      const keys = await suppressionKeys(email)
+      return runTransaction(async transaction => {
+        let removed = false
+        for (const key of keys) {
+          removed = await transaction.removeSuppressionKey(key) || removed
+        }
+        return { removed }
       })
     },
 

@@ -115,8 +115,7 @@ const capabilities = createSecureCapabilities({
   secrets: [
     { version: 2, value: process.env.NEWSLETTER_LINK_SECRET_V2! },
     { version: 1, value: process.env.NEWSLETTER_LINK_SECRET_V1! }
-  ],
-  hmacSecret: process.env.NEWSLETTER_LINK_SECRET_V1!
+  ]
 })
 
 const newsletter = betterNewsletter({
@@ -143,7 +142,7 @@ Security properties:
 
 Use at least 32 bytes for every HMAC secret. `createSecureCapabilities()` and `createHmacRateLimitKeyProvider()` throw `INVALID_CONFIGURATION` synchronously for missing or weak secrets. For new deployments, configure `secrets` alone. Its first entry signs new `bn3` links; remaining entries verify previously issued `bn3` links. Versions are unique non-negative integer identifiers, not ordering guarantees, and may have gaps. The version is signed into each link and selects its verification key directly. Better Newsletter does not persist signing secrets; keep them stable and available to every service instance.
 
-For deployments with existing `bn2` links, keep the old singular `hmacSecret` alongside `secrets` during migration. It verifies `bn2` links only; new links use the first versioned secret. Coordinate the first `bn3` rollout so all serving instances can verify `bn3` before any instance issues it. For later rotations, first make the new version available for verification on every instance while the previous version remains first; then make the new version first on every instance. Retain previous versions and `hmacSecret` throughout the transition. After the lifetime of all `bn2` links, remove `hmacSecret`; after the lifetime of links signed by an older version, remove that version. Removing either key intentionally retires its links. Lifecycle-generation changes revoke links independently of key rotation, even when their signing key remains configured. A deployment using only `hmacSecret` continues to issue and verify `bn2` links.
+For deployments with existing `bn2` links, use a staged rollout. First configure both `hmacSecret` and `secrets` with `issueLegacyCapabilities: true`: upgraded instances keep issuing `bn2` while verifying both formats, so old `bn2`-only instances can still serve. Once every serving instance can verify `bn3`, remove `issueLegacyCapabilities` to issue `bn3`. Keep `hmacSecret` to verify existing `bn2` links. For later `bn3` rotations, first add the new version after the current entry everywhere; then make it first everywhere. Signed unsubscribe and manage-preferences links have no expiry field. Removing `hmacSecret` or an older version deliberately invalidates otherwise valid links signed with it; retain keys until that compatibility decision is acceptable. Lifecycle-generation changes revoke links independently of key rotation. New deployments should configure `secrets` alone.
 
 ### Lifecycle generations and adapter requirements
 
@@ -298,7 +297,7 @@ const newsletter = betterNewsletter({
   storage,
   mailer,
   capabilities: createSecureCapabilities({
-    hmacSecret: process.env.NEWSLETTER_LINK_SECRET!
+    secrets: [{ version: 1, value: process.env.NEWSLETTER_LINK_SECRET! }]
   })
 })
 ```
@@ -309,7 +308,7 @@ Resend receives a SHA-256 idempotency key derived from the stable work ID, *indi
 
 ### Delivery feedback and Resend webhooks
 
-The trusted `processFeedback()` service method accepts normalized provider feedback. Complaints, permanent bounces, and provider suppression suppress the Contact by default. Transient bounces are recorded only; set `feedbackPolicy.softBounceThreshold` to suppress after a chosen number of distinct soft bounces. `feedbackPolicy.suppressOnComplaint`, `suppressOnHardBounce`, and `suppressOnProviderSuppression` can disable the respective default action. A delivered event never unsuppresses a Contact. Subscription consent and status remain unchanged. Provider event IDs are claimed in the same storage transaction as the feedback and suppression events; custom storage adapters must implement `claimProviderEvent()` atomically. They must also implement `countSoftBouncesSinceUnsuppressed(contactId, limit)` as a bounded count of appended soft-bounce feedback after the latest `UNSUPPRESSED` event, including the current feedback event and returning no more than `limit`.
+The trusted `processFeedback()` service method accepts normalized provider feedback. Complaints, permanent bounces, and provider suppression suppress the Contact by default. Transient bounces are recorded only; set `feedbackPolicy.softBounceThreshold` to suppress after a chosen number of distinct soft bounces. `feedbackPolicy.suppressOnComplaint`, `suppressOnHardBounce`, and `suppressOnProviderSuppression` can disable the respective default action. A delivered event never unsuppresses a Contact. Subscription consent and status remain unchanged. Provider event IDs are claimed in the same storage transaction as the feedback and suppression events; custom storage adapters must implement `claimProviderEvent()` atomically. Feedback at or before the latest trusted `UNSUPPRESSED` timestamp remains in the audit trail but cannot suppress or count toward the new soft-bounce window. Audit events record processing time in `occurredAt` and provider time in `metadata.feedbackOccurredAt`. Adapters must implement `latestUnsuppressedAt()` and `countSoftBouncesAfter()` without loading full history into the core; PostgreSQL indexes both lookups.
 
 Install `resend` alongside the optional webhook subpath, configure a Resend webhook signing secret, and register `email.bounced`, `email.complained`, `email.suppressed`, `email.delivered`, and optionally `suppression.added` with Resend. Pass the **raw** body and Svix headers to the handler:
 
@@ -442,17 +441,22 @@ await newsletter.eraseContactData({
 The host chooses suppression retention per erasure call. Omit `suppression` (or use `NONE`) for full erasure. `RETAIN_HASH` stores only a keyed HMAC digest in `newsletter_suppression_keys`, with no Contact link, and future public signups for that e-mail are accepted without creating a Contact. Configure a stable, private key provider first:
 
 ```ts
-import { createHmacSuppressionKeyProvider } from 'better-newsletter'
+import { createHmacSuppressionKeyProvider } from 'better-newsletter/security'
 
 const newsletter = betterNewsletter({
   // storage, mailer, capabilities, ...
   suppressionKeyProvider: createHmacSuppressionKeyProvider({
-    secret: process.env.NEWSLETTER_SUPPRESSION_SECRET!
+    secrets: [
+      { version: 2, value: process.env.NEWSLETTER_SUPPRESSION_SECRET_V2! },
+      { version: 1, value: process.env.NEWSLETTER_SUPPRESSION_SECRET_V1! }
+    ]
   })
 })
 ```
 
-The secret must contain at least 32 bytes and stay stable across instances and restarts. Keep it outside the database. Changing it makes retained suppression keys ineffective. A plain SHA-256 e-mail hash is vulnerable to address guessing; use a keyed digest. Hosts can instead retain no local suppression key and use their own external suppression store. The library makes no legal retention decision. The host decides whether evidence must remain, whether suppression is needed, and how any external store or backup is handled. Anonymization retains internal IDs and timestamps, so use opaque generated IDs and choose `DELETE` when those fields could identify a person.
+Each secret must contain at least 32 bytes and be shared across instances. The first entry derives new retained hashes; older entries allow signup checks and trusted removal to find earlier hashes. An existing singular `secret` configuration remains supported. A v1-only retained hash cannot be recomputed with v2 after erasure because the address is no longer stored. Keep v1 configured while those entries must remain effective, or migrate them using an independent address source before retiring it. Removing v1 makes v1-only suppression ineffective. Keep secrets outside the database. A plain SHA-256 e-mail hash is vulnerable to address guessing; use a keyed digest. Hosts can instead retain no local suppression key and use their own external suppression store. The library makes no legal retention decision. The host decides whether evidence must remain, whether suppression is needed, and how any external store or backup is handled. Anonymization retains internal IDs and timestamps, so use opaque generated IDs and choose `DELETE` when those fields could identify a person.
+
+`unsuppressContact()` re-enables an existing Contact. To reverse post-erasure `RETAIN_HASH`, call the trusted `removeRetainedSuppression({ email })` service method. It normalizes the address, removes every matching digest from the configured key ring in one transaction, returns `{ removed: boolean }`, and does not recreate the Contact. Do not expose this trusted method as a public-by-email endpoint.
 
 ## Trusted import
 
@@ -715,7 +719,7 @@ abuseGuard: {
 
 The handler passes this transient context to the core `abuseGuard` and `rateLimitKeyProvider`; it does not itself persist raw IPs or CAPTCHA tokens. Never trust a client-supplied IP or session claim in `body`. If you add a trusted network identity from `event`, hash/HMAC it before writing any rate-limit key; do not include raw IPs or CAPTCHA tokens in contact metadata, events or logs.
 
-For production, replace memory adapters with `postgresAdapter(db)` and `postgresRateLimiter(db)` from `better-newsletter/adapters/postgres`, configure `postgresMigration(db)`, and apply the schema with `better-newsletter migrate` or your host-managed `generate` workflow, `createSecureCapabilities({ hmacSecret })`, `createHmacRateLimitKeyProvider({ secret })`, and `resendMailer({ apiKey, from, renderConfirmation })` from `better-newsletter/mailers/resend`. Configure a verified sender, durable PostgreSQL connection, stable server-side signing/rate-limit secrets, a trusted origin for URLs, and runtime-safe background delivery (`waitUntil`, an awaited fallback or a durable worker). See the adapter sections above for integration details; the example deliberately uses none of these external services.
+For production, replace memory adapters with `postgresAdapter(db)` and `postgresRateLimiter(db)` from `better-newsletter/adapters/postgres`, configure `postgresMigration(db)`, and apply the schema with `better-newsletter migrate` or your host-managed `generate` workflow, `createSecureCapabilities({ secrets: [{ version: 1, value: signingSecret }] })`, `createHmacRateLimitKeyProvider({ secret })`, and `resendMailer({ apiKey, from, renderConfirmation })` from `better-newsletter/mailers/resend`. Configure a verified sender, durable PostgreSQL connection, stable server-side signing/rate-limit secrets, a trusted origin for URLs, and runtime-safe background delivery (`waitUntil`, an awaited fallback or a durable worker). See the adapter sections above for integration details; the example deliberately uses none of these external services.
 
 ### Consumer example and maintainer playground
 

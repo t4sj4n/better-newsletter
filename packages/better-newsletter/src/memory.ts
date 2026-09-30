@@ -108,15 +108,24 @@ export class MemoryNewsletterStorage implements NewsletterStorage {
         this.state.providerEvents.set(key, contactId)
         return true
       },
-      countSoftBouncesSinceUnsuppressed: async (contactId, limit) => {
-        let count = 0
+      latestUnsuppressedAt: async contactId => {
         for (let index = this.state.events.length - 1; index >= 0; index -= 1) {
           const event = this.state.events[index]!
+          if (event.contactId === contactId && event.type === NEWSLETTER_EVENT_TYPES.UNSUPPRESSED) {
+            return clone(event.occurredAt)
+          }
+        }
+        return null
+      },
+      countSoftBouncesAfter: async (contactId, occurredAfter, limit) => {
+        let count = 0
+        for (const event of this.state.events) {
           if (event.contactId !== contactId) continue
-          if (event.type === NEWSLETTER_EVENT_TYPES.UNSUPPRESSED) break
           if (
             event.type === NEWSLETTER_EVENT_TYPES.PROVIDER_FEEDBACK
             && event.metadata.feedbackType === DELIVERY_FEEDBACK_TYPES.SOFT_BOUNCE
+            && typeof event.metadata.feedbackOccurredAt === 'string'
+            && (occurredAfter == null || event.metadata.feedbackOccurredAt > occurredAfter.toISOString())
           ) {
             count += 1
             if (count >= limit) break
@@ -171,6 +180,7 @@ export class MemoryNewsletterStorage implements NewsletterStorage {
       },
       hasSuppressionKey: async key => this.state.suppressionKeys.has(key),
       retainSuppressionKey: async key => { this.state.suppressionKeys.add(key) },
+      removeSuppressionKey: async key => this.state.suppressionKeys.delete(key),
       confirmationTokens: new MemoryConfirmationTokenStore(
         this.state.confirmationTokens
       )

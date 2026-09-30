@@ -406,18 +406,27 @@ function transactionAdapter<DB>(trx: Transaction<DB>): NewsletterStorageTransact
       `.execute(trx)
       return result.rows.length > 0
     },
-    async countSoftBouncesSinceUnsuppressed(contactId, limit) {
+    async latestUnsuppressedAt(contactId) {
+      const result = await sql<{ occurred_at: Date }>`
+        SELECT occurred_at FROM newsletter_events
+        WHERE contact_id = ${contactId} AND event_type = 'UNSUPPRESSED'
+        ORDER BY sequence DESC LIMIT 1
+      `.execute(trx)
+      return result.rows[0]?.occurred_at ?? null
+    },
+    async countSoftBouncesAfter(contactId, occurredAfter, limit) {
+      const after = occurredAfter == null
+        ? sql``
+        : sql`AND metadata ->> 'feedbackOccurredAt' > ${occurredAfter.toISOString()}`
       const result = await sql<{ count: string | number }>`
         SELECT count(*) AS count FROM (
           SELECT 1 FROM newsletter_events
           WHERE contact_id = ${contactId}
             AND event_type = 'PROVIDER_FEEDBACK'
             AND metadata ->> 'feedbackType' = 'SOFT_BOUNCE'
-            AND sequence > COALESCE((
-              SELECT max(sequence) FROM newsletter_events
-              WHERE contact_id = ${contactId} AND event_type = 'UNSUPPRESSED'
-            ), 0)
-          ORDER BY sequence DESC
+            AND metadata ->> 'feedbackOccurredAt' IS NOT NULL
+            ${after}
+          ORDER BY (metadata ->> 'feedbackOccurredAt') DESC
           LIMIT ${limit}
         ) AS bounded_feedback
       `.execute(trx)
@@ -466,6 +475,11 @@ function transactionAdapter<DB>(trx: Transaction<DB>): NewsletterStorageTransact
     async retainSuppressionKey(key) {
       await sql`INSERT INTO newsletter_suppression_keys (key_hash)
         VALUES (${key}) ON CONFLICT DO NOTHING`.execute(trx)
+    },
+    async removeSuppressionKey(key) {
+      const result = await sql`DELETE FROM newsletter_suppression_keys
+        WHERE key_hash = ${key}`.execute(trx)
+      return Number(result.numAffectedRows) > 0
     },
     confirmationTokens: new PostgresConfirmationTokenStore(trx)
   }

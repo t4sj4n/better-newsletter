@@ -86,8 +86,10 @@ export interface NewsletterStorageTransaction {
   appendEvent(event: NewsletterEvent): Promise<void>
   /** Atomically claims a provider event ID; false means it was processed before. */
   claimProviderEvent(provider: string, eventId: string, contactId: string): Promise<boolean>
-  /** Includes the current appended event; returns at most limit and stops at the latest UNSUPPRESSED event. */
-  countSoftBouncesSinceUnsuppressed(contactId: string, limit: number): Promise<number>
+  /** Latest deliberate unsuppression in append order. */
+  latestUnsuppressedAt(contactId: string): Promise<Date | null>
+  /** Counts provider occurrence times strictly after the boundary, up to limit. */
+  countSoftBouncesAfter(contactId: string, occurredAfter: Date | null, limit: number): Promise<number>
   /** Returns events in append order, including events sharing a timestamp. */
   listEvents(contactId: string): Promise<readonly NewsletterEvent[]>
 
@@ -99,6 +101,7 @@ export interface NewsletterStorageTransaction {
   deleteContact(contactId: string): Promise<void>
   hasSuppressionKey(key: string): Promise<boolean>
   retainSuppressionKey(key: string): Promise<void>
+  removeSuppressionKey(key: string): Promise<boolean>
 
   /**
    * Confirmation-token records bound to this transaction. Token replacement,

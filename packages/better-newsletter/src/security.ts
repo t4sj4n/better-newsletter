@@ -114,12 +114,21 @@ export interface ConfirmationTokenStore {
   }): Promise<number>
 }
 
-export interface SecureCapabilitiesOptions {
+type VersionedSecret = {
+  readonly version: number
+  readonly value: string | Uint8Array
+}
+
+export type SecureCapabilitiesOptions = {
+  readonly hmacSecret: string | Uint8Array
+  readonly secrets?: readonly VersionedSecret[]
+  /** Only for the first rolling bn2-to-bn3 deployment. */
+  readonly issueLegacyCapabilities?: boolean
+} | {
   readonly hmacSecret?: string | Uint8Array
-  readonly secrets?: readonly {
-    readonly version: number
-    readonly value: string | Uint8Array
-  }[]
+  readonly secrets: readonly VersionedSecret[]
+  /** Requires hmacSecret as well as secrets. */
+  readonly issueLegacyCapabilities?: boolean
 }
 
 export interface HmacRateLimitKeyProviderOptions {
@@ -334,6 +343,14 @@ function parseCapability(capability: string): {
 export function createSecureCapabilities(
   options: SecureCapabilitiesOptions
 ): NewsletterCapabilities {
+  if (options.issueLegacyCapabilities === true && (
+    options.hmacSecret == null || options.secrets == null
+  )) {
+    throw new NewsletterError(
+      NEWSLETTER_ERROR_CODES.INVALID_CONFIGURATION,
+      'Legacy issuance requires both hmacSecret and versioned secrets.'
+    )
+  }
   const legacyKey = options.hmacSecret == null
     ? undefined
     : importHmacKey(options.hmacSecret, ['sign', 'verify'])
@@ -364,7 +381,9 @@ export function createSecureCapabilities(
       'An HMAC secret is required.'
     )
   }
-  const currentVersion = options.secrets?.[0]?.version
+  const currentVersion = options.issueLegacyCapabilities === true
+    ? undefined
+    : options.secrets?.[0]?.version
   const signingKey = currentVersion == null ? legacyKey! : versionedKeys.get(currentVersion)!
 
   const issueSignedCapability = async (
@@ -484,18 +503,40 @@ export function createHmacRateLimitKeyProvider(
   }
 }
 
-/** Creates a stable, non-reversible suppression key from a normalized e-mail. */
+/** Creates stable, non-reversible suppression keys from a normalized e-mail. */
 export function createHmacSuppressionKeyProvider(options: {
   readonly secret: string | Uint8Array
-}): (normalizedEmail: string) => Promise<string> {
-  const hmacKey = importHmacKey(options.secret, ['sign'])
-  return async normalizedEmail => {
-    const signature = await crypto.subtle.sign(
-      'HMAC', await hmacKey,
-      textEncoder.encode(`suppression-v1\u0000${normalizedEmail}`)
-    )
-    return bytesToHex(new Uint8Array(signature))
+}): (normalizedEmail: string) => Promise<string>
+export function createHmacSuppressionKeyProvider(options: {
+  readonly secrets: readonly VersionedSecret[]
+}): (normalizedEmail: string) => Promise<readonly string[]>
+export function createHmacSuppressionKeyProvider(options: {
+  readonly secret?: string | Uint8Array
+  readonly secrets?: readonly VersionedSecret[]
+}): (normalizedEmail: string) => Promise<string | readonly string[]> {
+  if (options.secrets === undefined) {
+    if (options.secret == null) {
+      throw new NewsletterError(NEWSLETTER_ERROR_CODES.INVALID_CONFIGURATION, 'A suppression HMAC secret is required.')
+    }
+    const key = importHmacKey(options.secret, ['sign'])
+    return async email => bytesToHex(new Uint8Array(await crypto.subtle.sign(
+      'HMAC', await key, textEncoder.encode(`suppression-v1\u0000${email}`)
+    )))
   }
+  if (options.secret !== undefined || !Array.isArray(options.secrets) || options.secrets.length === 0) {
+    throw new NewsletterError(NEWSLETTER_ERROR_CODES.INVALID_CONFIGURATION, 'Configure a non-empty suppression secret ring.')
+  }
+  const versions = new Set<number>()
+  const keys = options.secrets.map(entry => {
+    if (entry == null || !Number.isSafeInteger(entry.version) || entry.version < 0 || versions.has(entry.version)) {
+      throw new NewsletterError(NEWSLETTER_ERROR_CODES.INVALID_CONFIGURATION, 'Suppression secret versions must be unique non-negative safe integers.')
+    }
+    versions.add(entry.version)
+    return importHmacKey(entry.value, ['sign'])
+  })
+  return async email => Promise.all(keys.map(async key => bytesToHex(new Uint8Array(await crypto.subtle.sign(
+    'HMAC', await key, textEncoder.encode(`suppression-v1\u0000${email}`)
+  )))))
 }
 
 export type {

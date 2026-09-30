@@ -91,7 +91,7 @@ const newsletter = betterNewsletter({
 })
 ```
 
-The host application owns `storage` and `mailer`. Built-in PostgreSQL and Resend integrations are available, or you can implement the provider-neutral contracts yourself. Keep every signing secret stable and use at least 32 bytes. The first versioned secret signs new links; retain previous versions to verify older links. For existing `bn2` links, also configure the old `hmacSecret` until those links may be retired. See the [rotation guide](packages/better-newsletter/README.md#production-security).
+The host application owns `storage` and `mailer`. Built-in PostgreSQL and Resend integrations are available, or you can implement the provider-neutral contracts yourself. Keep every signing secret stable and use at least 32 bytes. The first versioned secret signs new links; retain previous versions to verify older links. For an existing `bn2` deployment, use the staged [rotation guide](packages/better-newsletter/README.md#production-security). Signed unsubscribe and manage-preferences links have no fixed expiry, so retiring an old signing key deliberately invalidates remaining links signed with it.
 
 Subscribe with explicit consent:
 

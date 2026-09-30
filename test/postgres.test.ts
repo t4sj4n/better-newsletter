@@ -191,23 +191,35 @@ describe.skipIf(!databaseUrl)('PostgreSQL integration', () => {
           email: 'feedback@example.com', status: CONTACT_STATUSES.ENABLED,
           subject: null, createdAt: now, updatedAt: now
         })
-        for (const [index, type, feedbackType] of [
-          [1, NEWSLETTER_EVENT_TYPES.PROVIDER_FEEDBACK, 'SOFT_BOUNCE'],
-          [2, NEWSLETTER_EVENT_TYPES.PROVIDER_FEEDBACK, 'DELIVERED'],
-          [3, NEWSLETTER_EVENT_TYPES.UNSUPPRESSED, null],
-          [4, NEWSLETTER_EVENT_TYPES.PROVIDER_FEEDBACK, 'SOFT_BOUNCE'],
-          [5, NEWSLETTER_EVENT_TYPES.PROVIDER_FEEDBACK, 'SOFT_BOUNCE']
+        for (const [index, type, feedbackType, providerTime] of [
+          [1, NEWSLETTER_EVENT_TYPES.PROVIDER_FEEDBACK, 'SOFT_BOUNCE', new Date(now.getTime() - 60_000)],
+          [2, NEWSLETTER_EVENT_TYPES.PROVIDER_FEEDBACK, 'DELIVERED', now],
+          [3, NEWSLETTER_EVENT_TYPES.UNSUPPRESSED, null, now],
+          [4, NEWSLETTER_EVENT_TYPES.PROVIDER_FEEDBACK, 'SOFT_BOUNCE', new Date(now.getTime() + 60_000)],
+          [5, NEWSLETTER_EVENT_TYPES.PROVIDER_FEEDBACK, 'SOFT_BOUNCE', new Date(now.getTime() + 120_000)],
+          [6, NEWSLETTER_EVENT_TYPES.PROVIDER_FEEDBACK, 'SOFT_BOUNCE', new Date(now.getTime() - 60_000)]
         ] as const) {
           await transaction.appendEvent({
             id: `feedback-${index}`, contactId: 'feedback-contact',
             type, occurredAt: now,
-            metadata: feedbackType == null ? {} : { feedbackType }
+            metadata: feedbackType == null ? {} : { feedbackType, feedbackOccurredAt: providerTime.toISOString() }
           })
         }
-        expect(await transaction.countSoftBouncesSinceUnsuppressed('feedback-contact', 1)).toBe(1)
-        expect(await transaction.countSoftBouncesSinceUnsuppressed('feedback-contact', 2)).toBe(2)
-        expect(await transaction.listEvents('feedback-contact')).toHaveLength(5)
+        expect(await transaction.latestUnsuppressedAt('feedback-contact')).toEqual(now)
+        expect(await transaction.countSoftBouncesAfter('feedback-contact', now, 1)).toBe(1)
+        expect(await transaction.countSoftBouncesAfter('feedback-contact', now, 2)).toBe(2)
+        expect(await transaction.countSoftBouncesAfter('feedback-contact', null, 4)).toBe(4)
+        expect(await transaction.listEvents('feedback-contact')).toHaveLength(6)
       })
+    })
+
+    it('removes retained suppression keys transactionally and idempotently', async () => {
+      const storage = postgresAdapter(db)
+      const key = 'a'.repeat(64)
+      await storage.transaction(transaction => transaction.retainSuppressionKey(key))
+      expect(await storage.transaction(transaction => transaction.removeSuppressionKey(key))).toBe(true)
+      expect(await storage.transaction(transaction => transaction.removeSuppressionKey(key))).toBe(false)
+      expect(await storage.transaction(transaction => transaction.hasSuppressionKey(key))).toBe(false)
     })
 
     it('applies native normalization and uniqueness constraints from the migration', async () => {

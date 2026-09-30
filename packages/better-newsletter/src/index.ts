@@ -91,7 +91,4 @@ export type {
   UnsuppressContactInput
 } from './operations.js'
 
-export {
-  CONFIRMATION_REPLACEMENT_STRATEGIES,
-  createHmacSuppressionKeyProvider
-} from './security.js'
+export { CONFIRMATION_REPLACEMENT_STRATEGIES } from './security.js'

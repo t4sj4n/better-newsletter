@@ -9,6 +9,7 @@ import {
   SUBSCRIPTION_STATUSES
 } from '../packages/better-newsletter/src/index.js'
 import { memoryAdapter, memoryCapabilities } from '../packages/better-newsletter/src/adapters/memory.js'
+import type { BetterNewsletterOptions } from '../packages/better-newsletter/src/config.js'
 import type { NewsletterStorage } from '../packages/better-newsletter/src/storage.js'
 import { resendWebhook } from '../packages/better-newsletter/src/webhooks/resend.js'
 
@@ -16,12 +17,13 @@ const email = 'person@example.com'
 const occurredAt = new Date('2026-09-29T08:00:00.000Z')
 const webhookSecret = `whsec_${Buffer.from('test webhook secret with enough entropy').toString('base64')}`
 
-async function setup(softBounceThreshold?: number, storage: NewsletterStorage = memoryAdapter()) {
+async function setup(softBounceThreshold?: number, storage: NewsletterStorage = memoryAdapter(), feedbackPolicy: BetterNewsletterOptions['feedbackPolicy'] = {}) {
   const newsletter = betterNewsletter({
     storage,
     capabilities: memoryCapabilities(),
     mailer: { async sendConfirmation() { return { accepted: true as const } } },
-    feedbackPolicy: softBounceThreshold === undefined ? {} : { softBounceThreshold }
+    feedbackPolicy: { ...feedbackPolicy, ...(softBounceThreshold === undefined ? {} : { softBounceThreshold }) },
+    clock: { now: () => new Date(occurredAt.getTime() + 60_000) }
   })
   for (const audience of ['default', 'product']) {
     await newsletter.importSubscription({
@@ -107,17 +109,60 @@ describe('delivery feedback', () => {
     await newsletter.processFeedback({ ...input, type: DELIVERY_FEEDBACK_TYPES.DELIVERED, providerEventId: 'delivered' })
     expect((await newsletter.processFeedback({ ...input, type: DELIVERY_FEEDBACK_TYPES.SOFT_BOUNCE, providerEventId: 'soft-2' })).suppressed).toBe(true)
     await newsletter.unsuppressContact({ email })
-    expect((await newsletter.processFeedback({ ...input, type: DELIVERY_FEEDBACK_TYPES.SOFT_BOUNCE, providerEventId: 'soft-3' })).suppressed).toBe(false)
-    expect((await newsletter.processFeedback({ ...input, type: DELIVERY_FEEDBACK_TYPES.SOFT_BOUNCE, providerEventId: 'soft-3' })).processed).toBe(false)
-    expect((await newsletter.processFeedback({ ...input, type: DELIVERY_FEEDBACK_TYPES.SOFT_BOUNCE, providerEventId: 'soft-4' })).suppressed).toBe(true)
+    const later = new Date(occurredAt.getTime() + 120_000)
+    expect((await newsletter.processFeedback({ ...input, occurredAt: later, type: DELIVERY_FEEDBACK_TYPES.SOFT_BOUNCE, providerEventId: 'soft-3' })).suppressed).toBe(false)
+    expect((await newsletter.processFeedback({ ...input, occurredAt: later, type: DELIVERY_FEEDBACK_TYPES.SOFT_BOUNCE, providerEventId: 'soft-3' })).processed).toBe(false)
+    expect((await newsletter.processFeedback({ ...input, occurredAt: later, type: DELIVERY_FEEDBACK_TYPES.SOFT_BOUNCE, providerEventId: 'soft-4' })).suppressed).toBe(true)
 
     const contact = await newsletter.getContact({ email })
     const events = await backing.transaction(transaction => transaction.listEvents(contact!.id))
     expect(events.filter(event => event.type === NEWSLETTER_EVENT_TYPES.PROVIDER_FEEDBACK)).toHaveLength(5)
     expect(events.filter(event => event.metadata.feedbackType === DELIVERY_FEEDBACK_TYPES.DELIVERED)).toHaveLength(1)
     expect(await backing.transaction(transaction =>
-      transaction.countSoftBouncesSinceUnsuppressed(contact!.id, 1)
+      transaction.countSoftBouncesAfter(contact!.id, new Date(occurredAt.getTime() + 60_000), 1)
     )).toBe(1)
+  })
+
+  it.each(['HARD_BOUNCE', 'COMPLAINT', 'PROVIDER_SUPPRESSION'] as const)(
+    'records stale %s without undoing trusted unsuppression', async type => {
+      const newsletter = await setup()
+      await newsletter.suppressContact({ email, reason: 'manual' })
+      await newsletter.unsuppressContact({ email })
+      const input = { provider: 'other', providerEventId: `stale-${type}`, email, type: DELIVERY_FEEDBACK_TYPES[type], occurredAt }
+      expect(await newsletter.processFeedback(input)).toEqual({ processed: true, suppressed: false })
+      expect(await newsletter.processFeedback(input)).toEqual({ processed: false, suppressed: false })
+      expect((await newsletter.listEvents({ email })).filter(event => event.type === NEWSLETTER_EVENT_TYPES.PROVIDER_FEEDBACK)).toHaveLength(1)
+      expect((await newsletter.getContact({ email }))?.status).toBe(CONTACT_STATUSES.ENABLED)
+      expect((await newsletter.processFeedback({ ...input, providerEventId: `later-${type}`, occurredAt: new Date(occurredAt.getTime() + 120_000) })).suppressed).toBe(true)
+    }
+  )
+
+  it('excludes stale and equal-time soft bounces from the new threshold window', async () => {
+    const newsletter = await setup(2)
+    await newsletter.suppressContact({ email, reason: 'manual' })
+    await newsletter.unsuppressContact({ email })
+    const base = { provider: 'other', email, type: DELIVERY_FEEDBACK_TYPES.SOFT_BOUNCE }
+    const boundary = new Date(occurredAt.getTime() + 60_000)
+    for (const [providerEventId, time] of [['old', occurredAt], ['equal', boundary]] as const) {
+      expect((await newsletter.processFeedback({ ...base, providerEventId, occurredAt: time })).suppressed).toBe(false)
+    }
+    const later = new Date(boundary.getTime() + 1)
+    expect((await newsletter.processFeedback({ ...base, providerEventId: 'new-1', occurredAt: later })).suppressed).toBe(false)
+    expect((await newsletter.processFeedback({ ...base, providerEventId: 'new-2', occurredAt: later })).suppressed).toBe(true)
+  })
+
+  it.each([
+    ['COMPLAINT', 'suppressOnComplaint'],
+    ['HARD_BOUNCE', 'suppressOnHardBounce'],
+    ['PROVIDER_SUPPRESSION', 'suppressOnProviderSuppression']
+  ] as const)('records %s without suppression when %s is false', async (type, policyKey) => {
+    const newsletter = await setup(undefined, memoryAdapter(), { [policyKey]: false })
+    const before = await newsletter.listSubscriptions({ email })
+    const input = { provider: 'other', providerEventId: type, email, type: DELIVERY_FEEDBACK_TYPES[type], occurredAt }
+    expect(await newsletter.processFeedback(input)).toEqual({ processed: true, suppressed: false })
+    expect(await newsletter.processFeedback(input)).toEqual({ processed: false, suppressed: false })
+    expect(await newsletter.listSubscriptions({ email })).toEqual(before)
+    expect((await newsletter.listEvents({ email })).filter(event => event.type === NEWSLETTER_EVENT_TYPES.PROVIDER_FEEDBACK)).toHaveLength(1)
   })
 
   it('does not add another suppression transition for an already-suppressed contact', async () => {

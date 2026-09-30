@@ -1,6 +1,6 @@
 {
   "name": "better-newsletter",
-  "version": "0.1.0-alpha.1",
+  "version": "0.1.0-alpha.3",
   "description": "Framework-agnostic newsletter subscription and consent lifecycle infrastructure for TypeScript.",
   "type": "module",
   "license": "MIT",

@@ -17,7 +17,9 @@ Instead of rebuilding the same edge cases in every app, you get predictable beha
 - bounces or manual suppression can block delivery globally without rewriting consent history.
 - trusted export and host-controlled deletion or anonymization cover Contact data and consent history.
 
-> **Status:** early development (prerelease). Packages are published to npm under the `next` tag (`0.1.0-alpha.1`).
+> **Status:** early development (prerelease). Packages are published to npm under the `next` tag.
+
+[![npm next version](https://img.shields.io/npm/v/better-newsletter/next?label=npm%20%40next)](https://www.npmjs.com/package/better-newsletter)
 
 ## Installation
 

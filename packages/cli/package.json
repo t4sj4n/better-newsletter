@@ -1,6 +1,6 @@
 {
   "name": "@better-newsletter/cli",
-  "version": "0.1.0-alpha.1",
+  "version": "0.1.0-alpha.3",
   "description": "Database migration CLI for better-newsletter.",
   "type": "module",
   "license": "MIT",
@@ -37,7 +37,7 @@
     "typecheck": "tsc -p tsconfig.json"
   },
   "dependencies": {
-    "better-newsletter": "workspace:0.1.0-alpha.1",
+    "better-newsletter": "workspace:0.1.0-alpha.3",
     "jiti": "^2.7.0"
   }
 }

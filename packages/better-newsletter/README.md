@@ -112,7 +112,11 @@ import { betterNewsletter } from 'better-newsletter'
 import { createSecureCapabilities } from 'better-newsletter/security'
 
 const capabilities = createSecureCapabilities({
-  hmacSecret: process.env.NEWSLETTER_LINK_SECRET!
+  secrets: [
+    { version: 2, value: process.env.NEWSLETTER_LINK_SECRET_V2! },
+    { version: 1, value: process.env.NEWSLETTER_LINK_SECRET_V1! }
+  ],
+  hmacSecret: process.env.NEWSLETTER_LINK_SECRET_V1!
 })
 
 const newsletter = betterNewsletter({
@@ -137,7 +141,9 @@ Security properties:
 - re-subscription atomically increments subscription and contact generations, invalidating old capabilities even when their resolution was already in flight;
 - expired, consumed, and revoked confirmation records can be removed through explicit cleanup.
 
-Use a secret with at least 32 bytes for HMAC signing. `createSecureCapabilities()` and `createHmacRateLimitKeyProvider()` throw `INVALID_CONFIGURATION` synchronously for a shorter or missing secret.
+Use at least 32 bytes for every HMAC secret. `createSecureCapabilities()` and `createHmacRateLimitKeyProvider()` throw `INVALID_CONFIGURATION` synchronously for missing or weak secrets. For new deployments, configure `secrets` alone. Its first entry signs new `bn3` links; remaining entries verify previously issued `bn3` links. Versions are unique non-negative integer identifiers, not ordering guarantees, and may have gaps. The version is signed into each link and selects its verification key directly. Better Newsletter does not persist signing secrets; keep them stable and available to every service instance.
+
+For deployments with existing `bn2` links, keep the old singular `hmacSecret` alongside `secrets` during migration. It verifies `bn2` links only; new links use the first versioned secret. Coordinate the first `bn3` rollout so all serving instances can verify `bn3` before any instance issues it. For later rotations, first make the new version available for verification on every instance while the previous version remains first; then make the new version first on every instance. Retain previous versions and `hmacSecret` throughout the transition. After the lifetime of all `bn2` links, remove `hmacSecret`; after the lifetime of links signed by an older version, remove that version. Removing either key intentionally retires its links. Lifecycle-generation changes revoke links independently of key rotation, even when their signing key remains configured. A deployment using only `hmacSecret` continues to issue and verify `bn2` links.
 
 ### Lifecycle generations and adapter requirements
 
@@ -153,7 +159,7 @@ Adapters report unique-constraint violations, serialization failures, and deadlo
 
 `ConfirmationTokenStore.replace()` must atomically enforce replacement and bounded retention within `(subscriptionId, lifecycleGeneration)`, retaining the newest records first and breaking timestamp ties by insertion order. Revocation is also generation-scoped, so it cannot revoke a new cycle's tokens. Confirmation resolves, checks, and consumes the token inside the activation transaction, so a rolled-back activation does not burn its token. Unsubscribe, unsubscribe-all, and suppression revoke pending confirmation tokens in the same transaction.
 
-These are breaking pre-release contract changes: adapters must persist both generation fields, `Subscription.confirmationDelivery`, and the generation on confirmation-token records. The nonce-store API and legacy opaque unsubscribe replacement hooks have been removed. Existing `bn1` links are not accepted; newly issued generation-bound links use `bn2`.
+These are breaking pre-release contract changes: adapters must persist both generation fields, `Subscription.confirmationDelivery`, and the generation on confirmation-token records. The nonce-store API and legacy opaque unsubscribe replacement hooks have been removed. Existing `bn1` links are not accepted; generation-bound links use `bn2` with singular `hmacSecret` or `bn3` with versioned `secrets`.
 
 ### Scanner-safe web flows
 

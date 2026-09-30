@@ -83,12 +83,15 @@ const newsletter = betterNewsletter({
   storage,
   mailer,
   capabilities: createSecureCapabilities({
-    hmacSecret: process.env.NEWSLETTER_LINK_SECRET!
+    secrets: [
+      { version: 2, value: process.env.NEWSLETTER_LINK_SECRET_V2! },
+      { version: 1, value: process.env.NEWSLETTER_LINK_SECRET_V1! }
+    ]
   })
 })
 ```
 
-The host application owns `storage` and `mailer`. Built-in PostgreSQL and Resend integrations are available, or you can implement the provider-neutral contracts yourself. Keep the signing secret stable and use at least 32 bytes.
+The host application owns `storage` and `mailer`. Built-in PostgreSQL and Resend integrations are available, or you can implement the provider-neutral contracts yourself. Keep every signing secret stable and use at least 32 bytes. The first versioned secret signs new links; retain previous versions to verify older links. For existing `bn2` links, also configure the old `hmacSecret` until those links may be retired. See the [rotation guide](packages/better-newsletter/README.md#production-security).
 
 Subscribe with explicit consent:
 

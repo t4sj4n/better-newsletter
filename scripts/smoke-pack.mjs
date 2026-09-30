@@ -188,6 +188,7 @@ import { MAIL_DELIVERY_REASONS, type NewsletterMailer, type ConfirmationMailInpu
 import type { NewsletterCapabilities, AbuseGuard, RateLimiter, RateLimitKeyProvider, NewsletterRateLimitCheck } from 'better-newsletter/security'
 import type { NewsletterStorage } from 'better-newsletter/storage'
 import * as security from 'better-newsletter/security'
+import { createSecureCapabilities, createHmacSuppressionKeyProvider } from 'better-newsletter/security'
 import * as storage from 'better-newsletter/storage'
 import { getMigrations, type BetterNewsletterMigrationConfig, type NewsletterMigrations } from 'better-newsletter/db/migration'
 // @ts-expect-error storage implementation contracts are exported from /storage
@@ -208,6 +209,18 @@ import type { NewsletterRateLimitCheck as RootNewsletterRateLimitCheck } from 'b
 import type { NewsletterMailer as RootMailer } from 'better-newsletter'
 // @ts-expect-error mailer delivery inputs are exported from /mailers
 import type { ConfirmationMailInput as RootConfirmationMailInput } from 'better-newsletter'
+// @ts-expect-error suppression security helper is exported from /security
+import { createHmacSuppressionKeyProvider as RootSuppressionProvider } from 'better-newsletter'
+// @ts-expect-error signing configuration requires at least one secret format
+createSecureCapabilities({})
+createSecureCapabilities({ hmacSecret: '0123456789abcdef0123456789abcdef' })
+createSecureCapabilities({ secrets: [{ version: 1, value: '0123456789abcdef0123456789abcdef' }] })
+createSecureCapabilities({
+  hmacSecret: '0123456789abcdef0123456789abcdef',
+  secrets: [{ version: 1, value: 'fedcba9876543210fedcba9876543210' }],
+  issueLegacyCapabilities: true
+})
+createHmacSuppressionKeyProvider({ secrets: [{ version: 1, value: '0123456789abcdef0123456789abcdef' }] })
 declare const options: BetterNewsletterOptions
 declare const migrationConfig: BetterNewsletterMigrationConfig
 declare const mailer: NewsletterMailer

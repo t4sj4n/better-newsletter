@@ -305,6 +305,69 @@ describe('versioned capability secrets', () => {
     )).resolves.toBeNull()
   })
 
+  it('supports a rolling bn2-to-bn3 rollout before retiring legacy verification', async () => {
+    const oldInstance = createSecureCapabilities({ hmacSecret: secret })
+    const phaseOne = createSecureCapabilities({
+      hmacSecret: secret,
+      secrets: [{ version: 2, value: newerSecret }],
+      issueLegacyCapabilities: true
+    })
+    const oldLink = await oldInstance.issueUnsubscribeCapability(target)
+    const phaseOneLink = await phaseOne.issueUnsubscribeCapability(target)
+    for (const link of [oldLink, phaseOneLink]) {
+      expect(link).toMatch(/^bn2\./u)
+      await expect(oldInstance.resolveUnsubscribeCapability(link)).resolves.toEqual({ scope: 'SUBSCRIPTION', ...target })
+      await expect(phaseOne.resolveUnsubscribeCapability(link)).resolves.toEqual({ scope: 'SUBSCRIPTION', ...target })
+    }
+    const phaseTwo = createSecureCapabilities({ hmacSecret: secret, secrets: [{ version: 2, value: newerSecret }] })
+    const otherPhaseTwo = createSecureCapabilities({ hmacSecret: secret, secrets: [{ version: 2, value: newerSecret }] })
+    const newLink = await phaseTwo.issueUnsubscribeCapability(target)
+    expect(newLink).toMatch(/^bn3\.2\./u)
+    await expect(otherPhaseTwo.resolveUnsubscribeCapability(newLink)).resolves.toEqual({ scope: 'SUBSCRIPTION', ...target })
+    await expect(phaseOne.resolveUnsubscribeCapability(newLink)).resolves.toEqual({ scope: 'SUBSCRIPTION', ...target })
+    await expect(oldInstance.resolveUnsubscribeCapability(newLink)).resolves.toBeNull()
+    const retired = createSecureCapabilities({ secrets: [{ version: 2, value: newerSecret }] })
+    await expect(retired.resolveUnsubscribeCapability(oldLink)).resolves.toBeNull()
+    await expect(retired.resolveUnsubscribeCapability(newLink)).resolves.toEqual({ scope: 'SUBSCRIPTION', ...target })
+  })
+
+  it('requires both secret formats for temporary bn2 issuance', () => {
+    for (const options of [
+      { hmacSecret: secret, issueLegacyCapabilities: true },
+      { secrets: [{ version: 2, value: newerSecret }], issueLegacyCapabilities: true }
+    ]) {
+      expect(() => createSecureCapabilities(options)).toThrowError(/Legacy issuance requires/u)
+    }
+  })
+
+  it.each([
+    ['SUBSCRIPTION', (capabilities: ReturnType<typeof createSecureCapabilities>) => capabilities.issueUnsubscribeCapability(target)],
+    ['ALL', (capabilities: ReturnType<typeof createSecureCapabilities>) => capabilities.issueUnsubscribeAllCapability({ contactId: target.contactId, capabilityGeneration: 1 })],
+    ['MANAGE', (capabilities: ReturnType<typeof createSecureCapabilities>) => capabilities.issueManagePreferencesCapability({ contactId: target.contactId, capabilityGeneration: 1 })]
+  ] as const)('rotates and protects bn3 %s capabilities', async (purpose, issue) => {
+    const v1 = createSecureCapabilities({ secrets: [{ version: 1, value: secret }] })
+    const rotated = createSecureCapabilities({ secrets: [
+      { version: 2, value: newerSecret }, { version: 1, value: secret }
+    ] })
+    const oldLink = await issue(v1)
+    const currentLink = await issue(rotated)
+    expect(oldLink).toMatch(/^bn3\.1\./u)
+    expect(currentLink).toMatch(/^bn3\.2\./u)
+    expect((await rotated.resolveUnsubscribeCapability(oldLink))?.scope).toBe(purpose)
+    expect((await rotated.resolveUnsubscribeCapability(currentLink))?.scope).toBe(purpose)
+    const parts = oldLink.split('.')
+    for (const [index, replacement] of [
+      [1, '2'], [2, purpose === 'ALL' ? 'm' : 'a'], [3, 'Y29udGFjdC0y'],
+      [4, 'Y29udGFjdC0y'], [5, '2']
+    ] as const) {
+      const tampered = [...parts]
+      tampered[index] = replacement
+      await expect(rotated.resolveUnsubscribeCapability(tampered.join('.'))).resolves.toBeNull()
+    }
+    await expect(createSecureCapabilities({ secrets: [{ version: 2, value: newerSecret }] })
+      .resolveUnsubscribeCapability(oldLink)).resolves.toBeNull()
+  })
+
   it('keeps purposes, generations, and cross-instance verification intact', async () => {
     const options = { secrets: [{ version: 2, value: newerSecret }] }
     const issuer = createSecureCapabilities(options)

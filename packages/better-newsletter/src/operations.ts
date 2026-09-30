@@ -156,6 +156,8 @@ export interface NewsletterService {
   exportContactData(input: ContactLookup): Promise<ContactDataExport | null>
   /** Trusted server-side operation, independent of public unsubscribe. */
   eraseContactData(input: EraseContactDataInput): Promise<{ readonly erased: boolean }>
+  /** Trusted server-side removal of detached suppression keys after erasure. */
+  removeRetainedSuppression(input: { readonly email: string }): Promise<{ readonly removed: boolean }>
 
   linkSubject(input: LinkSubjectInput): Promise<Contact | null>
   suppressContact(input: SuppressContactInput): Promise<Contact | null>

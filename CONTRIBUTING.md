@@ -107,4 +107,4 @@ pnpm --filter "./packages/*" publish --no-git-checks
 - Executes `prepack` (`pnpm build`) to compile fresh distribution artifacts prior to packaging.
 - Skips private workspace packages (`playground/`, `examples/basic/`).
 
-4. After the new version is live on npm, update `examples/basic/package.json` to the published version.
+The standalone StackBlitz consumer (`examples/basic/`) specifies `"better-newsletter": "latest"` and automatically resolves to the latest published release.

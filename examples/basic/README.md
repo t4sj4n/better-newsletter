@@ -26,6 +26,6 @@ You can run this example directly in your browser without local installation:
 
 StackBlitz runs `nuxt dev` in an in-browser WebContainer, executing the memory adapter and fake mailer completely offline.
 
-## Version Maintenance
+## Architecture & Versioning
 
-For prereleases, this example specifies an exact pinned dependency on the published release in `package.json`. Once a stable release is reached, the version should either be pinned to the documented version or updated to `latest` deliberately.
+This example specifies `"better-newsletter": "latest"` so that the StackBlitz interactive demo always loads the newest published release from npm automatically. For internal branch development against local code, use the root `playground/` application.

@@ -15,7 +15,7 @@ The basic Nuxt 4 example can be opened directly in StackBlitz:
 
 The demo runs completely in the browser using the in-memory adapter and fake mailer without external database or credentials.
 
-## Version Maintenance
+## Architecture & Maintenance
 
-- **During prereleases (`alpha`, `beta`, `next`):** Examples must explicitly pin the published prerelease version in `package.json` to guarantee reproducible builds and avoid breaking when uncoordinated changes land.
-- **After stable release (`1.0.0+`):** The repository maintainers can decide whether the example should remain pinned to the current documented release or use `latest` / `^1.0.0` for automatic currency. For standalone reproducibility on StackBlitz, explicit pinning remains preferred.
+- `playground/`: Internal development environment using `workspace:*` to develop and test monorepo changes against current local code.
+- `examples/basic/`: Standalone consumer using `"better-newsletter": "latest"` so that the interactive StackBlitz demo always runs against the latest published release without requiring manual version updates.

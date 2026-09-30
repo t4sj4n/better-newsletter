@@ -1,5 +1,10 @@
 # better-newsletter
 
+[![CI](https://img.shields.io/github/actions/workflow/status/t4sj4n/better-newsletter/ci.yml?branch=main&label=CI&logo=githubactions&style=flat-square)](https://github.com/t4sj4n/better-newsletter/actions/workflows/ci.yml)
+[![npm version](https://img.shields.io/npm/v/better-newsletter?tag=next&logo=npm&style=flat-square)](https://www.npmjs.com/package/better-newsletter)
+[![npm downloads](https://img.shields.io/npm/dm/better-newsletter?logo=npm&style=flat-square)](https://www.npmjs.com/package/better-newsletter)
+[![license](https://img.shields.io/npm/l/better-newsletter?style=flat-square)](https://github.com/t4sj4n/better-newsletter/blob/main/LICENSE)
+
 Framework-agnostic newsletter subscription and consent lifecycle infrastructure for TypeScript.
 
 > **In short:** Better Newsletter takes care of the awkward parts around newsletter signups: confirming an address, remembering consent, handling unsubscribe links, and keeping repeat signups consistent. You keep your own database, mail provider and UI — Better Newsletter handles the lifecycle behind them.

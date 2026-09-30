@@ -184,7 +184,7 @@ export default defineBetterNewsletterConfig(() => ({
 
 The Nuxt integration supplies the lifecycle API routes. Your application still owns the signup form, confirmation/unsubscribe pages and mail copy.
 
-See [examples/basic](examples/basic/README.md) for a minimal Nuxt example and the [runtime package documentation](packages/better-newsletter/README.md) for security, migrations, adapters and the full API.
+See [examples/basic](examples/basic/README.md) for a minimal Nuxt example ([try directly on StackBlitz](https://stackblitz.com/github/t4sj4n/better-newsletter/tree/main/examples/basic)) and the [runtime package documentation](packages/better-newsletter/README.md) for security, migrations, adapters and the full API.
 
 ## License
 

@@ -94,10 +94,10 @@ function toRelative(url: string | null): string {
         <template v-if="inbox.mail">
           <h3>{{ inbox.mail.subject }}</h3>
           <pre>{{ inbox.mail.text }}</pre>
-          <NuxtLink :to="toRelative(inbox.mail.confirmationUrl)">Open confirmation page</NuxtLink>
+          <NuxtLink :to="toRelative(inbox.mail.confirmationUrl)" target="_blank">Open confirmation page</NuxtLink>
         </template>
         <p v-if="inbox.unsubscribeUrl">
-          <NuxtLink :to="toRelative(inbox.unsubscribeUrl)">Open unsubscribe page</NuxtLink>
+          <NuxtLink :to="toRelative(inbox.unsubscribeUrl)" target="_blank">Open unsubscribe page</NuxtLink>
         </p>
       </template>
     </section>

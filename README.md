@@ -12,29 +12,15 @@ Instead of rebuilding the same edge cases in every app, you get predictable beha
 - bounces or manual suppression can block delivery globally without rewriting consent history.
 - trusted export and host-controlled deletion or anonymization cover Contact data and consent history.
 
-> **Status:** early development. The package has not been published to npm yet and the public API may still change before the first prerelease.
+> **Status:** early development (prerelease). Packages are published to npm under the `next` tag (`0.1.0-alpha.1`).
 
 ## Installation
 
-Until the first npm prerelease, install packed artifacts from a local checkout:
+Install the prerelease from npm:
 
 ```bash
-# better-newsletter repository
-pnpm install --frozen-lockfile
-mkdir -p artifacts
-pnpm --dir packages/better-newsletter pack --pack-destination ../../artifacts
-pnpm --dir packages/cli pack --pack-destination ../../artifacts
-
-# your application
-pnpm add /path/to/artifacts/better-newsletter-0.0.0.tgz
-pnpm add -D /path/to/artifacts/better-newsletter-cli-0.0.0.tgz
-```
-
-After the first prerelease is published:
-
-```bash
-pnpm add better-newsletter
-pnpm add -D @better-newsletter/cli
+pnpm add better-newsletter@next
+pnpm add -D @better-newsletter/cli@next
 ```
 
 Node.js 20.11 or newer is required for the packages. The Nuxt example requires Node.js 22.19 or newer.

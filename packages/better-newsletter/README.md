@@ -101,7 +101,7 @@ The runtime and the development CLI are separate packages. The runtime is embedd
 | `better-newsletter/nuxt`, `/nuxt/server`, `/nuxt/client` | Nuxt module, Nitro server helpers and browser client. |
 | `@better-newsletter/cli` | Explicit `better-newsletter` migration executable. |
 
-Until the first prerelease in #16, both packages have synchronized development versions. Release the runtime before the CLI at the same version; the CLI declares an exact runtime dependency to avoid mismatched migration tooling.
+Both packages maintain synchronized versions. The runtime is released before the CLI at the same version; the CLI declares an exact runtime dependency to avoid mismatched migration tooling.
 
 ## Production security
 
@@ -737,7 +737,7 @@ To run the maintainer playground instead:
 pnpm --dir playground dev
 ```
 
-The root pnpm install also installs both consumers through workspace links. After building the library, run `pnpm --dir examples/basic typecheck` and `pnpm --dir examples/basic build` to validate the small example, or `pnpm --dir playground typecheck` and `pnpm --dir playground build` to validate the full app. Issue #16 will replace the basic example's workspace link with a pinned published package version for StackBlitz.
+The root pnpm install also installs both consumers. After building the library, run `pnpm --dir examples/basic typecheck` and `pnpm --dir examples/basic build` to validate the small example, or `pnpm --dir playground typecheck` and `pnpm --dir playground build` to validate the full app. The basic example uses a pinned published package version for standalone consumption and StackBlitz.
 
 For artifact-level smoke tests of both runtime and CLI in isolated consumers, run `node scripts/smoke-pack.mjs` after `pnpm build`. This checks packed `dist` exports rather than merely the source checkout.
 

@@ -186,6 +186,10 @@ The Nuxt integration supplies the lifecycle API routes. Your application still o
 
 See [examples/basic](examples/basic/README.md) for a minimal Nuxt example ([try directly on StackBlitz](https://stackblitz.com/github/t4sj4n/better-newsletter/tree/main/examples/basic)) and the [runtime package documentation](packages/better-newsletter/README.md) for security, migrations, adapters and the full API.
 
+## Contributing
+
+See [CONTRIBUTING.md](CONTRIBUTING.md) for local development setup, test execution, and release workflows.
+
 ## License
 
 MIT

@@ -1,7 +1,7 @@
 # better-newsletter
 
 [![CI](https://img.shields.io/github/actions/workflow/status/t4sj4n/better-newsletter/ci.yml?branch=main&event=push&label=CI&logo=githubactions&style=flat-square)](https://github.com/t4sj4n/better-newsletter/actions/workflows/ci.yml)
-[![npm version](https://img.shields.io/npm/v/better-newsletter?tag=next&logo=npm&style=flat-square)](https://www.npmjs.com/package/better-newsletter)
+[![npm version](https://img.shields.io/npm/v/better-newsletter?logo=npm&style=flat-square)](https://www.npmjs.com/package/better-newsletter)
 [![npm downloads](https://img.shields.io/npm/dm/better-newsletter?logo=npm&style=flat-square)](https://www.npmjs.com/package/better-newsletter)
 [![license](https://img.shields.io/npm/l/better-newsletter?style=flat-square)](https://github.com/t4sj4n/better-newsletter/blob/main/LICENSE)
 
@@ -17,17 +17,15 @@ Instead of rebuilding the same edge cases in every app, you get predictable beha
 - bounces or manual suppression can block delivery globally without rewriting consent history.
 - trusted export and host-controlled deletion or anonymization cover Contact data and consent history.
 
-> **Status:** early development (prerelease). Packages are published to npm under the `next` tag.
-
-[![npm next version](https://img.shields.io/npm/v/better-newsletter/next?label=npm%20%40next)](https://www.npmjs.com/package/better-newsletter)
+> **Status:** early development (prerelease).
 
 ## Installation
 
-Install the prerelease from npm:
+Install the packages from npm:
 
 ```bash
-pnpm add better-newsletter@next
-pnpm add -D @better-newsletter/cli@next
+pnpm add better-newsletter
+pnpm add -D @better-newsletter/cli
 ```
 
 Node.js 20.11 or newer is required for the packages. The Nuxt example requires Node.js 22.19 or newer.

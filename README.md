@@ -1,6 +1,6 @@
 # better-newsletter
 
-[![CI](https://img.shields.io/github/actions/workflow/status/t4sj4n/better-newsletter/ci.yml?branch=main&label=CI&logo=githubactions&style=flat-square)](https://github.com/t4sj4n/better-newsletter/actions/workflows/ci.yml)
+[![CI](https://img.shields.io/github/actions/workflow/status/t4sj4n/better-newsletter/ci.yml?branch=main&event=push&label=CI&logo=githubactions&style=flat-square)](https://github.com/t4sj4n/better-newsletter/actions/workflows/ci.yml)
 [![npm version](https://img.shields.io/npm/v/better-newsletter?tag=next&logo=npm&style=flat-square)](https://www.npmjs.com/package/better-newsletter)
 [![npm downloads](https://img.shields.io/npm/dm/better-newsletter?logo=npm&style=flat-square)](https://www.npmjs.com/package/better-newsletter)
 [![license](https://img.shields.io/npm/l/better-newsletter?style=flat-square)](https://github.com/t4sj4n/better-newsletter/blob/main/LICENSE)

@@ -1033,20 +1033,13 @@ export function createNewsletterWithSubscriptionBatch(config: BetterNewsletterOp
         const subscription = await transaction.getSubscriptionById(hint.id)
         if (contact == null || subscription == null || subscription.contactId !== contact.id) return null
         const reason = confirmationReason(contact, subscription)
-        let activeTokenExpiresAt: Date | null = null
-        if (reason == null) {
-          const now = clock.now()
-          const tokens = await transaction.listContactTokenMetadata(contact.id)
-          for (const token of tokens) {
-            if (token.subscriptionId === subscription.id
-              && token.lifecycleGeneration === subscription.lifecycleGeneration
-              && token.consumedAt == null && token.revokedAt == null
-              && token.expiresAt.getTime() > now.getTime()
-              && (activeTokenExpiresAt == null || token.expiresAt.getTime() > activeTokenExpiresAt.getTime())) {
-              activeTokenExpiresAt = token.expiresAt
-            }
-          }
-        }
+        const activeTokenExpiresAt = reason == null
+          ? await transaction.getLatestUsableConfirmationExpiry({
+            subscriptionId: subscription.id,
+            lifecycleGeneration: subscription.lifecycleGeneration,
+            now: clock.now()
+          })
+          : null
         return { canCreate: reason == null, reason, activeTokenExpiresAt }
       })
     },

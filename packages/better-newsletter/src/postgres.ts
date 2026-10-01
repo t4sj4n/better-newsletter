@@ -439,6 +439,17 @@ function transactionAdapter<DB>(trx: Transaction<DB>): NewsletterStorageTransact
       `.execute(trx)
       return result.rows.map(eventFromRow)
     },
+    async getLatestUsableConfirmationExpiry(input) {
+      const result = await sql<{ expires_at: Date | null }>`
+        SELECT max(expires_at) AS expires_at FROM newsletter_tokens
+        WHERE subscription_id = ${input.subscriptionId}
+          AND lifecycle_generation = ${input.lifecycleGeneration}
+          AND purpose = 'CONFIRMATION'
+          AND consumed_at IS NULL AND revoked_at IS NULL
+          AND expires_at > ${input.now}
+      `.execute(trx)
+      return result.rows[0]?.expires_at ?? null
+    },
     async listContactTokenMetadata(contactId) {
       const result = await sql<TokenRow>`
         SELECT * FROM newsletter_tokens WHERE contact_id = ${contactId}

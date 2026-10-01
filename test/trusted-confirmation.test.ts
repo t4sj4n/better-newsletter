@@ -132,6 +132,40 @@ describe('trusted confirmation APIs', () => {
     expect(storage.confirmationTokenSnapshot()).toHaveLength(0)
   })
 
+  it('uses the targeted storage expiry lookup and skips it for blocked subscriptions', async () => {
+    const { storage, newsletter, options, input, subscription } = await fixture()
+    const result = (await newsletter.createConfirmationToken(input))!
+    const lookup = vi.fn()
+    const targeted: NewsletterStorage = {
+      transaction: operation => storage.transaction(tx => operation({
+        ...tx,
+        async listContactTokenMetadata() { throw new Error('Introspection must not load token lists') },
+        async getLatestUsableConfirmationExpiry(value) {
+          lookup(value)
+          return tx.getLatestUsableConfirmationExpiry(value)
+        }
+      }))
+    }
+    const service = betterNewsletter({ ...options, storage: targeted })
+    expect(await service.getConfirmationState(input)).toEqual({
+      canCreate: true, reason: null, activeTokenExpiresAt: result.expiresAt
+    })
+    expect(lookup).toHaveBeenCalledExactlyOnceWith({
+      subscriptionId: subscription.id, lifecycleGeneration: subscription.lifecycleGeneration, now
+    })
+    for (const status of ['ACTIVE', 'UNSUBSCRIBED'] as const) {
+      await storage.transaction(tx => tx.updateSubscription(subscription.id, { status }))
+      expect(await service.getConfirmationState(input)).toEqual({
+        canCreate: false, reason: status, activeTokenExpiresAt: null
+      })
+    }
+    await newsletter.suppressContact({ email, reason: 'admin' })
+    expect(await service.getConfirmationState(input)).toEqual({
+      canCreate: false, reason: 'SUPPRESSED', activeTokenExpiresAt: null
+    })
+    expect(lookup).toHaveBeenCalledTimes(1)
+  })
+
   it('returns null for missing subscriptions', async () => {
     const { newsletter } = await fixture()
     for (const subscription of [{ id: 'missing' }, { email: 'missing@example.com' }]) {

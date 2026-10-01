@@ -93,6 +93,13 @@ export interface NewsletterStorageTransaction {
   /** Returns events in append order, including events sharing a timestamp. */
   listEvents(contactId: string): Promise<readonly NewsletterEvent[]>
 
+  /** Latest expiry of an unconsumed, unrevoked confirmation token with expiresAt > now. */
+  getLatestUsableConfirmationExpiry(input: {
+    readonly subscriptionId: string
+    readonly lifecycleGeneration: number
+    readonly now: Date
+  }): Promise<Date | null>
+
   /** Privacy operations run in the same transaction as lifecycle state. */
   listContactTokenMetadata(contactId: string): Promise<readonly ContactTokenMetadata[]>
   deleteContactTokens(contactId: string): Promise<void>

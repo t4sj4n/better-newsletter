@@ -122,9 +122,94 @@ async function seedPendingSubscription(storage: NewsletterStorage, now: Date) {
   })
 }
 
+/** Shared targeted checks for adapters, independent of rate-limiter capabilities. */
+export function registerConfirmationExpiryConformance(
+  harness: Pick<StorageAdapterConformanceHarness, 'name' | 'reset' | 'createStorage'>
+): void {
+  describe(`${harness.name} confirmation expiry conformance`, () => {
+    beforeEach(() => harness.reset())
+
+    it('returns null when there are no tokens', async () => {
+      const storage = harness.createStorage()
+      const now = new Date(baseTime)
+      const { subscription } = await seedPendingSubscription(storage, now)
+      expect(await storage.transaction(tx => tx.getLatestUsableConfirmationExpiry({
+        subscriptionId: subscription.id, lifecycleGeneration: 1, now
+      }))).toBeNull()
+    })
+
+    it('returns the expiry of one usable token without exposing a record or mutable storage state', async () => {
+      const storage = harness.createStorage()
+      const now = new Date(baseTime)
+      const { contact, subscription } = await seedPendingSubscription(storage, now)
+      const expiry = new Date(baseTime + 60_000)
+      await storage.transaction(tx => tx.confirmationTokens.replace({
+        record: tokenRecord('single', contact.id, subscription.id, 1, now, expiry),
+        strategy: 'RETAIN_PREVIOUS_UNTIL_EXPIRY', maxActiveTokens: 2, now
+      }))
+      const lookup = { subscriptionId: subscription.id, lifecycleGeneration: 1, now }
+      const result = await storage.transaction(tx => tx.getLatestUsableConfirmationExpiry(lookup))
+      expect(result).toBeInstanceOf(Date)
+      expect(result).toEqual(expiry)
+      result!.setTime(0)
+      expect(await storage.transaction(tx => tx.getLatestUsableConfirmationExpiry(lookup))).toEqual(expiry)
+    })
+
+    it('returns the greatest expiry rather than the newest issuance', async () => {
+      const storage = harness.createStorage()
+      const now = new Date(baseTime)
+      const { contact, subscription } = await seedPendingSubscription(storage, now)
+      await storage.transaction(async tx => {
+        for (const [index, offset] of [60_000, 120_000, 30_000].entries()) {
+          await tx.confirmationTokens.replace({
+            record: tokenRecord(`multiple-${index}`, contact.id, subscription.id, 1,
+              new Date(baseTime + index), new Date(baseTime + offset)),
+            strategy: 'RETAIN_PREVIOUS_UNTIL_EXPIRY', maxActiveTokens: 3, now
+          })
+        }
+      })
+      expect(await storage.transaction(tx => tx.getLatestUsableConfirmationExpiry({
+        subscriptionId: subscription.id, lifecycleGeneration: 1, now
+      }))).toEqual(new Date(baseTime + 120_000))
+    })
+
+    it.each(['expired', 'expires now', 'consumed', 'revoked', 'other subscription', 'other generation'] as const)(
+      'ignores %s tokens even when they have the greatest expiry', async excluded => {
+        const storage = harness.createStorage()
+        const now = new Date(baseTime)
+        const createdAt = new Date(baseTime - 2_000)
+        const { contact, subscription } = await seedPendingSubscription(storage, createdAt)
+        const lookup = { subscriptionId: subscription.id, lifecycleGeneration: 1, now }
+        await storage.transaction(async tx => {
+          const other = await tx.createSubscription({ ...subscription, id: 'other-subscription', audienceKey: 'other' })
+          await tx.confirmationTokens.replace({
+            record: {
+              ...tokenRecord('excluded', contact.id,
+                excluded === 'other subscription' ? other.id : subscription.id,
+                excluded === 'other generation' ? 2 : 1, createdAt,
+                new Date(baseTime + (excluded === 'expired' ? -1 : excluded === 'expires now' ? 0 : 120_000))),
+              consumedAt: excluded === 'consumed' ? createdAt : null,
+              revokedAt: excluded === 'revoked' ? createdAt : null
+            },
+            strategy: 'RETAIN_PREVIOUS_UNTIL_EXPIRY', maxActiveTokens: 2, now: createdAt
+          })
+        })
+        expect(await storage.transaction(tx => tx.getLatestUsableConfirmationExpiry(lookup))).toBeNull()
+        const expiry = new Date(baseTime + 60_000)
+        await storage.transaction(tx => tx.confirmationTokens.replace({
+          record: tokenRecord('usable', contact.id, subscription.id, 1, createdAt, expiry),
+          strategy: 'RETAIN_PREVIOUS_UNTIL_EXPIRY', maxActiveTokens: 2, now: createdAt
+        }))
+        expect(await storage.transaction(tx => tx.getLatestUsableConfirmationExpiry(lookup))).toEqual(expiry)
+      }
+    )
+  })
+}
+
 export function registerStorageAdapterConformance(
   harness: StorageAdapterConformanceHarness
 ): void {
+  registerConfirmationExpiryConformance(harness)
   describe(`${harness.name} storage conformance`, () => {
     const tasks = new Set<Promise<void>>()
 

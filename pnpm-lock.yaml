@@ -82,7 +82,7 @@ importers:
         specifier: ^1.15.11
         version: 1.15.11
       kysely:
-        specifier: ^0.28.17
+        specifier: '>=0.28.17 <0.30.0'
         version: 0.28.17
       nuxt:
         specifier: ^4.5.2

@@ -97,13 +97,14 @@ function checkConsumer(name, dependencies, peers, types, runtime) {
   writeFileSync(join(consumer, 'smoke.mts'), types)
   writeFileSync(join(consumer, 'smoke.mjs'), runtime)
 
-  run('pnpm', ['install', '--no-frozen-lockfile', '--ignore-scripts', '--config.auto-install-peers=false'], consumer)
+  run('pnpm', ['install', '--no-frozen-lockfile', '--ignore-scripts', '--config.auto-install-peers=false',
+    ...(name.startsWith('postgres-') ? ['--strict-peer-dependencies'] : [])], consumer)
   for (const peer of Object.keys(runtimeManifest.peerDependencies ?? {})) {
     if (!Object.hasOwn(peers, peer) && existsSync(join(consumer, 'node_modules', peer))) {
       throw new Error(`Unexpected optional peer in ${name} consumer: ${peer}`)
     }
   }
-  if (name === 'postgres' && existsSync(join(consumer, 'node_modules', 'pg'))) {
+  if (name.startsWith('postgres-') && existsSync(join(consumer, 'node_modules', 'pg'))) {
     throw new Error('PostgreSQL consumer unexpectedly installed the pg driver')
   }
   if (name === 'core' && (
@@ -244,18 +245,24 @@ if (typeof betterNewsletter !== 'function' || typeof memoryAdapter !== 'function
 }
 `)
 
-  checkConsumer('postgres', runtimeDependency, {
-    kysely: runtimeManifest.peerDependencies.kysely
-  }, `
-import { postgresAdapter } from 'better-newsletter/adapters/postgres'
+  // Exercise the oldest supported version, the reported host version, and
+  // the current 0.29 release without duplicating Nuxt or other consumers.
+  for (const version of ['0.28.17', '0.29.5', '0.29.6']) {
+    checkConsumer(`postgres-${version}`, runtimeDependency, { kysely: version }, `
+import { postgresAdapter, postgresRateLimiter, postgresMigration } from 'better-newsletter/adapters/postgres'
 import type { Kysely } from 'kysely'
-declare const db: Kysely<{}>
+declare const db: Kysely<{ hostTable: { id: string } }>
 const storage = postgresAdapter(db)
-void storage
+const limiter = postgresRateLimiter(db)
+const migration = postgresMigration(db)
+void [storage, limiter.consume, migration.plan, migration.apply]
 `, `
-import { postgresAdapter } from 'better-newsletter/adapters/postgres'
-if (typeof postgresAdapter !== 'function') throw new Error('PostgreSQL adapter is missing')
+import { postgresAdapter, postgresRateLimiter, postgresMigration } from 'better-newsletter/adapters/postgres'
+import { sql } from 'kysely'
+if ([postgresAdapter, postgresRateLimiter, postgresMigration].some(value => typeof value !== 'function')
+    || typeof sql !== 'function') throw new Error('PostgreSQL runtime imports are missing')
 `)
+  }
 
   checkConsumer('resend', runtimeDependency, {}, `
 import { resendMailer } from 'better-newsletter/mailers/resend'

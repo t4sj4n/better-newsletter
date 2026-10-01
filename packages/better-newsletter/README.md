@@ -554,7 +554,7 @@ Production storage must provide transaction semantics strong enough to serialize
 
 ## PostgreSQL
 
-The PostgreSQL adapter targets PostgreSQL 14 or newer, Kysely 0.28.x, `pg` 8.x, and Node.js 20.11 or newer. It is implemented with Kysely but supports PostgreSQL specifically; the public adapter does not imply compatibility with other Kysely dialects. If you use the optional `/adapters/postgres` subpath, install a supported Kysely version and a PostgreSQL driver in your application (for example, `pnpm add kysely@^0.28.17 pg@^8`). Kysely is an optional peer dependency; `pg` is only a development dependency of this package. Core-only consumers do not need either. Provide your own configured Kysely database instance and connection pool; the library does not own their lifecycle.
+The PostgreSQL adapter targets PostgreSQL 14 or newer, Kysely 0.28.17 through 0.29.x, `pg` 8.x, and Node.js 20.11 or newer. It is implemented with Kysely but supports PostgreSQL specifically; the public adapter does not imply compatibility with other Kysely dialects. If you use the optional `/adapters/postgres` subpath, install a supported Kysely version and a PostgreSQL driver in your application (for example, `pnpm add kysely@^0.28.17 pg@^8`). Kysely is an optional peer dependency; `pg` is only a development dependency of this package. Core-only consumers do not need either. Kysely 0.29 requires Node.js 22 or newer and TypeScript 5.4 or newer. Provide your own configured Kysely database instance and connection pool; the library does not own their lifecycle.
 
 ### Database migrations
 

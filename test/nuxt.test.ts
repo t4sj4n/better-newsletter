@@ -81,10 +81,13 @@ describe('Nuxt server integration', () => {
       consent: { version: 'v1', consentedAt: new Date() }
     })
     const input = { subscription: { id: subscription.id } }
-    const result = await service.createConfirmationToken(input)
+    const result = await service.createConfirmationToken({ ...input, eventMetadata: { actorId: 'admin-123' } })
     expect(result).not.toBeNull()
     expect(await service.getConfirmationState(input)).toEqual({
       canCreate: true, reason: null, activeTokenExpiresAt: result!.expiresAt
+    })
+    expect((await service.listEvents({ email: 'admin@example.com' })).at(-1)).toMatchObject({
+      type: 'CONFIRMATION_TOKEN_CREATED', metadata: { actorId: 'admin-123' }
     })
     expect(sent).toEqual([])
     expect(await service.confirm({ token: result!.token })).toEqual({ confirmed: true })

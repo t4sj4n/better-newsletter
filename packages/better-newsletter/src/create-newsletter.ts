@@ -1015,7 +1015,11 @@ export function createNewsletterWithSubscriptionBatch(config: BetterNewsletterOp
           subscriptionId: subscription.id,
           type: NEWSLETTER_EVENT_TYPES.CONFIRMATION_TOKEN_CREATED,
           occurredAt: issuedAt,
-          metadata: { audienceKey: subscription.audienceKey, lifecycleGeneration: subscription.lifecycleGeneration }
+          metadata: {
+            ...input.eventMetadata,
+            audienceKey: subscription.audienceKey,
+            lifecycleGeneration: subscription.lifecycleGeneration
+          }
         })
         return { token, expiresAt }
       })

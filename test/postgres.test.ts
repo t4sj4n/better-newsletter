@@ -105,7 +105,9 @@ describe.skipIf(!databaseUrl)('PostgreSQL integration', () => {
     })
     const input = { subscription: { id: subscription.id } }
     const results = await Promise.all(Array.from({ length: 6 }, (_, index) =>
-      (index % 2 ? first : second).createConfirmationToken(input)
+      (index % 2 ? first : second).createConfirmationToken({
+        ...input, eventMetadata: { actorId: `admin-${index}`, audienceKey: 'fake', lifecycleGeneration: 999 }
+      })
     ))
     expect(results.every(Boolean)).toBe(true)
     const stored = await inspectConfirmationTokens()
@@ -120,7 +122,17 @@ describe.skipIf(!databaseUrl)('PostgreSQL integration', () => {
     }
     const digests = await Promise.all(results.map(result => sha256Digest(result!.token)))
     expect(stored.map(t => t.digest).sort()).toEqual(digests.sort())
-    expect((await first.listEvents({ email: 'trusted@example.com' })).filter(e => e.type === 'CONFIRMATION_TOKEN_CREATED')).toHaveLength(6)
+    const createdEvents = (await first.listEvents({ email: 'trusted@example.com' }))
+      .filter(e => e.type === 'CONFIRMATION_TOKEN_CREATED')
+    expect(createdEvents).toHaveLength(6)
+    expect(createdEvents.map(e => e.metadata.actorId).sort()).toEqual(
+      Array.from({ length: 6 }, (_, index) => `admin-${index}`)
+    )
+    for (const event of createdEvents) {
+      expect(event.metadata).toMatchObject({
+        audienceKey: subscription.audienceKey, lifecycleGeneration: subscription.lifecycleGeneration
+      })
+    }
     const confirmed = await Promise.all(results.map(result => first.confirm({ token: result!.token })))
     expect(confirmed.filter(result => result.confirmed)).toHaveLength(1)
   })

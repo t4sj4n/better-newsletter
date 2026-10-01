@@ -62,6 +62,76 @@ describe('trusted confirmation APIs', () => {
     expect(mailer.sendConfirmation).not.toHaveBeenCalled()
   })
 
+  it('persists host audit metadata while keeping system fields authoritative', async () => {
+    const { newsletter, input, subscription, mailer } = await fixture()
+    await newsletter.createConfirmationToken({
+      ...input,
+      eventMetadata: { actorId: 'admin-123', source: 'admin-ui', audienceKey: 'fake', lifecycleGeneration: 999 }
+    })
+    expect((await newsletter.listEvents({ email })).at(-1)).toMatchObject({
+      type: 'CONFIRMATION_TOKEN_CREATED',
+      metadata: {
+        actorId: 'admin-123', source: 'admin-ui',
+        audienceKey: subscription.audienceKey, lifecycleGeneration: subscription.lifecycleGeneration
+      }
+    })
+    expect(mailer.sendConfirmation).not.toHaveBeenCalled()
+  })
+
+  it.each(['REPLACE_PREVIOUS', 'RETAIN_PREVIOUS_UNTIL_EXPIRY'] as const)(
+    'audit metadata does not affect the %s lifecycle', async replacementStrategy => {
+      const { newsletter, options, storage, input, subscription, mailer } = await fixture({
+        replacementStrategy, maxActiveTokens: 2, expiresInMs: 60_000
+      })
+      let next = 0
+      const service = betterNewsletter({ ...options, tokenGenerator: { generate: () => `audit-token-${++next}` } })
+      const first = (await service.createConfirmationToken(input))!
+      const second = (await service.createConfirmationToken({
+        ...input,
+        eventMetadata: {
+          actorId: 'admin-123', status: 'ACTIVE', contactStatus: 'SUPPRESSED',
+          expiresInMs: 1, replacementStrategy: 'fake', maxActiveTokens: 0,
+          lifecycleGeneration: 999, digest: 'fake', token: 'fake'
+        }
+      }))!
+      expect(first.expiresAt).toEqual(new Date(now.getTime() + 60_000))
+      expect(second).toEqual({ token: 'audit-token-2', expiresAt: first.expiresAt })
+      const records = storage.confirmationTokenSnapshot()
+      expect(records[1]).toMatchObject({
+        digest: await sha256Digest(second.token),
+        lifecycleGeneration: subscription.lifecycleGeneration, expiresAt: second.expiresAt
+      })
+      expect(records[0]!.revokedAt != null).toBe(replacementStrategy === 'REPLACE_PREVIOUS')
+      expect(await service.getConfirmationState(input)).toEqual({
+        canCreate: true, reason: null, activeTokenExpiresAt: second.expiresAt
+      })
+      const events = await newsletter.listEvents({ email })
+      expect(events.find(e => e.type === 'CONFIRMATION_TOKEN_CREATED')!.metadata).toEqual({
+        audienceKey: subscription.audienceKey, lifecycleGeneration: subscription.lifecycleGeneration
+      })
+      for (const event of events.filter(e => e.type === 'CONFIRMATION_REPLACED')) {
+        expect(event.metadata).not.toHaveProperty('actorId')
+      }
+      expect(await service.confirm({ token: second.token })).toEqual({ confirmed: true })
+      expect(mailer.sendConfirmation).not.toHaveBeenCalled()
+    }
+  )
+
+  it.each(['ACTIVE', 'UNSUBSCRIBED'] as const)('suppression takes precedence over %s, even with audit metadata', async status => {
+    const { newsletter, storage, subscription, input } = await fixture()
+    await storage.transaction(tx => tx.updateSubscription(subscription.id, { status }))
+    await newsletter.suppressContact({ email, reason: 'admin' })
+    expect(await newsletter.getConfirmationState(input)).toEqual({
+      canCreate: false, reason: 'SUPPRESSED', activeTokenExpiresAt: null
+    })
+    const events = await newsletter.listEvents({ email })
+    expect(await newsletter.createConfirmationToken({
+      ...input, eventMetadata: { canCreate: true, status: 'PENDING_CONFIRMATION', contactStatus: 'ENABLED' }
+    })).toBeNull()
+    expect(await newsletter.listEvents({ email })).toEqual(events)
+    expect(storage.confirmationTokenSnapshot()).toHaveLength(0)
+  })
+
   it('returns null for missing subscriptions', async () => {
     const { newsletter } = await fixture()
     for (const subscription of [{ id: 'missing' }, { email: 'missing@example.com' }]) {
@@ -175,10 +245,13 @@ describe('trusted confirmation APIs', () => {
         }
       }))
     }
-    const result = await betterNewsletter({ ...options, storage: conflicting }).createConfirmationToken(input)
+    const result = await betterNewsletter({ ...options, storage: conflicting }).createConfirmationToken({
+      ...input, eventMetadata: { actorId: 'admin-retry' }
+    })
     expect(failed).toBe(true)
     expect(storage.confirmationTokenSnapshot()).toHaveLength(1)
     expect(storage.confirmationTokenSnapshot()[0]!.digest).toBe(await sha256Digest(result!.token))
     expect(await newsletter.listEvents({ email })).toHaveLength(before.length + 1)
+    expect((await newsletter.listEvents({ email })).at(-1)!.metadata.actorId).toBe('admin-retry')
   })
 })

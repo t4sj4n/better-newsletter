@@ -87,6 +87,19 @@ Both operations also accept `subscription: { email, audience? }`. These are trus
 
 `createConfirmationToken()` returns `{ token, expiresAt }`, or `null` when the subscription does not exist, is ACTIVE or UNSUBSCRIBED, or its Contact is globally suppressed. It rechecks eligibility transactionally, uses the configured token generator, persists the digest through the configured capabilities, binds the current lifecycle generation, and applies `confirmation.expiresInMs`, `replacementStrategy` and `maxActiveTokens` exactly as mail delivery does. It appends `CONFIRMATION_TOKEN_CREATED` and any replacement/expiry events atomically. The raw token is returned only to the caller. This operation sends no mail and does not complete or cancel queued confirmation delivery; subsequent signup/resend delivery can replace the token according to the same configured strategy.
 
+Trusted callers can optionally attach host-specific audit data to the `CONFIRMATION_TOKEN_CREATED` event:
+
+```ts
+const result = await newsletter.createConfirmationToken({
+  subscription: { id: subscriptionId },
+  eventMetadata: {
+    actorId: session.user.id
+  }
+})
+```
+
+`eventMetadata` accepts JSON values and is optional. Better Newsletter does not interpret its contents or use them for authorization, eligibility, expiry, replacement or any other lifecycle decision. Host metadata is merged first; authoritative Better Newsletter fields such as `audienceKey` and `lifecycleGeneration` are set afterwards and cannot be overwritten. Metadata belongs only to the token-created audit event, not replacement or expiry events. `getConfirmationState()` accepts only the subscription lookup and does not need audit metadata.
+
 `getConfirmationState()` returns `null` for a missing subscription, otherwise `{ canCreate, reason, activeTokenExpiresAt }`. `reason` is `null` when eligible, or `ACTIVE`, `UNSUBSCRIBED` or `SUPPRESSED` (suppression takes precedence). The expiry is the latest expiry among unconsumed, unrevoked, unexpired confirmation tokens in the current lifecycle, or `null` when none are usable or confirmation is blocked. No digests or storage records are returned. This is a snapshot; token creation always rechecks eligibility and confirmation always rechecks the lifecycle.
 
 

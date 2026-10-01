@@ -72,6 +72,7 @@ export {
 export type {
   ConfirmationSubscriptionInput,
   ConfirmationState,
+  CreateConfirmationTokenInput,
   CreateConfirmationTokenResult,
   ConfirmInput,
   ConfirmResult,

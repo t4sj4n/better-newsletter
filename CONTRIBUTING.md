@@ -88,23 +88,70 @@ Better Newsletter uses **synchronized versioning** across packages:
 - `better-newsletter`: Published as an unscoped package on npm.
 - `@better-newsletter/cli`: Published under the `@better-newsletter` npm organization. Maintainers must be authenticated with an npm account that has publishing rights in the `better-newsletter` organization on npmjs.com.
 
-### Publishing to npm
+### Publishing to npm (Step-by-Step)
 
-1. Ensure the working tree is clean and `pnpm check` and `node scripts/smoke-pack.mjs` pass.
-2. Bump the versions in `packages/better-newsletter/package.json` and `packages/cli/package.json` (and the `workspace:` dependency in `packages/cli/package.json`).
-3. Publish all distributable packages from the monorepo root in a single command:
+Follow this structured workflow for every release:
 
+#### 1. Prepare Release on a Branch
+Create a release branch from `main`:
 ```bash
-# For prereleases (alpha / beta / release candidates):
-pnpm --filter "./packages/*" publish --tag next --no-git-checks
+git checkout -b release/0.1.0-alpha.4
+```
 
-# For stable releases:
+#### 2. Bump Version Numbers
+Update the version in **two** files (three locations total):
+1. **`packages/better-newsletter/package.json`**:
+   ```json
+   "version": "0.1.0-alpha.4"
+   ```
+2. **`packages/cli/package.json`**:
+   ```json
+   "version": "0.1.0-alpha.4",
+   "dependencies": {
+     "better-newsletter": "workspace:0.1.0-alpha.4"
+   }
+   ```
+*(Note: `examples/basic/package.json` specifies `"latest"` and never needs manual version changes).*
+
+#### 3. Update Lockfile and Verify
+Run `pnpm install` to update `pnpm-lock.yaml`, then run the full test and packaging verification suite:
+```bash
+pnpm install
+pnpm check
+node scripts/smoke-pack.mjs
+```
+
+#### 4. Commit, PR, and Merge to `main`
+```bash
+git commit -am "🔖 Release 0.1.0-alpha.4"
+git push -u origin release/0.1.0-alpha.4
+gh pr create --title "🔖 Release 0.1.0-alpha.4"
+```
+Wait for GitHub Actions CI checks to pass, then squash-merge the PR into `main`.
+
+#### 5. Publish from `main`
+Switch to `main` locally and pull the merged commit:
+```bash
+git checkout main
+git pull origin main
+```
+Publish all distributable packages from the monorepo root in a single command:
+```bash
+# Standard release (updates the official 'latest' version on npm):
 pnpm --filter "./packages/*" publish --no-git-checks
+
+# Or for preview-only releases:
+pnpm --filter "./packages/*" publish --tag next --no-git-checks
 ```
 
 **What this command does automatically:**
 - Resolves package dependencies topologically (`better-newsletter` runtime is published first, `@better-newsletter/cli` second).
 - Executes `prepack` (`pnpm build`) to compile fresh distribution artifacts prior to packaging.
+- Replaces `workspace:` protocol dependencies with exact published version numbers in the distributed tarball.
 - Skips private workspace packages (`playground/`, `examples/basic/`).
 
-4. After the new version is live on npm, update `examples/basic/package.json` to the published version.
+#### 6. Tag the Release in Git
+```bash
+git tag v0.1.0-alpha.4
+git push origin v0.1.0-alpha.4
+```

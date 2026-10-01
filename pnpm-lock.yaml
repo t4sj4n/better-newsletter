@@ -94,7 +94,7 @@ importers:
   packages/cli:
     dependencies:
       better-newsletter:
-        specifier: workspace:0.1.0-alpha.3
+        specifier: workspace:0.1.0-beta.0
         version: link:../better-newsletter
       jiti:
         specifier: ^2.7.0

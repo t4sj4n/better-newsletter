@@ -18,6 +18,8 @@ export const NEWSLETTER_EVENT_TYPES = {
   SIGNED_UP: 'SIGNED_UP',
   RESUBSCRIBED: 'RESUBSCRIBED',
   CONFIRMATION_REQUESTED: 'CONFIRMATION_REQUESTED',
+  /** A token created by a trusted caller without sending mail. */
+  CONFIRMATION_TOKEN_CREATED: 'CONFIRMATION_TOKEN_CREATED',
   CONFIRMATION_SENT: 'CONFIRMATION_SENT',
   CONFIRMATION_SEND_FAILED: 'CONFIRMATION_SEND_FAILED',
   /** A provider result from an attempt that no longer owns the delivery work. */

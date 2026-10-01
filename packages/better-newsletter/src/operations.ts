@@ -97,6 +97,24 @@ export type SubscriptionLookup =
     readonly id?: never
   }
 
+/** Trusted server-side lookup; the host must authorize access. */
+export interface ConfirmationSubscriptionInput {
+  readonly subscription: SubscriptionLookup
+}
+
+export interface CreateConfirmationTokenResult {
+  readonly token: string
+  readonly expiresAt: Date
+}
+
+export interface ConfirmationState {
+  readonly canCreate: boolean
+  /** Null when confirmation is allowed. */
+  readonly reason: 'ACTIVE' | 'UNSUBSCRIBED' | 'SUPPRESSED' | null
+  /** Latest expiry among usable tokens in the current lifecycle; null when ineligible. */
+  readonly activeTokenExpiresAt: Date | null
+}
+
 export interface LinkSubjectInput {
   readonly email: string
   readonly subject: ExternalSubject
@@ -134,6 +152,10 @@ export interface NewsletterService {
   resendConfirmation(
     input: ResendConfirmationInput
   ): Promise<PublicRequestResult>
+  /** Trusted server-only operation. Returns null if missing or ineligible; never sends mail. */
+  createConfirmationToken(input: ConfirmationSubscriptionInput): Promise<CreateConfirmationTokenResult | null>
+  /** Trusted server-only introspection. Returns null if the subscription does not exist. */
+  getConfirmationState(input: ConfirmationSubscriptionInput): Promise<ConfirmationState | null>
   confirm(input: ConfirmInput): Promise<ConfirmResult>
   unsubscribe(input: UnsubscribeInput): Promise<UnsubscribeResult>
   unsubscribeAll(input: UnsubscribeInput): Promise<UnsubscribeResult>

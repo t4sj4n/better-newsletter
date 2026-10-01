@@ -104,6 +104,8 @@ A new subscription starts as pending confirmation. The public signup response do
 await newsletter.confirm({ token })
 ```
 
+Trusted administrative workflows can use `createConfirmationToken({ subscription: { id } })` to generate a confirmation token without sending mail and `getConfirmationState({ subscription: { id } })` to inspect eligibility and usable token expiry. Both are available through Nuxt's `useBetterNewsletter(event)` in authenticated host routes. See the [trusted confirmation API documentation](packages/better-newsletter/README.md#trusted-administrative-confirmation-links).
+
 Create an unsubscribe capability from trusted server code and pass it to the unsubscribe action:
 
 ```ts

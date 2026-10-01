@@ -66,6 +66,30 @@ Repeated public signup is neutral and idempotent:
 
 Use the dedicated `resendConfirmation()` operation when a new confirmation message is needed. Abuse throttling and confirmation-token replacement are handled by the security and lifecycle configuration described below.
 
+### Trusted administrative confirmation links
+
+Authenticated server code can create a confirmation link without sending mail:
+
+```ts
+const input = { subscription: { id: subscriptionId } }
+const state = await newsletter.getConfirmationState(input)
+if (state?.canCreate) {
+  const result = await newsletter.createConfirmationToken(input)
+  if (result) {
+    const url = new URL('/newsletter/confirm', applicationOrigin)
+    url.searchParams.set('token', result.token)
+    // Display the link only to an authorized administrator.
+  }
+}
+```
+
+Both operations also accept `subscription: { email, audience? }`. These are trusted server-only APIs: the host must authorize access to the subscription and decide where links are displayed. Do not expose them through anonymous routes. In a host-owned authenticated Nuxt server route, obtain the same service with `const newsletter = await useBetterNewsletter(event)` from `better-newsletter/nuxt/server`. The module does not register administrative routes or expose these operations in its browser client.
+
+`createConfirmationToken()` returns `{ token, expiresAt }`, or `null` when the subscription does not exist, is ACTIVE or UNSUBSCRIBED, or its Contact is globally suppressed. It rechecks eligibility transactionally, uses the configured token generator, persists the digest through the configured capabilities, binds the current lifecycle generation, and applies `confirmation.expiresInMs`, `replacementStrategy` and `maxActiveTokens` exactly as mail delivery does. It appends `CONFIRMATION_TOKEN_CREATED` and any replacement/expiry events atomically. The raw token is returned only to the caller. This operation sends no mail and does not complete or cancel queued confirmation delivery; subsequent signup/resend delivery can replace the token according to the same configured strategy.
+
+`getConfirmationState()` returns `null` for a missing subscription, otherwise `{ canCreate, reason, activeTokenExpiresAt }`. `reason` is `null` when eligible, or `ACTIVE`, `UNSUBSCRIBED` or `SUPPRESSED` (suppression takes precedence). The expiry is the latest expiry among unconsumed, unrevoked, unexpired confirmation tokens in the current lifecycle, or `null` when none are usable or confirmation is blocked. No digests or storage records are returned. This is a snapshot; token creation always rechecks eligibility and confirmation always rechecks the lifecycle.
+
+
 ## Creating a service
 
 The lifecycle is framework- and provider-neutral. Storage, delivery and capability behavior are injected:

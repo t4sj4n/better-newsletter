@@ -72,6 +72,24 @@ function configuration() {
 }
 
 describe('Nuxt server integration', () => {
+  it('exposes trusted confirmation APIs through the request service without sending mail', async () => {
+    const { config, sent } = configuration()
+    const event = createEvent(new IncomingMessage(new Socket()), new ServerResponse(new IncomingMessage(new Socket())))
+    const service = await useBetterNewsletter(event, config)
+    const subscription = await service.importSubscription({
+      email: 'admin@example.com', status: 'PENDING_CONFIRMATION',
+      consent: { version: 'v1', consentedAt: new Date() }
+    })
+    const input = { subscription: { id: subscription.id } }
+    const result = await service.createConfirmationToken(input)
+    expect(result).not.toBeNull()
+    expect(await service.getConfirmationState(input)).toEqual({
+      canCreate: true, reason: null, activeTokenExpiresAt: result!.expiresAt
+    })
+    expect(sent).toEqual([])
+    expect(await service.confirm({ token: result!.token })).toEqual({ confirmed: true })
+  })
+
   it('rejects malformed requests, missing consent, and non-public audiences before storage', async () => {
     const { config, storage } = configuration()
     const http = await fixture(config)

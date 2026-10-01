@@ -8,6 +8,7 @@ import {
   SUBSCRIPTION_STATUSES,
   betterNewsletter
 } from '../packages/better-newsletter/src/index.js'
+import { createSecureCapabilities, sha256Digest } from '../packages/better-newsletter/src/security.js'
 import { memoryCapabilities } from '../packages/better-newsletter/src/adapters/memory.js'
 import {
   listEligibleSubscriptions,
@@ -86,6 +87,43 @@ describe.skipIf(!databaseUrl)('PostgreSQL integration', () => {
       attemptCount: row.attempt_count
     }))
   }
+
+  it('serializes trusted token creation across PostgreSQL services with digest-only persistence', async () => {
+    const storage = postgresAdapter(db)
+    const options = {
+      storage,
+      capabilities: createSecureCapabilities({ hmacSecret: '0123456789abcdef0123456789abcdef' }),
+      mailer: { async sendConfirmation(): Promise<never> { throw new Error('Trusted issuance must not send mail') } },
+      confirmation: { replacementStrategy: 'REPLACE_PREVIOUS' as const, expiresInMs: 60_000 },
+      transactionMaxAttempts: 20
+    }
+    const first = betterNewsletter(options)
+    const second = betterNewsletter(options)
+    const subscription = await first.importSubscription({
+      email: 'trusted@example.com', status: 'PENDING_CONFIRMATION',
+      consent: { version: 'v1', consentedAt: new Date() }
+    })
+    const input = { subscription: { id: subscription.id } }
+    const results = await Promise.all(Array.from({ length: 6 }, (_, index) =>
+      (index % 2 ? first : second).createConfirmationToken(input)
+    ))
+    expect(results.every(Boolean)).toBe(true)
+    const stored = await inspectConfirmationTokens()
+    expect(stored).toHaveLength(6)
+    const active = stored.filter(t => t.revokedAt == null && t.consumedAt == null)
+    expect(active).toHaveLength(1)
+    expect(await first.getConfirmationState(input)).toEqual({
+      canCreate: true, reason: null, activeTokenExpiresAt: active[0]!.expiresAt
+    })
+    for (const result of results) {
+      expect(stored.some(t => t.digest === result!.token)).toBe(false)
+    }
+    const digests = await Promise.all(results.map(result => sha256Digest(result!.token)))
+    expect(stored.map(t => t.digest).sort()).toEqual(digests.sort())
+    expect((await first.listEvents({ email: 'trusted@example.com' })).filter(e => e.type === 'CONFIRMATION_TOKEN_CREATED')).toHaveLength(6)
+    const confirmed = await Promise.all(results.map(result => first.confirm({ token: result!.token })))
+    expect(confirmed.filter(result => result.confirmed)).toHaveLength(1)
+  })
 
   beforeAll(async () => {
     await admin.query(`CREATE SCHEMA "${schema}"`)

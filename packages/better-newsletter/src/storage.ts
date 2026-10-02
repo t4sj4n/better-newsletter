@@ -65,6 +65,18 @@ export type SubscriptionPatch = Partial<Pick<
   | 'updatedAt'
 >>
 
+/** Internal sequence values are exact positive decimal strings, never public event fields. */
+export interface SubscriptionEventQuery {
+  readonly subscriptionId: string
+  readonly beforeSequence?: string
+  readonly limit: number
+}
+
+export interface SequencedNewsletterEvent {
+  readonly event: NewsletterEvent
+  readonly sequence: string
+}
+
 export interface NewsletterStorageTransaction {
   getContactByEmail(email: string): Promise<Contact | null>
   getContactById(id: string): Promise<Contact | null>
@@ -92,6 +104,8 @@ export interface NewsletterStorageTransaction {
   countSoftBouncesAfter(contactId: string, occurredAfter: Date | null, limit: number): Promise<number>
   /** Returns events in append order, including events sharing a timestamp. */
   listEvents(contactId: string): Promise<readonly NewsletterEvent[]>
+  /** Bounded newest-first append order; sequence must remain stable after deletions. */
+  listSubscriptionEvents(input: SubscriptionEventQuery): Promise<readonly SequencedNewsletterEvent[]>
 
   /** Latest expiry of an unconsumed, unrevoked confirmation token with expiresAt > now. */
   getLatestUsableConfirmationExpiry(input: {

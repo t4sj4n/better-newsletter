@@ -1,3 +1,4 @@
+import { decodeEventCursor, encodeEventCursor, eventPageLimit } from './event-pagination.js'
 import type {
   Clock,
   IdGenerator,
@@ -1310,6 +1311,30 @@ export function createNewsletterWithSubscriptionBatch(config: BetterNewsletterOp
         const contact = await resolveContact(transaction, input)
         if (contact == null) return []
         return transaction.listEvents(contact.id)
+      })
+    },
+
+    async listSubscriptionEvents(input) {
+      const limit = eventPageLimit(input.limit)
+      const cursor = input.cursor === undefined ? null : decodeEventCursor(input.cursor)
+      return runTransaction(async transaction => {
+        const subscription = await resolveSubscription(transaction, input.subscription)
+        if (subscription == null) return { events: [], nextCursor: null }
+        if (cursor != null && cursor.subscriptionId !== subscription.id) {
+          throw new NewsletterError(NEWSLETTER_ERROR_CODES.INVALID_PAGINATION, 'Cursor does not match the subscription.')
+        }
+        const rows = await transaction.listSubscriptionEvents({
+          subscriptionId: subscription.id,
+          ...(cursor == null ? {} : { beforeSequence: cursor.sequence }),
+          limit: limit + 1
+        })
+        const page = rows.slice(0, limit)
+        return {
+          events: page.map(row => row.event),
+          nextCursor: rows.length > limit
+            ? encodeEventCursor(subscription.id, page[page.length - 1]!.sequence)
+            : null
+        }
       })
     },
 

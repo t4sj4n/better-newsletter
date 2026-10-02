@@ -89,6 +89,8 @@ export type {
   ResendConfirmationInput,
   SubscribeInput,
   SubscriptionLookup,
+  ListSubscriptionEventsInput,
+  SubscriptionEventsPage,
   SuppressContactInput,
   UnsubscribeInput,
   UnsubscribeResult,

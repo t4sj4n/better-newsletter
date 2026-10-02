@@ -24,6 +24,8 @@ interface MemoryState {
   subscriptions: Map<string, Subscription>
   subscriptionByContactAudience: Map<string, string>
   events: NewsletterEvent[]
+  eventSequences: Map<string, bigint>
+  nextEventSequence: bigint
   providerEvents: Map<string, string>
   suppressionKeys: Set<string>
   confirmationTokens: Map<string, ConfirmationTokenRecord>
@@ -46,6 +48,8 @@ export class MemoryNewsletterStorage implements NewsletterStorage {
     subscriptions: new Map(),
     subscriptionByContactAudience: new Map(),
     events: [],
+    eventSequences: new Map(),
+    nextEventSequence: 1n,
     providerEvents: new Map(),
     suppressionKeys: new Set(),
     confirmationTokens: new Map()
@@ -101,6 +105,7 @@ export class MemoryNewsletterStorage implements NewsletterStorage {
           .map(clone),
       appendEvent: async event => {
         this.state.events.push(clone(event))
+        this.state.eventSequences.set(event.id, this.state.nextEventSequence++)
       },
       claimProviderEvent: async (provider, eventId, contactId) => {
         const key = JSON.stringify([provider, eventId])
@@ -137,6 +142,19 @@ export class MemoryNewsletterStorage implements NewsletterStorage {
         this.state.events
           .filter(event => event.contactId === contactId)
           .map(clone),
+      listSubscriptionEvents: async input => {
+        const rows = []
+        const boundary = input.beforeSequence == null ? null : BigInt(input.beforeSequence)
+        for (let index = this.state.events.length - 1; index >= 0; index -= 1) {
+          const event = this.state.events[index]!
+          if (event.subscriptionId !== input.subscriptionId) continue
+          const sequence = this.state.eventSequences.get(event.id)!
+          if (boundary != null && sequence >= boundary) continue
+          rows.push({ event: clone(event), sequence: sequence.toString() })
+          if (rows.length >= input.limit) break
+        }
+        return rows
+      },
       getLatestUsableConfirmationExpiry: async input => {
         let latest: Date | null = null
         for (const token of this.state.confirmationTokens.values()) {
@@ -183,6 +201,9 @@ export class MemoryNewsletterStorage implements NewsletterStorage {
           if (subscription.contactId !== contactId) continue
           this.state.subscriptions.delete(id)
           this.state.subscriptionByContactAudience.delete(subscriptionKey(contactId, subscription.audienceKey))
+        }
+        for (const event of this.state.events) {
+          if (event.contactId === contactId) this.state.eventSequences.delete(event.id)
         }
         this.state.events = this.state.events.filter(event => event.contactId !== contactId)
         for (const [digest, token] of this.state.confirmationTokens) {

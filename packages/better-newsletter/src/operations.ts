@@ -97,6 +97,19 @@ export type SubscriptionLookup =
     readonly id?: never
   }
 
+/** Trusted server-side history; the host must authorize access. */
+export interface ListSubscriptionEventsInput {
+  readonly subscription: SubscriptionLookup
+  /** Defaults to 50; must be an integer between 1 and 100. */
+  readonly limit?: number
+  readonly cursor?: string
+}
+
+export interface SubscriptionEventsPage {
+  readonly events: readonly NewsletterEvent[]
+  readonly nextCursor: string | null
+}
+
 /** Trusted server-side lookup; the host must authorize access. */
 export interface ConfirmationSubscriptionInput {
   readonly subscription: SubscriptionLookup
@@ -180,6 +193,8 @@ export interface NewsletterService {
   getSubscription(input: SubscriptionLookup): Promise<Subscription | null>
   listSubscriptions(input: ContactLookup): Promise<readonly Subscription[]>
   listEvents(input: ContactLookup): Promise<readonly NewsletterEvent[]>
+  /** Trusted server-only history in newest-first append order, across all generations. */
+  listSubscriptionEvents(input: ListSubscriptionEventsInput): Promise<SubscriptionEventsPage>
   /** Trusted server-side operation; never expose this through a public route. */
   exportContactData(input: ContactLookup): Promise<ContactDataExport | null>
   /** Trusted server-side operation, independent of public unsubscribe. */

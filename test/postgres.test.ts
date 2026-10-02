@@ -177,6 +177,55 @@ describe.skipIf(!databaseUrl)('PostgreSQL integration', () => {
   describe('PostgreSQL-specific behavior', () => {
     beforeEach(reset)
 
+    it('paginates exact bigint sequences using the existing bounded index query', async () => {
+      const storage = postgresAdapter(db)
+      const service = betterNewsletter({
+        storage, capabilities: memoryCapabilities(),
+        mailer: { async sendConfirmation() { return { accepted: true } } }
+      })
+      const subscription = await service.importSubscription({
+        email: 'bigint@example.com', status: 'PENDING_CONFIRMATION',
+        consent: { version: 'v1', consentedAt: new Date() }
+      })
+      await pool.query("ALTER TABLE newsletter_events ALTER COLUMN sequence RESTART WITH 9007199254740993")
+      await storage.transaction(async transaction => {
+        for (let index = 0; index < 4; index += 1) {
+          await transaction.appendEvent({
+            id: `bigint-${index}`, contactId: subscription.contactId, subscriptionId: subscription.id,
+            type: NEWSLETTER_EVENT_TYPES.SIGNED_UP, occurredAt: new Date('2026-09-28T08:00:00Z'), metadata: {}
+          })
+        }
+      })
+      const first = await service.listSubscriptionEvents({ subscription: { id: subscription.id }, limit: 2 })
+      expect(first.events.map(event => event.id)).toEqual(['bigint-3', 'bigint-2'])
+      const second = await service.listSubscriptionEvents({
+        subscription: { id: subscription.id }, limit: 2, cursor: first.nextCursor!
+      })
+      expect(second.events.map(event => event.id)).toEqual(['bigint-1', 'bigint-0'])
+      const last = await service.listSubscriptionEvents({
+        subscription: { id: subscription.id }, limit: 2, cursor: second.nextCursor!
+      })
+      expect(last.events).toHaveLength(1)
+      expect(last.nextCursor).toBeNull()
+      const plan = await pool.connect()
+      try {
+        await plan.query('BEGIN')
+        await plan.query('SET LOCAL enable_seqscan = off')
+        const result = await plan.query<{ 'QUERY PLAN': string }>(
+          `EXPLAIN SELECT *, sequence::text AS cursor_sequence FROM newsletter_events
+           WHERE subscription_id = $1 AND sequence < $2::bigint ORDER BY sequence DESC LIMIT $3`,
+          [subscription.id, '9007199254740995', 3]
+        )
+        const text = result.rows.map(row => row['QUERY PLAN']).join('\n')
+        expect(text).toContain('Limit')
+        expect(text).toContain('newsletter_events_subscription_sequence_idx')
+        expect(text).toContain('sequence <')
+      } finally {
+        await plan.query('ROLLBACK')
+        plan.release()
+      }
+    })
+
     it('exports and anonymizes persisted contact data without leaving direct metadata or tokens', async () => {
       const storage = postgresAdapter(db)
       const now = new Date('2026-09-29T08:00:00.000Z')

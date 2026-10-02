@@ -213,6 +213,115 @@ export function registerStorageAdapterConformance(
   describe(`${harness.name} storage conformance`, () => {
     const tasks = new Set<Promise<void>>()
 
+    it('pages subscription lifetime events in append order while preserving the full export', async () => {
+      const storage = harness.createStorage()
+      const now = new Date(baseTime)
+      const { contact, subscription } = await seedPendingSubscription(storage, now)
+      const service = betterNewsletter({
+        storage, capabilities: createSecureCapabilities({ hmacSecret: secret }),
+        defaultAudience: 'default', mailer: { async sendConfirmation() { return { accepted: true } } }
+      })
+      const input = { subscription: { id: subscription.id } }
+      expect(await service.listSubscriptionEvents(input)).toEqual({ events: [], nextCursor: null })
+      expect(await service.listSubscriptionEvents({ subscription: { id: 'missing' } }))
+        .toEqual({ events: [], nextCursor: null })
+      await storage.transaction(async transaction => {
+        await transaction.createSubscription({ ...subscription, id: 'other-audience', audienceKey: 'other' })
+        for (let index = 0; index < 105; index += 1) {
+          await transaction.appendEvent({
+            id: `history-${index}`, contactId: contact.id, subscriptionId: subscription.id,
+            type: NEWSLETTER_EVENT_TYPES.SIGNED_UP, occurredAt: now,
+            metadata: { lifecycleGeneration: index < 60 ? 1 : 2 }
+          })
+        }
+        await transaction.updateSubscription(subscription.id, { lifecycleGeneration: 2 })
+        await transaction.appendEvent({
+          id: 'other-history', contactId: contact.id, subscriptionId: 'other-audience',
+          type: NEWSLETTER_EVENT_TYPES.SIGNED_UP, occurredAt: now, metadata: {}
+        })
+        await transaction.appendEvent({
+          id: 'contact-history', contactId: contact.id, subscriptionId: null,
+          type: NEWSLETTER_EVENT_TYPES.SUPPRESSED, occurredAt: now, metadata: {}
+        })
+      })
+      const first = await service.listSubscriptionEvents({ subscription: { email } })
+      expect(first.events.map(event => event.id)).toEqual(
+        Array.from({ length: 50 }, (_, index) => `history-${104 - index}`)
+      )
+      expect(first.nextCursor).toEqual(expect.any(String))
+      expect(first.events.every(event => !('sequence' in event))).toBe(true)
+      const second = await service.listSubscriptionEvents({ ...input, cursor: first.nextCursor! })
+      expect(second.events.map(event => event.id)).toEqual(
+        Array.from({ length: 50 }, (_, index) => `history-${54 - index}`)
+      )
+      const final = await service.listSubscriptionEvents({ ...input, cursor: second.nextCursor! })
+      expect(final.events.map(event => event.id)).toEqual(['history-4', 'history-3', 'history-2', 'history-1', 'history-0'])
+      expect(final.nextCursor).toBeNull()
+      expect((await service.listSubscriptionEvents({ ...input, limit: 100 })).events).toHaveLength(100)
+      expect((await service.listSubscriptionEvents({ ...input, limit: 1 })).events[0]?.id).toBe('history-104')
+      expect((await service.listSubscriptionEvents({ subscription: { email, audience: 'other' } })).events)
+        .toMatchObject([{ id: 'other-history' }])
+      const otherDefaultService = betterNewsletter({
+        storage, defaultAudience: 'other', capabilities: createSecureCapabilities({ hmacSecret: secret }),
+        mailer: { async sendConfirmation() { return { accepted: true } } }
+      })
+      expect((await otherDefaultService.listSubscriptionEvents({ subscription: { email } })).events)
+        .toMatchObject([{ id: 'other-history' }])
+      expect(await service.listSubscriptionEvents({ subscription: { email: 'missing@example.com' } }))
+        .toEqual({ events: [], nextCursor: null })
+      const exported = await service.exportContactData({ id: contact.id })
+      expect(exported?.events).toHaveLength(107)
+      expect(exported?.events).toEqual(await service.listEvents({ id: contact.id }))
+      for (const limit of [0, -1, 101, 1.5, NaN, Infinity, null, '1']) {
+        await expect(service.listSubscriptionEvents({ ...input, limit: limit as number }))
+          .rejects.toMatchObject({ code: 'INVALID_PAGINATION' })
+      }
+      for (const cursor of ['', 'bad!', 'e30', null, 123]) {
+        await expect(service.listSubscriptionEvents({ ...input, cursor: cursor as string }))
+          .rejects.toMatchObject({ code: 'INVALID_PAGINATION' })
+      }
+      await expect(service.listSubscriptionEvents({ subscription: { id: 'other-audience' }, cursor: first.nextCursor! }))
+        .rejects.toMatchObject({ code: 'INVALID_PAGINATION' })
+      expect(await service.listSubscriptionEvents({ subscription: { id: 'missing' }, cursor: first.nextCursor! }))
+        .toEqual({ events: [], nextCursor: null })
+    })
+
+    it('keeps older cursor pages stable after appends and erasure of unrelated events', async () => {
+      const storage = harness.createStorage()
+      const now = new Date(baseTime)
+      const { contact, subscription } = await seedPendingSubscription(storage, now)
+      const service = betterNewsletter({
+        storage, capabilities: createSecureCapabilities({ hmacSecret: secret }),
+        mailer: { async sendConfirmation() { return { accepted: true } } }
+      })
+      const input = { subscription: { id: subscription.id }, limit: 2 }
+      await storage.transaction(async transaction => {
+        await transaction.createContact({ ...contact, id: 'unrelated', email: 'other@example.com' })
+        for (let index = 0; index < 6; index += 1) {
+          await transaction.appendEvent({
+            id: `stable-${index}`, contactId: contact.id, subscriptionId: subscription.id,
+            type: NEWSLETTER_EVENT_TYPES.SIGNED_UP, occurredAt: now, metadata: {}
+          })
+          await transaction.appendEvent({
+            id: `unrelated-${index}`, contactId: 'unrelated', subscriptionId: null,
+            type: NEWSLETTER_EVENT_TYPES.SUPPRESSED, occurredAt: now, metadata: {}
+          })
+        }
+      })
+      const first = await service.listSubscriptionEvents(input)
+      expect(first.events.map(event => event.id)).toEqual(['stable-5', 'stable-4'])
+      await service.eraseContactData({ contact: { id: 'unrelated' }, strategy: 'DELETE' })
+      await storage.transaction(transaction => transaction.appendEvent({
+        id: 'newest', contactId: contact.id, subscriptionId: subscription.id,
+        type: NEWSLETTER_EVENT_TYPES.SIGNED_UP, occurredAt: now, metadata: {}
+      }))
+      const second = await service.listSubscriptionEvents({ ...input, cursor: first.nextCursor! })
+      expect(second.events.map(event => event.id)).toEqual(['stable-3', 'stable-2'])
+      const final = await service.listSubscriptionEvents({ ...input, cursor: second.nextCursor! })
+      expect(final.events.map(event => event.id)).toEqual(['stable-1', 'stable-0'])
+      expect(final.nextCursor).toBeNull()
+    })
+
     beforeEach(async () => {
       await harness.reset()
     })

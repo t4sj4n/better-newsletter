@@ -197,6 +197,27 @@ Adapters report unique-constraint violations, serialization failures, and deadlo
 
 These are breaking pre-release contract changes: adapters must persist both generation fields, `Subscription.confirmationDelivery`, and the generation on confirmation-token records. The nonce-store API and legacy opaque unsubscribe replacement hooks have been removed. Existing `bn1` links are not accepted; generation-bound links use `bn2` with singular `hmacSecret` or `bn3` with versioned `secrets`.
 
+### Trusted subscription event history
+
+Use `listSubscriptionEvents()` from authorized server code, including Nuxt's `useBetterNewsletter(event)`, to browse one Subscription's complete lifetime across lifecycle generations:
+
+```ts
+const page = await newsletter.listSubscriptionEvents({
+  subscription: { id: subscriptionId },
+  limit: 50,
+  // cursor: previousPage.nextCursor ?? undefined
+})
+// { events: readonly NewsletterEvent[], nextCursor: string | null }
+```
+
+The existing Subscription lookup also accepts `{ email, audience? }`; an omitted audience uses the configured default. Events appear newest first by append sequence, even when timestamps are identical. Other audiences and Contact-wide events with no Subscription ID are excluded. A missing Subscription returns `{ events: [], nextCursor: null }`.
+
+The limit defaults to 50 and must be an integer from 1 to 100. Pass `nextCursor` unchanged to continue with the same Subscription; `null` means no further page exists. Invalid limits, malformed cursors, unsupported versions, and cursors for another Subscription throw `INVALID_PAGINATION`. Cursors are versioned, opaque browsing positions, not authorization capabilities. The host must authorize every request; no public Nuxt route or browser-client method is registered.
+
+New events above a returned page do not shift subsequent older pages. Erasure may remove history between requests; pagination does not provide a repeatable snapshot or change-data-capture stream. `listEvents(ContactLookup)` still returns the complete Contact history in append order, and `exportContactData()` still exports all events across every Subscription and Contact-wide events without pagination.
+
+Custom storage adapters must implement `transaction.listSubscriptionEvents({ subscriptionId, beforeSequence?, limit })`. Return bounded rows of `{ event, sequence }` in descending append sequence with an exclusive `sequence < beforeSequence` boundary. Sequence values are exact positive decimal strings; persist them independently of array positions and keep them stable after deletions. The core requests one extra row to determine whether another page exists. PostgreSQL uses its existing partial Subscription/sequence index and requires no schema migration.
+
 ### Scanner-safe web flows
 
 Core methods are mutation methods. Framework integrations should use a safe landing page and an explicit mutation:

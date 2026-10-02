@@ -439,6 +439,16 @@ function transactionAdapter<DB>(trx: Transaction<DB>): NewsletterStorageTransact
       `.execute(trx)
       return result.rows.map(eventFromRow)
     },
+    async listSubscriptionEvents(input) {
+      const boundary = input.beforeSequence == null
+        ? sql`` : sql`AND sequence < ${input.beforeSequence}::bigint`
+      const result = await sql<EventRow & { cursor_sequence: string }>`
+        SELECT *, sequence::text AS cursor_sequence FROM newsletter_events
+        WHERE subscription_id = ${input.subscriptionId} ${boundary}
+        ORDER BY sequence DESC LIMIT ${input.limit}
+      `.execute(trx)
+      return result.rows.map(row => ({ event: eventFromRow(row), sequence: row.cursor_sequence }))
+    },
     async getLatestUsableConfirmationExpiry(input) {
       const result = await sql<{ expires_at: Date | null }>`
         SELECT max(expires_at) AS expires_at FROM newsletter_tokens

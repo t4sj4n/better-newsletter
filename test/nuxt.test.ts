@@ -89,6 +89,9 @@ describe('Nuxt server integration', () => {
     expect((await service.listEvents({ email: 'admin@example.com' })).at(-1)).toMatchObject({
       type: 'CONFIRMATION_TOKEN_CREATED', metadata: { actorId: 'admin-123' }
     })
+    const page = await service.listSubscriptionEvents({ ...input, limit: 1 })
+    expect(page.events[0]).toMatchObject({ type: 'CONFIRMATION_TOKEN_CREATED' })
+    expect(page.nextCursor).toEqual(expect.any(String))
     expect(sent).toEqual([])
     expect(await service.confirm({ token: result!.token })).toEqual({ confirmed: true })
   })

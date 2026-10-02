@@ -42,6 +42,7 @@ describe('betterNewsletter', () => {
       'linkSubject',
       'listEvents',
       'listPreferences',
+      'listSubscriptionEvents',
       'listSubscriptions',
       'processFeedback',
       'removeRetainedSuppression',

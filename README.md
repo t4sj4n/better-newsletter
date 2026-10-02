@@ -108,6 +108,8 @@ await newsletter.confirm({ token })
 
 Trusted administrative workflows can use `createConfirmationToken({ subscription: { id } })` to generate a confirmation token without sending mail and `getConfirmationState({ subscription: { id } })` to inspect eligibility and usable token expiry. Both are available through Nuxt's `useBetterNewsletter(event)` in authenticated host routes. See the [trusted confirmation API documentation](packages/better-newsletter/README.md#trusted-administrative-confirmation-links).
 
+Trusted callers can browse a Subscription's lifetime with `listSubscriptionEvents({ subscription: { id }, limit: 50, cursor })`. It returns newest-first events and an opaque continuation cursor, with equivalent Memory/PostgreSQL behavior. See the [subscription history documentation](packages/better-newsletter/README.md#trusted-subscription-event-history).
+
 Create an unsubscribe capability from trusted server code and pass it to the unsubscribe action:
 
 ```ts

@@ -792,7 +792,7 @@ For production, replace memory adapters with `postgresAdapter(db)` and `postgres
 
 ### TypeScript and large Nitro route tables
 
-Large applications can hit `TS2589` in Nitro's typed route matcher when a fetch request generic covers the entire route table. This can also happen without Better Newsletter. With Nuxt 4.5.2 / Nitro 2.13.4, narrow the request type at affected calls, especially when supplying an explicit response type:
+Large applications can hit `TS2589` in Nitro's typed route matcher when a fetch request generic covers the entire route table. This can also happen without Better Newsletter. With the investigated Nuxt/Nitro signatures, narrow the request type at affected calls, especially when supplying an explicit response type:
 
 ```ts
 import type { NuxtError } from '#app'

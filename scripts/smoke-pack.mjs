@@ -98,7 +98,7 @@ function checkConsumer(name, dependencies, peers, types, runtime) {
   writeFileSync(join(consumer, 'smoke.mjs'), runtime)
 
   run('pnpm', ['install', '--no-frozen-lockfile', '--ignore-scripts', '--config.auto-install-peers=false',
-    ...(name.startsWith('postgres-') ? ['--strict-peer-dependencies'] : [])], consumer)
+    ...(name.startsWith('postgres-') || name === 'cli' ? ['--strict-peer-dependencies'] : [])], consumer)
   for (const peer of Object.keys(runtimeManifest.peerDependencies ?? {})) {
     if (!Object.hasOwn(peers, peer) && existsSync(join(consumer, 'node_modules', peer))) {
       throw new Error(`Unexpected optional peer in ${name} consumer: ${peer}`)
@@ -156,6 +156,9 @@ export async function resolve(specifier, context, nextResolve) {
     './security', './storage', './db/migration', './nuxt', './nuxt/server',
     './nuxt/client', './package.json'
   ], ['package/migrations/postgres/001_newsletter.sql'])
+  if (runtime.packed.peerDependencies?.kysely !== '>=0.28.17 <0.30.0') {
+    throw new Error('Packed runtime must declare the supported Kysely peer range')
+  }
   if (runtime.packed.bin || runtime.packed.dependencies?.jiti
       || [...runtime.files].some(file => /^package\/dist\/cli(?:\/|\.|$)/u.test(file))) {
     throw new Error('Runtime package must not include the CLI or jiti')
@@ -303,20 +306,111 @@ if (typeof module.default !== 'function' || !Object.keys(server).length ||
   const cliConsumer = checkConsumer('cli', {
     ...runtimeDependency,
     '@better-newsletter/cli': `file:${cliTarball}`
-  }, {}, `
+  }, {
+    kysely: '0.29.5',
+    pg: rootManifest.devDependencies.pg,
+    '@nuxt/kit': '4.5.2',
+    h3: runtimeManifest.peerDependencies.h3,
+    nuxt: '4.5.2'
+  }, `
 import type { NewsletterMigrations } from 'better-newsletter/db/migration'
+import type { CreateConfirmationTokenInput } from 'better-newsletter'
+import type { NewsletterStorageTransaction } from 'better-newsletter/storage'
+import { useBetterNewsletter, type BetterNewsletterServerConfig } from 'better-newsletter/nuxt/server'
+import { postgresAdapter, postgresMigration } from 'better-newsletter/adapters/postgres'
+import type { Kysely } from 'kysely'
+import type { H3Event } from 'h3'
 declare const migrations: NewsletterMigrations
-void migrations
+declare const db: Kysely<{ hostTable: { id: string } }>
+declare const event: H3Event
+declare const config: BetterNewsletterServerConfig
+declare const transaction: NewsletterStorageTransaction
+const input: CreateConfirmationTokenInput = { subscription: { id: 'subscription' }, eventMetadata: { actorId: 'admin' } }
+const service = await useBetterNewsletter(event, config)
+await service.createConfirmationToken(input)
+await service.getConfirmationState({ subscription: input.subscription })
+await transaction.getLatestUsableConfirmationExpiry({ subscriptionId: 'subscription', lifecycleGeneration: 1, now: new Date() })
+void [migrations, postgresAdapter(db), postgresMigration(db)]
 `, `
 import { createRequire } from 'node:module'
+import { memoryAdapter } from 'better-newsletter/adapters/memory'
+import { createSecureCapabilities } from 'better-newsletter/security'
+import { useBetterNewsletter } from 'better-newsletter/nuxt/server'
+import { postgresAdapter, postgresMigration } from 'better-newsletter/adapters/postgres'
+import { getMigrations } from 'better-newsletter/db/migration'
 const require = createRequire(import.meta.url)
 const cli = require('@better-newsletter/cli/package.json')
 const runtime = require('better-newsletter/package.json')
-if (cli.dependencies['better-newsletter'] !== runtime.version) {
-  throw new Error('CLI runtime dependency is not pinned to the packed version')
+if (cli.dependencies['better-newsletter'] !== runtime.version || runtime.peerDependencies.kysely !== '>=0.28.17 <0.30.0') {
+  throw new Error('Packed CLI/runtime versions or Kysely peer range are incorrect')
+}
+if ([postgresAdapter, postgresMigration, getMigrations].some(value => typeof value !== 'function')) {
+  throw new Error('Packed PostgreSQL/migration exports are incomplete')
+}
+const storage = memoryAdapter()
+await storage.transaction(async transaction => {
+  if (await transaction.getLatestUsableConfirmationExpiry({ subscriptionId: 'missing', lifecycleGeneration: 1, now: new Date() }) !== null) {
+    throw new Error('Packed storage expiry lookup is missing or incorrect')
+  }
+})
+const service = await useBetterNewsletter({ context: {} }, {
+  origin: 'https://newsletter.example', storage,
+  capabilities: createSecureCapabilities({ hmacSecret: '0123456789abcdef0123456789abcdef' }),
+  mailer: { async sendConfirmation() { throw new Error('Trusted creation must not send mail') } }
+})
+const subscription = await service.importSubscription({
+  email: 'packed@example.com', status: 'PENDING_CONFIRMATION',
+  consent: { version: 'v1', consentedAt: new Date() }
+})
+const input = { subscription: { id: subscription.id }, eventMetadata: { actorId: 'admin' } }
+const created = await service.createConfirmationToken(input)
+const state = await service.getConfirmationState({ subscription: input.subscription })
+if (!created || !state?.canCreate || state.activeTokenExpiresAt?.getTime() !== created.expiresAt.getTime()
+    || !(await service.confirm({ token: created.token })).confirmed) {
+  throw new Error('Packed trusted confirmation APIs do not work through the Nuxt service')
 }
 `)
   run('pnpm', ['exec', 'better-newsletter', '--help'], cliConsumer)
+  if (process.env.DATABASE_URL) {
+    writeFileSync(join(cliConsumer, 'better-newsletter.config.ts'), `
+import { Kysely, PostgresDialect } from 'kysely'
+import { Pool } from 'pg'
+import { postgresMigration } from 'better-newsletter/adapters/postgres'
+import { defineBetterNewsletterMigrationConfig } from 'better-newsletter/db/migration'
+const db = new Kysely({ dialect: new PostgresDialect({ pool: new Pool({ connectionString: process.env.DATABASE_URL }) }) })
+export default defineBetterNewsletterMigrationConfig({
+  provider: postgresMigration(db, { schema: process.env.SMOKE_SCHEMA }),
+  close: () => db.destroy()
+})
+`)
+    writeFileSync(join(cliConsumer, 'generate-smoke.mjs'), `
+import { execFileSync } from 'node:child_process'
+import { randomUUID } from 'node:crypto'
+import { Pool } from 'pg'
+const pool = new Pool({ connectionString: process.env.DATABASE_URL })
+const schema = 'packed_generate_' + randomUUID().replaceAll('-', '')
+try {
+  await pool.query('CREATE SCHEMA "' + schema + '"')
+  execFileSync('pnpm', ['exec', 'better-newsletter', 'generate', '--output', 'generated.sql', '--yes'], {
+    stdio: 'inherit', env: { ...process.env, SMOKE_SCHEMA: schema }
+  })
+  const tables = await pool.query('SELECT tablename FROM pg_tables WHERE schemaname = $1', [schema])
+  if (tables.rowCount !== 0) throw new Error('SQL generation must leave the empty host schema unchanged')
+} finally {
+  try { await pool.query('DROP SCHEMA IF EXISTS "' + schema + '" CASCADE') }
+  finally { await pool.end() }
+}
+`)
+    run('node', ['generate-smoke.mjs'], cliConsumer)
+    const generated = readFileSync(join(cliConsumer, 'generated.sql'), 'utf8')
+    const canonical = output('tar', ['-xOzf', runtimeTarball, 'package/migrations/postgres/001_newsletter.sql']).trim()
+    if (!generated.includes(canonical)) {
+      throw new Error('Packed CLI SQL output must contain the complete canonical tables, constraints and indexes')
+    }
+    console.log('Packed CLI generate smoke passed (complete canonical SQL, no database mutations)')
+  } else {
+    console.log('DATABASE_URL is unset; skipping packed CLI PostgreSQL generate smoke')
+  }
   console.log('\nBoth packed-artifact smoke tests passed')
 } finally {
   rmSync(scratch, { recursive: true, force: true })

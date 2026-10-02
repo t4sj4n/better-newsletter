@@ -66,6 +66,8 @@ jobs:
 
       - name: Smoke test both packed packages in clean consumers
         run: node scripts/smoke-pack.mjs
+        env:
+          DATABASE_URL: postgresql://postgres@localhost:5432/newsletter_test
 
   kysely-compatibility:
     name: Kysely ${{ matrix.kysely }} compatibility

@@ -34,7 +34,7 @@ Node.js 20.11 or newer is required for the packages. The Nuxt example requires N
 
 Better Newsletter never changes your database schema during normal application startup.
 
-For PostgreSQL, install Kysely and a PostgreSQL driver (for example, `pnpm add kysely@^0.28.17 pg@^8`). Expose a migration config from `better-newsletter.config.ts` or `server/better-newsletter.config.ts`, using your application's configured Kysely `db`:
+For PostgreSQL, install supported Kysely 0.28.17 through 0.29.x and a PostgreSQL driver (for example, `pnpm add kysely@^0.28.17 pg@^8`). Kysely 0.29 requires Node.js 22 or newer and TypeScript 5.4 or newer. Expose a migration config from `better-newsletter.config.ts` or `server/better-newsletter.config.ts`, using your application's configured Kysely `db`:
 
 ```ts
 import { defineBetterNewsletterMigrationConfig } from 'better-newsletter/db/migration'
@@ -59,6 +59,8 @@ pnpm exec better-newsletter generate --output ./migrations/better-newsletter.sql
 **`migrate`** inspects the database, shows the required changes, asks for confirmation, and applies them.
 
 **`generate`** inspects the same database but only writes the required SQL so you can review and apply it through your application's existing migration workflow.
+
+Use `migrate` when Better Newsletter manages schema changes directly. If your application owns migration history, use `generate`: inspect the SQL and commit it as an immutable host migration. For later schema changes, generate a new migration against a database at the previous migration state. Never update an already committed historical migration to call the newly installed package's migration planner. See the [host-owned migration workflow](packages/better-newsletter/README.md#host-owned-migration-history).
 
 Both commands exit without changes when the schema is already current. Use `--yes` to approve changes in non-interactive deployments. The CLI reads the named `migration` export from a server config; it does not invoke its default Nuxt factory.
 
@@ -103,6 +105,8 @@ A new subscription starts as pending confirmation. The public signup response do
 ```ts
 await newsletter.confirm({ token })
 ```
+
+Trusted administrative workflows can use `createConfirmationToken({ subscription: { id } })` to generate a confirmation token without sending mail and `getConfirmationState({ subscription: { id } })` to inspect eligibility and usable token expiry. Both are available through Nuxt's `useBetterNewsletter(event)` in authenticated host routes. See the [trusted confirmation API documentation](packages/better-newsletter/README.md#trusted-administrative-confirmation-links).
 
 Create an unsubscribe capability from trusted server code and pass it to the unsubscribe action:
 
@@ -174,6 +178,8 @@ export default defineBetterNewsletterConfig(() => ({
 ```
 
 The Nuxt integration supplies the lifecycle API routes. Your application still owns the signup form, confirmation/unsubscribe pages and mail copy.
+
+If you implement a custom public signup endpoint with `useBetterNewsletter(event)`, set `betterNewsletter.routes.subscribe: false` so callers cannot bypass your endpoint's additional validation or abuse checks through the built-in route. Apply the same rule to other public flows you replace. See [custom public routes](packages/better-newsletter/README.md#custom-public-routes).
 
 See [examples/basic](examples/basic/README.md) for a minimal Nuxt example ([try directly on StackBlitz](https://stackblitz.com/github/t4sj4n/better-newsletter/tree/main/examples/basic)) and the [runtime package documentation](packages/better-newsletter/README.md) for security, migrations, adapters and the full API.
 

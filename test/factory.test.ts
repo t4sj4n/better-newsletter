@@ -30,10 +30,12 @@ describe('betterNewsletter', () => {
     expect(Object.keys(newsletter).sort()).toEqual([
       'cleanupConfirmationTokens',
       'confirm',
+      'createConfirmationToken',
       'createManagePreferencesCapability',
       'createUnsubscribeCapability',
       'eraseContactData',
       'exportContactData',
+      'getConfirmationState',
       'getContact',
       'getSubscription',
       'importSubscription',

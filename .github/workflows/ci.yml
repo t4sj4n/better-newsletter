@@ -66,3 +66,67 @@ jobs:
 
       - name: Smoke test both packed packages in clean consumers
         run: node scripts/smoke-pack.mjs
+        env:
+          DATABASE_URL: postgresql://postgres@localhost:5432/newsletter_test
+
+  kysely-compatibility:
+    name: Kysely ${{ matrix.kysely }} compatibility
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        kysely: ['0.28.17', '0.29.6']
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_DB: newsletter_test
+          POSTGRES_HOST_AUTH_METHOD: trust
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U postgres -d newsletter_test"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Set up pnpm
+        uses: pnpm/action-setup@v4
+        with:
+          version: 10.17.1
+          run_install: false
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+
+      - name: Install selected Kysely version
+        run: |
+          pnpm pkg set "pnpm.overrides.kysely=${{ matrix.kysely }}"
+          pnpm install --no-frozen-lockfile --ignore-scripts
+
+      - name: Verify resolved Kysely version
+        env:
+          EXPECTED_KYSELY_VERSION: ${{ matrix.kysely }}
+        run: |
+          node --input-type=module <<'JS'
+          import { readFileSync } from 'node:fs'
+          for (const path of ['node_modules/kysely/package.json', 'packages/better-newsletter/node_modules/kysely/package.json']) {
+            const { version } = JSON.parse(readFileSync(path, 'utf8'))
+            if (version !== process.env.EXPECTED_KYSELY_VERSION) {
+              throw new Error(`${path}: expected ${process.env.EXPECTED_KYSELY_VERSION}, got ${version}`)
+            }
+          }
+          JS
+
+      - name: Typecheck and build with selected Kysely version
+        run: pnpm typecheck
+
+      - name: Test PostgreSQL adapter, rate limiter and migrations
+        run: pnpm exec vitest run test/postgres.test.ts test/postgres-migration.test.ts
+        env:
+          DATABASE_URL: postgresql://postgres@localhost:5432/newsletter_test

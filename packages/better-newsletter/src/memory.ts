@@ -137,6 +137,20 @@ export class MemoryNewsletterStorage implements NewsletterStorage {
         this.state.events
           .filter(event => event.contactId === contactId)
           .map(clone),
+      getLatestUsableConfirmationExpiry: async input => {
+        let latest: Date | null = null
+        for (const token of this.state.confirmationTokens.values()) {
+          if (token.purpose === 'CONFIRMATION'
+            && token.subscriptionId === input.subscriptionId
+            && token.lifecycleGeneration === input.lifecycleGeneration
+            && token.consumedAt == null && token.revokedAt == null
+            && token.expiresAt.getTime() > input.now.getTime()
+            && (latest == null || token.expiresAt.getTime() > latest.getTime())) {
+            latest = token.expiresAt
+          }
+        }
+        return latest == null ? null : clone(latest)
+      },
       listContactTokenMetadata: async contactId =>
         [...this.state.confirmationTokens.values()]
           .filter(token => token.contactId === contactId)

@@ -66,6 +66,43 @@ Repeated public signup is neutral and idempotent:
 
 Use the dedicated `resendConfirmation()` operation when a new confirmation message is needed. Abuse throttling and confirmation-token replacement are handled by the security and lifecycle configuration described below.
 
+### Trusted administrative confirmation links
+
+Authenticated server code can create a confirmation link without sending mail:
+
+```ts
+const input = { subscription: { id: subscriptionId } }
+const state = await newsletter.getConfirmationState(input)
+if (state?.canCreate) {
+  const result = await newsletter.createConfirmationToken(input)
+  if (result) {
+    const url = new URL('/newsletter/confirm', applicationOrigin)
+    url.searchParams.set('token', result.token)
+    // Display the link only to an authorized administrator.
+  }
+}
+```
+
+Both operations also accept `subscription: { email, audience? }`. These are trusted server-only APIs: the host must authorize access to the subscription and decide where links are displayed. Do not expose them through anonymous routes. In a host-owned authenticated Nuxt server route, obtain the same service with `const newsletter = await useBetterNewsletter(event)` from `better-newsletter/nuxt/server`. The module does not register administrative routes or expose these operations in its browser client.
+
+`createConfirmationToken()` returns `{ token, expiresAt }`, or `null` when the subscription does not exist, is ACTIVE or UNSUBSCRIBED, or its Contact is globally suppressed. It rechecks eligibility transactionally, uses the configured token generator, persists the digest through the configured capabilities, binds the current lifecycle generation, and applies `confirmation.expiresInMs`, `replacementStrategy` and `maxActiveTokens` exactly as mail delivery does. It appends `CONFIRMATION_TOKEN_CREATED` and any replacement/expiry events atomically. The raw token is returned only to the caller. This operation sends no mail and does not complete or cancel queued confirmation delivery; subsequent signup/resend delivery can replace the token according to the same configured strategy.
+
+Trusted callers can optionally attach host-specific audit data to the `CONFIRMATION_TOKEN_CREATED` event:
+
+```ts
+const result = await newsletter.createConfirmationToken({
+  subscription: { id: subscriptionId },
+  eventMetadata: {
+    actorId: session.user.id
+  }
+})
+```
+
+`eventMetadata` accepts JSON values and is optional. Better Newsletter does not interpret its contents or use them for authorization, eligibility, expiry, replacement or any other lifecycle decision. Host metadata is merged first; authoritative Better Newsletter fields such as `audienceKey` and `lifecycleGeneration` are set afterwards and cannot be overwritten. Metadata belongs only to the token-created audit event, not replacement or expiry events. `getConfirmationState()` accepts only the subscription lookup and does not need audit metadata.
+
+`getConfirmationState()` returns `null` for a missing subscription, otherwise `{ canCreate, reason, activeTokenExpiresAt }`. `reason` is `null` when eligible, or `ACTIVE`, `UNSUBSCRIBED` or `SUPPRESSED` (suppression takes precedence). The expiry is the latest expiry among unconsumed, unrevoked, unexpired confirmation tokens in the current lifecycle, or `null` when none are usable or confirmation is blocked. No digests or storage records are returned. This is a snapshot; token creation always rechecks eligibility and confirmation always rechecks the lifecycle.
+
+
 ## Creating a service
 
 The lifecycle is framework- and provider-neutral. Storage, delivery and capability behavior are injected:
@@ -517,7 +554,7 @@ Production storage must provide transaction semantics strong enough to serialize
 
 ## PostgreSQL
 
-The PostgreSQL adapter targets PostgreSQL 14 or newer, Kysely 0.28.x, `pg` 8.x, and Node.js 20.11 or newer. It is implemented with Kysely but supports PostgreSQL specifically; the public adapter does not imply compatibility with other Kysely dialects. If you use the optional `/adapters/postgres` subpath, install a supported Kysely version and a PostgreSQL driver in your application (for example, `pnpm add kysely@^0.28.17 pg@^8`). Kysely is an optional peer dependency; `pg` is only a development dependency of this package. Core-only consumers do not need either. Provide your own configured Kysely database instance and connection pool; the library does not own their lifecycle.
+The PostgreSQL adapter targets PostgreSQL 14 or newer, Kysely 0.28.17 through 0.29.x, `pg` 8.x, and Node.js 20.11 or newer. It is implemented with Kysely but supports PostgreSQL specifically; the public adapter does not imply compatibility with other Kysely dialects. If you use the optional `/adapters/postgres` subpath, install a supported Kysely version and a PostgreSQL driver in your application (for example, `pnpm add kysely@^0.28.17 pg@^8`). Kysely is an optional peer dependency; `pg` is only a development dependency of this package. Core-only consumers do not need either. Kysely 0.29 requires Node.js 22 or newer and TypeScript 5.4 or newer. Provide your own configured Kysely database instance and connection pool; the library does not own their lifecycle.
 
 ### Database migrations
 
@@ -575,7 +612,18 @@ For a one-off invocation without a locally installed CLI, run `npx --package=@be
 
 `generate` inspects the same live database but only writes the required SQL. Review/check that SQL into the host migration system and apply it with the host's normal deployment ordering. Existing compatible objects are not recreated and unrelated host tables/columns are left untouched. Destructive or data-transforming future upgrades are not inferred from a schema diff; they require an explicit reviewed Better Newsletter upgrade step.
 
-The same engine is available programmatically:
+### Host-owned migration history
+
+Choose `migrate` when Better Newsletter should apply schema changes directly. Choose `generate` when your application already owns migration history, including applications using Kysely's `Migrator`.
+
+1. Generate SQL using the installed package and a development database at the intended starting state. An empty newsletter schema produces the complete initial schema; an existing schema produces only the required additions.
+2. Inspect the SQL, including its target PostgreSQL schema, and commit it as a new, immutable migration in your host's migration system.
+3. Apply that static SQL using the host's normal migration runner and deployment ordering. Replaying the migration must not depend on the currently installed Better Newsletter version.
+4. After a package upgrade that requires schema changes, generate against a database with the previous host migrations applied. Review and commit the resulting SQL as a **new** host migration. Leave historical migrations unchanged.
+
+Do not call `postgresMigration(db).plan()` / `provider.apply(plan)` or `getMigrations(...).runMigrations()` from a historical host migration: the plan follows the installed package's current target schema, so replaying the same historical migration could produce different SQL after an upgrade. There is no additional Better Newsletter integration required for the host's migration runner; execute the reviewed static SQL through that runner.
+
+For direct schema management outside a historical host migration, the same engine is available programmatically:
 
 ```ts
 import { getMigrations } from 'better-newsletter/db/migration'
@@ -696,6 +744,27 @@ The built-in lifecycle actions and authorized preferences read are **POST only**
 | `/api/newsletter/preferences` | `{ capability }` (read-only; returns `{ subscriptions: { audience, status, unsubscribeCapability }[] \| null }`) |
 
 For example, `routes: { resendConfirmation: '/api/mail/resend', preferences: false }` moves one endpoint and omits another. The route keys are `subscribe`, `resendConfirmation`, `confirm`, `unsubscribe`, `unsubscribeAll` and `preferences`. If you disable a route, implement its POST behavior yourself or omit that UI feature. Do not put secrets, storage, or provider credentials in `nuxt.config.ts` public runtime config or browser bundles.
+
+#### Custom public routes
+
+Use the built-in public routes when their request validation and response format suit your application. If you need host-specific source validation, a honeypot, error translation or response semantics, implement a thin public server handler that calls `await useBetterNewsletter(event)` and then the appropriate service method with validated input.
+
+When replacing public signup, disable the built-in endpoint:
+
+```ts
+// Inside defineNuxtConfig({ ... })
+betterNewsletter: {
+  routes: {
+    subscribe: false
+  }
+}
+```
+
+Otherwise callers can still reach `/api/newsletter/subscribe` and bypass checks that exist only in your custom endpoint. Changing a built-in route's path only relocates the built-in handler; it does not attach your wrapper's validation. The same replacement rule applies to `resendConfirmation`, `confirm`, `unsubscribe`, `unsubscribeAll` and `preferences`. Point your client at the host endpoint and disable each corresponding built-in route you replace.
+
+The custom handler owns the public HTTP boundary: validate and bound the request body, restrict public audiences, verify explicit consent and its configured version, validate or assign a trusted source, handle honeypots and supply any request-specific `securityContext` needed by your configured abuse guard. The module's built-in handler validation is not automatically run by `useBetterNewsletter(event)`. Configured service-level lifecycle checks, abuse guards and rate limits still apply; the Nuxt accessor also retains its configured client-identity rate limiting and delivery handling. Preserve neutral signup/resend responses and explicit POST actions for capability flows. Authorize administrative operations in the host; do not expose trusted lookup or token-creation methods through an anonymous wrapper.
+
+#### Public flow responsibilities
 
 The module supplies API endpoints, **not** consent forms, mail copy, confirmation pages, unsubscribe/preferences pages, or authentication. Build your own UI. GET confirmation/unsubscribe links should render landing pages with explicit POST buttons; GET preferences pages should likewise make no authorized read until an explicit POST. Never issue unsubscribe or preferences capabilities to an anonymous caller based solely on an email address. Generate links in trusted server code (for example, after authenticating the user or while sending their mail).
 

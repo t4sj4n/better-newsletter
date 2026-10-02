@@ -70,6 +70,10 @@ export {
 } from './normalize.js'
 
 export type {
+  ConfirmationSubscriptionInput,
+  ConfirmationState,
+  CreateConfirmationTokenInput,
+  CreateConfirmationTokenResult,
   ConfirmInput,
   ConfirmResult,
   ContactLookup,

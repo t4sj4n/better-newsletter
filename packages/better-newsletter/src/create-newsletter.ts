@@ -34,6 +34,7 @@ import {
   normalizeAndValidateEmail
 } from './normalize.js'
 import type {
+  ConfirmationState,
   ContactLookup,
   ImportSubscriptionInput,
   SubscriptionLookup,
@@ -445,6 +446,61 @@ export function createNewsletterWithSubscriptionBatch(config: BetterNewsletterOp
     return transaction.getContactById(lookup.id)
   }
 
+  const resolveSubscription = async (
+    transaction: NewsletterStorageTransaction,
+    lookup: SubscriptionLookup
+  ): Promise<Subscription | null> => {
+    if ('id' in lookup) return transaction.getSubscriptionById(lookup.id)
+    const contact = await resolveContact(transaction, { email: lookup.email })
+    if (contact == null) return null
+    return transaction.getSubscription(contact.id, assertAudienceKey(lookup.audience ?? defaultAudience))
+  }
+
+  // Resolve the contact hint separately so the authoritative transaction locks
+  // contact before subscription, including for ID lookups. Recheck both rows.
+  const confirmationTarget = async (lookup: SubscriptionLookup) => {
+    return runTransaction(transaction => resolveSubscription(transaction, lookup))
+  }
+
+  const confirmationReason = (contact: Contact, subscription: Subscription): ConfirmationState['reason'] => {
+    if (contact.status === CONTACT_STATUSES.SUPPRESSED) return 'SUPPRESSED'
+    if (subscription.status === SUBSCRIPTION_STATUSES.ACTIVE) return 'ACTIVE'
+    if (subscription.status === SUBSCRIPTION_STATUSES.UNSUBSCRIBED) return 'UNSUBSCRIBED'
+    return null
+  }
+
+  const persistConfirmationToken = async (
+    transaction: NewsletterStorageTransaction,
+    subscription: Subscription,
+    token: string,
+    issuedAt: Date,
+    expiresAt: Date
+  ): Promise<void> => {
+    const replacement = await config.capabilities.replaceConfirmation({
+      token,
+      contactId: subscription.contactId,
+      subscriptionId: subscription.id,
+      lifecycleGeneration: subscription.lifecycleGeneration,
+      issuedAt,
+      expiresAt,
+      replacementStrategy,
+      maxActiveTokens
+    }, transaction.confirmationTokens)
+    if (replacement != null) {
+      for (const [type, count] of [
+        [NEWSLETTER_EVENT_TYPES.CONFIRMATION_REPLACED, replacement.replacedCount],
+        [NEWSLETTER_EVENT_TYPES.CONFIRMATION_EXPIRED, replacement.expiredCount]
+      ] as const) {
+        if (count > 0) {
+          await appendEvent(transaction, {
+            contactId: subscription.contactId, subscriptionId: subscription.id, type, occurredAt: issuedAt,
+            metadata: { count, lifecycleGeneration: subscription.lifecycleGeneration }
+          })
+        }
+      }
+    }
+  }
+
   const suppressionKeys = async (email: string): Promise<readonly string[]> => {
     if (config.suppressionKeyProvider == null) {
       throw new NewsletterError(
@@ -601,29 +657,7 @@ export function createNewsletterWithSubscriptionBatch(config: BetterNewsletterOp
 
         // Fence token replacement as well as completion: a stale worker must
         // never replace tokens belonging to a newer delivery attempt.
-        const replacement = await config.capabilities.replaceConfirmation({
-          token,
-          contactId,
-          subscriptionId,
-          lifecycleGeneration,
-          issuedAt,
-          expiresAt,
-          replacementStrategy,
-          maxActiveTokens
-        }, transaction.confirmationTokens)
-        if (replacement != null) {
-          for (const [type, count] of [
-            [NEWSLETTER_EVENT_TYPES.CONFIRMATION_REPLACED, replacement.replacedCount],
-            [NEWSLETTER_EVENT_TYPES.CONFIRMATION_EXPIRED, replacement.expiredCount]
-          ] as const) {
-            if (count > 0) {
-              await appendEvent(transaction, {
-                contactId, subscriptionId, type, occurredAt: issuedAt,
-                metadata: { count, lifecycleGeneration }
-              })
-            }
-          }
-        }
+        await persistConfirmationToken(transaction, current, token, issuedAt, expiresAt)
         return 'READY' as const
       })
       if (setup !== 'READY') return
@@ -964,6 +998,52 @@ export function createNewsletterWithSubscriptionBatch(config: BetterNewsletterOp
       return PUBLIC_ACCEPTED
     },
 
+    async createConfirmationToken(input) {
+      const hint = await confirmationTarget(input.subscription)
+      if (hint == null) return null
+      return runTransaction(async transaction => {
+        const contact = await transaction.getContactById(hint.contactId)
+        const subscription = await transaction.getSubscriptionById(hint.id)
+        if (contact == null || subscription == null || subscription.contactId !== contact.id
+          || confirmationReason(contact, subscription) != null) return null
+        const token = await tokenGenerator.generate()
+        const issuedAt = clock.now()
+        const expiresAt = new Date(issuedAt.getTime() + expiresInMs)
+        await persistConfirmationToken(transaction, subscription, token, issuedAt, expiresAt)
+        await appendEvent(transaction, {
+          contactId: contact.id,
+          subscriptionId: subscription.id,
+          type: NEWSLETTER_EVENT_TYPES.CONFIRMATION_TOKEN_CREATED,
+          occurredAt: issuedAt,
+          metadata: {
+            ...input.eventMetadata,
+            audienceKey: subscription.audienceKey,
+            lifecycleGeneration: subscription.lifecycleGeneration
+          }
+        })
+        return { token, expiresAt }
+      })
+    },
+
+    async getConfirmationState(input) {
+      const hint = await confirmationTarget(input.subscription)
+      if (hint == null) return null
+      return runTransaction(async transaction => {
+        const contact = await transaction.getContactById(hint.contactId)
+        const subscription = await transaction.getSubscriptionById(hint.id)
+        if (contact == null || subscription == null || subscription.contactId !== contact.id) return null
+        const reason = confirmationReason(contact, subscription)
+        const activeTokenExpiresAt = reason == null
+          ? await transaction.getLatestUsableConfirmationExpiry({
+            subscriptionId: subscription.id,
+            lifecycleGeneration: subscription.lifecycleGeneration,
+            now: clock.now()
+          })
+          : null
+        return { canCreate: reason == null, reason, activeTokenExpiresAt }
+      })
+    },
+
     async confirm(input) {
       return runTransaction(async transaction => {
         const now = clock.now()
@@ -1214,20 +1294,7 @@ export function createNewsletterWithSubscriptionBatch(config: BetterNewsletterOp
     },
 
     async getSubscription(input: SubscriptionLookup) {
-      return runTransaction(async transaction => {
-        if ('id' in input) {
-          return transaction.getSubscriptionById(input.id)
-        }
-
-        const contact = await transaction.getContactByEmail(
-          normalizeAndValidateEmail(input.email)
-        )
-        if (contact == null) return null
-        return transaction.getSubscription(
-          contact.id,
-          assertAudienceKey(input.audience ?? defaultAudience)
-        )
-      })
+      return runTransaction(transaction => resolveSubscription(transaction, input))
     },
 
     async listSubscriptions(input) {

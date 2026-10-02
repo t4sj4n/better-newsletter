@@ -5,6 +5,7 @@ import { existsSync, mkdirSync, readFileSync, readdirSync, rmSync, writeFileSync
 import { dirname, join } from 'node:path'
 import process from 'node:process'
 import { fileURLToPath } from 'node:url'
+import { checkNuxtRouteTypes } from './smoke-nuxt-types.mjs'
 
 const root = dirname(dirname(fileURLToPath(import.meta.url)))
 const runtimeManifest = JSON.parse(readFileSync(join(root, 'packages/better-newsletter/package.json'), 'utf8'))
@@ -411,6 +412,7 @@ try {
   } else {
     console.log('DATABASE_URL is unset; skipping packed CLI PostgreSQL generate smoke')
   }
+  checkNuxtRouteTypes({ scratch, runtimeTarball, run })
   console.log('\nBoth packed-artifact smoke tests passed')
 } finally {
   rmSync(scratch, { recursive: true, force: true })

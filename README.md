@@ -60,6 +60,8 @@ pnpm exec better-newsletter generate --output ./migrations/better-newsletter.sql
 
 **`generate`** inspects the same database but only writes the required SQL so you can review and apply it through your application's existing migration workflow.
 
+Use `migrate` when Better Newsletter manages schema changes directly. If your application owns migration history, use `generate`: inspect the SQL and commit it as an immutable host migration. For later schema changes, generate a new migration against a database at the previous migration state. Never update an already committed historical migration to call the newly installed package's migration planner. See the [host-owned migration workflow](packages/better-newsletter/README.md#host-owned-migration-history).
+
 Both commands exit without changes when the schema is already current. Use `--yes` to approve changes in non-interactive deployments. The CLI reads the named `migration` export from a server config; it does not invoke its default Nuxt factory.
 
 ## Basic usage
@@ -176,6 +178,8 @@ export default defineBetterNewsletterConfig(() => ({
 ```
 
 The Nuxt integration supplies the lifecycle API routes. Your application still owns the signup form, confirmation/unsubscribe pages and mail copy.
+
+If you implement a custom public signup endpoint with `useBetterNewsletter(event)`, set `betterNewsletter.routes.subscribe: false` so callers cannot bypass your endpoint's additional validation or abuse checks through the built-in route. Apply the same rule to other public flows you replace. See [custom public routes](packages/better-newsletter/README.md#custom-public-routes).
 
 See [examples/basic](examples/basic/README.md) for a minimal Nuxt example ([try directly on StackBlitz](https://stackblitz.com/github/t4sj4n/better-newsletter/tree/main/examples/basic)) and the [runtime package documentation](packages/better-newsletter/README.md) for security, migrations, adapters and the full API.
 

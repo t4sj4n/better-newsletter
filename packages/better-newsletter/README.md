@@ -790,6 +790,23 @@ The handler passes this transient context to the core `abuseGuard` and `rateLimi
 
 For production, replace memory adapters with `postgresAdapter(db)` and `postgresRateLimiter(db)` from `better-newsletter/adapters/postgres`, configure `postgresMigration(db)`, and apply the schema with `better-newsletter migrate` or your host-managed `generate` workflow, `createSecureCapabilities({ secrets: [{ version: 1, value: signingSecret }] })`, `createHmacRateLimitKeyProvider({ secret })`, and `resendMailer({ apiKey, from, renderConfirmation })` from `better-newsletter/mailers/resend`. Configure a verified sender, durable PostgreSQL connection, stable server-side signing/rate-limit secrets, a trusted origin for URLs, and runtime-safe background delivery (`waitUntil`, an awaited fallback or a durable worker). See the adapter sections above for integration details; the example deliberately uses none of these external services.
 
+### TypeScript and large Nitro route tables
+
+Large applications can hit `TS2589` in Nitro's typed route matcher when a fetch request generic covers the entire route table. This can also happen without Better Newsletter. With Nuxt 4.5.2 / Nitro 2.13.4, narrow the request type at affected calls, especially when supplying an explicit response type:
+
+```ts
+import type { NuxtError } from '#app'
+
+interface Item { id: string }
+
+const { data } = await useFetch<Item[], NuxtError, '/api/items'>(
+  '/api/items',
+  { default: () => [] }
+)
+```
+
+For `$fetch`, the request is its second generic: `$fetch<Response, '/api/items'>('/api/items')`. Use a suitable bounded request type for dynamic paths. Keep newsletter entries in generated `InternalApi` to retain route and method checking. The [#43 investigation](https://github.com/t4sj4n/better-newsletter/blob/main/docs/nuxt-route-types.md) contains the reproduction, TypeScript trace evidence and a packed-consumer test that retains all six module routes. This is a mitigation for upstream route matching; it does not guarantee that every large application will stay within TypeScript's limits.
+
 ### Consumer example and maintainer playground
 
 To learn the essential Nuxt integration, start with [`examples/basic/`](https://github.com/t4sj4n/better-newsletter/tree/main/examples/basic) in the [consumer examples](https://github.com/t4sj4n/better-newsletter/tree/main/examples): a small, copyable signup, confirmation and unsubscribe flow. Contributors testing lifecycle edge cases should use [`playground/`](https://github.com/t4sj4n/better-newsletter/tree/main/playground), the full maintainer development app with three audiences, a fake inbox, preferences, suppression and delivery-failure/expiry controls. Both import only public package APIs and remain outside the npm artifact. From this repository checkout:

@@ -1,0 +1,7 @@
+<script setup lang="ts">
+interface Item { id: string }
+
+const { data } = await useFetch<Item[]>('/api/items', { default: () => [] })
+</script>
+
+<template><div>{{ data.length }}</div></template>

@@ -1,4 +1,5 @@
 import { createNewsletterWithSubscriptionBatch } from '../create-newsletter.js'
+import type { JsonValue } from '../domain.js'
 import type { SubscribeInput } from '../operations.js'
 import type { H3Event } from 'h3'
 import type {
@@ -18,6 +19,12 @@ export interface BetterNewsletterServerConfig extends Omit<BetterNewsletterOptio
     readonly limiter: RateLimiter
     readonly policies?: NewsletterRateLimits
   }
+  /** Select and validate persistent host metadata for public subscribe requests. */
+  readonly publicSubscribeMetadata?: (
+    event: H3Event,
+    body: Readonly<Record<string, unknown>>
+  ) => Readonly<Record<string, JsonValue>> | undefined
+    | Promise<Readonly<Record<string, JsonValue>> | undefined>
   /** Optional application-owned CAPTCHA or abuse metadata for the core guard. */
   readonly securityContext?: (
     event: H3Event,
@@ -126,6 +133,13 @@ export async function useBetterNewsletter(
   })()
   requestServices.set(event, { service, tasks })
   return service
+}
+
+export async function newsletterPublicSubscribeMetadata(
+  event: H3Event,
+  body: Readonly<Record<string, unknown>>
+): Promise<Readonly<Record<string, JsonValue>> | undefined> {
+  return requestConfigs.get(event)?.publicSubscribeMetadata?.(event, body)
 }
 
 export async function newsletterSecurityContext(

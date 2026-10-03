@@ -19,6 +19,7 @@ export interface SubscribeInput {
     readonly locale?: string | null
   }
   readonly subject?: ExternalSubject
+  /** Host context for this subscribe operation; stored in SIGNED_UP/RESUBSCRIBED event metadata. */
   readonly metadata?: Readonly<Record<string, JsonValue>>
   readonly securityContext?: unknown
 }
@@ -157,6 +158,7 @@ export interface ImportSubscriptionInput {
   readonly confirmedAt?: Date | null
   readonly unsubscribedAt?: Date | null
   readonly subject?: ExternalSubject
+  /** Initial Contact metadata when the import creates a new contact. */
   readonly metadata?: Readonly<Record<string, JsonValue>>
   readonly originalCreatedAt?: Date
 }

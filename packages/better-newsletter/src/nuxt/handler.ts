@@ -5,7 +5,7 @@ import {
   normalizeAndValidateEmail
 } from '../index.js'
 import type { BetterNewsletterModuleOptions, NewsletterRoute } from '../nuxt.js'
-import { flushBetterNewsletter, newsletterSecurityContext, subscribeNewsletterAudiences, useBetterNewsletter, type BetterNewsletterServerConfig } from './server.js'
+import { flushBetterNewsletter, newsletterPublicSubscribeMetadata, newsletterSecurityContext, subscribeNewsletterAudiences, useBetterNewsletter, type BetterNewsletterServerConfig } from './server.js'
 
 type PublicOptions = Pick<BetterNewsletterModuleOptions, 'defaultAudience' | 'audiences' | 'consent'>
 
@@ -80,6 +80,8 @@ export async function handleNewsletterRequest(
     }
     if (body.website) return accepted
     const service = await useBetterNewsletter(event, configuration)
+    const metadata = action === 'subscribe'
+      ? await newsletterPublicSubscribeMetadata(event, body) : undefined
     const securityContext = await newsletterSecurityContext(event, body)
     try {
       if (action === 'subscribe') {
@@ -91,6 +93,7 @@ export async function handleNewsletterRequest(
             version: options.consent.version,
             source: options.consent.source
           },
+          ...(metadata === undefined ? {} : { metadata }),
           ...(securityContext === undefined ? {} : { securityContext })
         })))
       } else {

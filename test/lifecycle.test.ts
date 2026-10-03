@@ -102,6 +102,84 @@ describe('newsletter lifecycle', () => {
     ])
   })
 
+  it('preserves subscribe context only in signup and resubscribe history', async () => {
+    const { newsletter, messages, waitForMail } = setup()
+    const initial = Object.freeze({ signupSource: 'pricing', context: Object.freeze({ campaign: 'launch' }) })
+    const later = Object.freeze({ signupSource: 'coming-soon' })
+    await newsletter.subscribe({ email: 'person@example.com', consent: consent(), metadata: initial })
+    await waitForMail()
+    const signup = (await newsletter.listEvents({ email: 'person@example.com' }))
+      .find(event => event.type === NEWSLETTER_EVENT_TYPES.SIGNED_UP)!
+    expect(signup.metadata).toEqual({ ...initial, audienceKey: 'default', consentVersion: 'v1', source: 'landing-page' })
+    expect((await newsletter.getContact({ email: 'person@example.com' }))?.metadata).toBeUndefined()
+    await newsletter.confirm({ token: messages[0]!.token })
+    const capability = await newsletter.createUnsubscribeCapability({ email: 'person@example.com' })
+    await newsletter.unsubscribe({ capability: capability! })
+    await newsletter.subscribe({ email: 'person@example.com', consent: consent('v2'), metadata: later })
+    await waitForMail(2)
+    const events = await newsletter.listEvents({ email: 'person@example.com' })
+    expect(events.find(event => event.type === NEWSLETTER_EVENT_TYPES.SIGNED_UP)).toEqual(signup)
+    expect(events.find(event => event.type === NEWSLETTER_EVENT_TYPES.RESUBSCRIBED)?.metadata)
+      .toEqual({ ...later, audienceKey: 'default', consentVersion: 'v2', source: 'landing-page' })
+    expect((await newsletter.getContact({ email: 'person@example.com' }))?.metadata).toBeUndefined()
+    expect(initial).toEqual({ signupSource: 'pricing', context: { campaign: 'launch' } })
+    expect(later).toEqual({ signupSource: 'coming-soon' })
+  })
+
+  it('retains explicitly imported contact metadata when subscribing to another audience', async () => {
+    const { newsletter, waitForMail } = setup()
+    await newsletter.importSubscription({
+      email: 'person@example.com', status: SUBSCRIPTION_STATUSES.ACTIVE,
+      consent: { version: 'legacy', consentedAt: new Date('2025-01-01T00:00:00Z') },
+      confirmedAt: new Date('2025-01-01T00:05:00Z'), metadata: { profile: 'imported' }
+    })
+    await newsletter.subscribe({
+      email: 'person@example.com', audience: 'product', consent: consent(), metadata: { signupSource: 'pricing' }
+    })
+    await waitForMail()
+    expect((await newsletter.getContact({ email: 'person@example.com' }))?.metadata).toEqual({ profile: 'imported' })
+    expect((await newsletter.listEvents({ email: 'person@example.com' }))
+      .find(event => event.type === NEWSLETTER_EVENT_TYPES.SIGNED_UP)?.metadata)
+      .toEqual({ signupSource: 'pricing', audienceKey: 'product', consentVersion: 'v1', source: 'landing-page' })
+  })
+
+  it('keeps system metadata authoritative for signup and resubscribe collisions', async () => {
+    const { newsletter, messages, waitForMail } = setup()
+    const metadata = Object.freeze({ audienceKey: 'forged', consentVersion: 'forged', source: 'forged', custom: 'trusted-host-value' })
+    await newsletter.subscribe({ email: 'person@example.com', audience: 'product', consent: consent(), metadata })
+    await waitForMail()
+    await newsletter.confirm({ token: messages[0]!.token })
+    const capability = await newsletter.createUnsubscribeCapability({ email: 'person@example.com', audience: 'product' })
+    await newsletter.unsubscribe({ capability: capability! })
+    await newsletter.subscribe({ email: 'person@example.com', audience: 'product', consent: consent('v2'), metadata })
+    await waitForMail(2)
+    const events = (await newsletter.listEvents({ email: 'person@example.com' }))
+      .filter(event => event.type === NEWSLETTER_EVENT_TYPES.SIGNED_UP || event.type === NEWSLETTER_EVENT_TYPES.RESUBSCRIBED)
+    expect(events.map(event => event.metadata)).toEqual([
+      { audienceKey: 'product', consentVersion: 'v1', source: 'landing-page', custom: 'trusted-host-value' },
+      { audienceKey: 'product', consentVersion: 'v2', source: 'landing-page', custom: 'trusted-host-value' }
+    ])
+    expect(metadata.source).toBe('forged')
+  })
+
+  it('keeps signup and resubscribe event metadata unchanged when none is supplied', async () => {
+    const { newsletter, messages, waitForMail } = setup()
+    const input = { email: 'person@example.com', consent: { granted: true, version: 'v1' } }
+    await newsletter.subscribe(input)
+    await waitForMail()
+    await newsletter.confirm({ token: messages[0]!.token })
+    const capability = await newsletter.createUnsubscribeCapability({ email: input.email })
+    await newsletter.unsubscribe({ capability: capability! })
+    await newsletter.subscribe(input)
+    await waitForMail(2)
+    const events = (await newsletter.listEvents({ email: input.email }))
+      .filter(event => event.type === NEWSLETTER_EVENT_TYPES.SIGNED_UP || event.type === NEWSLETTER_EVENT_TYPES.RESUBSCRIBED)
+    expect(events.map(event => event.metadata)).toEqual([
+      { audienceKey: 'default', consentVersion: 'v1' },
+      { audienceKey: 'default', consentVersion: 'v1' }
+    ])
+  })
+
   it('confirms exactly once and leaves repeated public signups neutral', async () => {
     const { newsletter, messages, waitForMail } = setup()
 

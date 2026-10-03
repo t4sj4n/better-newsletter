@@ -288,6 +288,21 @@ if (typeof resendMailer !== 'function') throw new Error('Resend mailer is missin
   }, `
 import * as module from 'better-newsletter/nuxt'
 import * as server from 'better-newsletter/nuxt/server'
+import type { BetterNewsletterServerConfig } from 'better-newsletter/nuxt/server'
+import type { JsonValue } from 'better-newsletter'
+const syncMapper: BetterNewsletterServerConfig['publicSubscribeMetadata'] = (_event, body) => ({
+  placement: body.placement === 'pricing' ? 'pricing' : 'other'
+})
+const asyncMapper: BetterNewsletterServerConfig['publicSubscribeMetadata'] = async () => ({ trusted: true })
+const omittedMapper: BetterNewsletterServerConfig['publicSubscribeMetadata'] = () => undefined
+const asyncOmittedMapper: BetterNewsletterServerConfig['publicSubscribeMetadata'] = async () => undefined
+const checkedMapper: BetterNewsletterServerConfig['publicSubscribeMetadata'] = () => {
+  const metadata: Readonly<Record<string, JsonValue>> = { context: { nested: ['value', null] } }
+  return metadata
+}
+// @ts-expect-error metadata must contain JSON values
+const invalidMapper: BetterNewsletterServerConfig['publicSubscribeMetadata'] = () => ({ invalid: new Date() })
+void [syncMapper, asyncMapper, omittedMapper, asyncOmittedMapper, checkedMapper, invalidMapper]
 import { createNewsletterClient } from 'better-newsletter/nuxt/client'
 type Routes = Parameters<typeof createNewsletterClient>[0]
 declare const routes: Routes

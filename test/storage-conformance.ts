@@ -580,6 +580,27 @@ export function registerStorageAdapterConformance(
       })
     })
 
+    it('persists signup and resubscribe context with authoritative system keys', async () => {
+      const { service, messages, settle } = setup()
+      const initial = Object.freeze({ context: Object.freeze({ campaign: 'launch' }), audienceKey: 'forged' })
+      await service.subscribe({ email, consent: consent(), metadata: initial })
+      await settle()
+      const signup = (await service.listEvents({ email }))
+        .find(event => event.type === NEWSLETTER_EVENT_TYPES.SIGNED_UP)!
+      expect(signup.metadata).toEqual({ ...initial, audienceKey: 'default', consentVersion: 'v1', source: 'landing-page' })
+      expect((await service.getContact({ email }))?.metadata ?? {}).toEqual({})
+      await service.confirm({ token: messages[0]!.token })
+      const capability = await service.createUnsubscribeCapability({ email })
+      await service.unsubscribe({ capability: capability! })
+      await service.subscribe({ email, consent: consent('v2'), metadata: { context: { campaign: 'return' }, consentVersion: 'forged' } })
+      await settle()
+      const events = await service.listEvents({ email })
+      expect(events.find(event => event.type === NEWSLETTER_EVENT_TYPES.SIGNED_UP)).toEqual(signup)
+      expect(events.find(event => event.type === NEWSLETTER_EVENT_TYPES.RESUBSCRIBED)?.metadata)
+        .toEqual({ context: { campaign: 'return' }, audienceKey: 'default', consentVersion: 'v2', source: 'landing-page' })
+      expect((await service.getContact({ email }))?.metadata ?? {}).toEqual({})
+    })
+
     it('keeps lifecycle events in append order and round-trips metadata', async () => {
       const storage = harness.createStorage()
       const now = new Date(baseTime)
@@ -760,9 +781,11 @@ export function registerStorageAdapterConformance(
       expect(await service.getContact({ email })).toMatchObject({
         email,
         status: CONTACT_STATUSES.ENABLED,
-        subject: { namespace: 'crm', id: 'private-subject' },
-        metadata: { tier: 'pro' }
+        subject: { namespace: 'crm', id: 'private-subject' }
       })
+      expect((await service.getContact({ email }))?.metadata ?? {}).toEqual({})
+      expect((await service.listEvents({ email })).find(event => event.type === NEWSLETTER_EVENT_TYPES.SIGNED_UP)?.metadata)
+        .toMatchObject({ tier: 'pro' })
       expect(await service.getSubscription({ email })).toMatchObject({
         audienceKey: 'default',
         status: SUBSCRIPTION_STATUSES.PENDING_CONFIRMATION,

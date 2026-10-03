@@ -766,6 +766,29 @@ The built-in lifecycle actions and authorized preferences read are **POST only**
 
 For example, `routes: { resendConfirmation: '/api/mail/resend', preferences: false }` moves one endpoint and omits another. The route keys are `subscribe`, `resendConfirmation`, `confirm`, `unsubscribe`, `unsubscribeAll` and `preferences`. If you disable a route, implement its POST behavior yourself or omit that UI feature. Do not put secrets, storage, or provider credentials in `nuxt.config.ts` public runtime config or browser bundles.
 
+#### Public subscribe metadata
+
+Hosts may send additional fields in the public subscribe body and select their values through `publicSubscribeMetadata` in the server-only config, never in serialized module options:
+
+```ts
+export default defineBetterNewsletterConfig(async () => ({
+  // origin, storage, capabilities, mailer, ...
+  publicSubscribeMetadata(_event, body) {
+    return {
+      placement: body.placement === 'pricing' ? 'pricing' : 'other'
+    }
+  }
+}))
+```
+
+Public request data is never persisted as newsletter metadata automatically. The server-side metadata hook must explicitly select and validate every value that should be stored.
+
+The hook returns the existing general JSON `metadata` object, or `undefined` to omit it. Keys such as `placement` belong entirely to the host; Better Newsletter does not interpret them or merge client `metadata`. Synchronous and asynchronous hooks are supported. The hook runs after validation and the honeypot check, once per subscribe request, before `securityContext`; all requested audiences receive the same result. It does not run for resend requests.
+
+`SubscribeInput.metadata` describes host-defined context for the concrete subscribe operation and is preserved in the corresponding `SIGNED_UP` or `RESUBSCRIBED` lifecycle event. For example, `metadata: { signupSource: 'pricing', campaign: 'launch' }`. Each audience gets its own event metadata object; earlier events remain unchanged. Host metadata is merged into lifecycle event metadata, but Better Newsletter system metadata takes precedence on key collisions.
+
+Subscribe metadata does not implicitly set or modify `Contact.metadata`. `securityContext` remains separate, transient security/abuse context for guards and is not persisted.
+
 #### Custom public routes
 
 Use the built-in public routes when their request validation and response format suit your application. If you need host-specific source validation, a honeypot, error translation or response semantics, implement a thin public server handler that calls `await useBetterNewsletter(event)` and then the appropriate service method with validated input.

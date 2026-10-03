@@ -588,6 +588,7 @@ export function registerStorageAdapterConformance(
       const signup = (await service.listEvents({ email }))
         .find(event => event.type === NEWSLETTER_EVENT_TYPES.SIGNED_UP)!
       expect(signup.metadata).toEqual({ ...initial, audienceKey: 'default', consentVersion: 'v1', source: 'landing-page' })
+      expect((await service.getContact({ email }))?.metadata ?? {}).toEqual({})
       await service.confirm({ token: messages[0]!.token })
       const capability = await service.createUnsubscribeCapability({ email })
       await service.unsubscribe({ capability: capability! })
@@ -597,7 +598,7 @@ export function registerStorageAdapterConformance(
       expect(events.find(event => event.type === NEWSLETTER_EVENT_TYPES.SIGNED_UP)).toEqual(signup)
       expect(events.find(event => event.type === NEWSLETTER_EVENT_TYPES.RESUBSCRIBED)?.metadata)
         .toEqual({ context: { campaign: 'return' }, audienceKey: 'default', consentVersion: 'v2', source: 'landing-page' })
-      expect((await service.getContact({ email }))?.metadata).toEqual(initial)
+      expect((await service.getContact({ email }))?.metadata ?? {}).toEqual({})
     })
 
     it('keeps lifecycle events in append order and round-trips metadata', async () => {
@@ -780,9 +781,11 @@ export function registerStorageAdapterConformance(
       expect(await service.getContact({ email })).toMatchObject({
         email,
         status: CONTACT_STATUSES.ENABLED,
-        subject: { namespace: 'crm', id: 'private-subject' },
-        metadata: { tier: 'pro' }
+        subject: { namespace: 'crm', id: 'private-subject' }
       })
+      expect((await service.getContact({ email }))?.metadata ?? {}).toEqual({})
+      expect((await service.listEvents({ email })).find(event => event.type === NEWSLETTER_EVENT_TYPES.SIGNED_UP)?.metadata)
+        .toMatchObject({ tier: 'pro' })
       expect(await service.getSubscription({ email })).toMatchObject({
         audienceKey: 'default',
         status: SUBSCRIPTION_STATUSES.PENDING_CONFIRMATION,

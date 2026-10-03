@@ -768,7 +768,6 @@ export function createNewsletterWithSubscriptionBatch(config: BetterNewsletterOp
           email,
           status: CONTACT_STATUSES.ENABLED,
           subject: input.subject ?? null,
-          ...(input.metadata !== undefined ? { metadata: input.metadata } : {}),
           createdAt: now,
           updatedAt: now
         })

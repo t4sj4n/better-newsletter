@@ -161,7 +161,7 @@ describe('Nuxt server integration', () => {
     expect(mapper).toHaveBeenCalledTimes(1)
     expect(calls).toEqual(['metadata', 'security'])
     const contact = await storage.transaction(tx => tx.getContactByEmail('person@example.com'))
-    expect(contact?.metadata).toEqual({ trusted: true, signupSource: 'pricing' })
+    expect(contact?.metadata).toBeUndefined()
     expect(JSON.stringify(contact)).not.toContain('captcha')
     expect(await storage.transaction(tx => tx.listSubscriptions(contact!.id))).toHaveLength(1)
     const signupEvents = (await storage.transaction(tx => tx.listEvents(contact!.id)))
@@ -207,7 +207,7 @@ describe('Nuxt server integration', () => {
     expect(inputs.every(input => input.metadata === metadata)).toBe(true)
     expect(metadata).toEqual({ trusted: true, context: { placement: 'pricing' } })
     const contact = await storage.transaction(tx => tx.getContactByEmail('person@example.com'))
-    expect(contact?.metadata).toEqual(metadata)
+    expect(contact?.metadata).toBeUndefined()
     const subscriptions = await storage.transaction(tx => tx.listSubscriptions(contact!.id))
     expect(subscriptions.map(subscription => subscription.audienceKey)).toEqual(['default', 'product'])
     const signups = (await storage.transaction(tx => tx.listEvents(contact!.id)))
@@ -229,6 +229,7 @@ describe('Nuxt server integration', () => {
     expect(resubscribes.map(event => event.metadata)).toEqual(signups.map(event => event.metadata))
     expect(resubscribes[0]!.metadata).not.toBe(resubscribes[1]!.metadata)
     expect(events.filter(event => event.type === NEWSLETTER_EVENT_TYPES.SIGNED_UP)).toEqual(signups)
+    expect((await service.getContact({ email: 'person@example.com' }))?.metadata).toBeUndefined()
   })
 
   it('limits the request body by bytes while streaming, including chunked requests', async () => {

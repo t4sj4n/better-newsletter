@@ -102,7 +102,7 @@ describe('newsletter lifecycle', () => {
     ])
   })
 
-  it('preserves subscribe context in signup and resubscribe history without replacing contact metadata', async () => {
+  it('preserves subscribe context only in signup and resubscribe history', async () => {
     const { newsletter, messages, waitForMail } = setup()
     const initial = Object.freeze({ signupSource: 'pricing', context: Object.freeze({ campaign: 'launch' }) })
     const later = Object.freeze({ signupSource: 'coming-soon' })
@@ -111,6 +111,7 @@ describe('newsletter lifecycle', () => {
     const signup = (await newsletter.listEvents({ email: 'person@example.com' }))
       .find(event => event.type === NEWSLETTER_EVENT_TYPES.SIGNED_UP)!
     expect(signup.metadata).toEqual({ ...initial, audienceKey: 'default', consentVersion: 'v1', source: 'landing-page' })
+    expect((await newsletter.getContact({ email: 'person@example.com' }))?.metadata).toBeUndefined()
     await newsletter.confirm({ token: messages[0]!.token })
     const capability = await newsletter.createUnsubscribeCapability({ email: 'person@example.com' })
     await newsletter.unsubscribe({ capability: capability! })
@@ -120,9 +121,26 @@ describe('newsletter lifecycle', () => {
     expect(events.find(event => event.type === NEWSLETTER_EVENT_TYPES.SIGNED_UP)).toEqual(signup)
     expect(events.find(event => event.type === NEWSLETTER_EVENT_TYPES.RESUBSCRIBED)?.metadata)
       .toEqual({ ...later, audienceKey: 'default', consentVersion: 'v2', source: 'landing-page' })
-    expect((await newsletter.getContact({ email: 'person@example.com' }))?.metadata).toEqual(initial)
+    expect((await newsletter.getContact({ email: 'person@example.com' }))?.metadata).toBeUndefined()
     expect(initial).toEqual({ signupSource: 'pricing', context: { campaign: 'launch' } })
     expect(later).toEqual({ signupSource: 'coming-soon' })
+  })
+
+  it('retains explicitly imported contact metadata when subscribing to another audience', async () => {
+    const { newsletter, waitForMail } = setup()
+    await newsletter.importSubscription({
+      email: 'person@example.com', status: SUBSCRIPTION_STATUSES.ACTIVE,
+      consent: { version: 'legacy', consentedAt: new Date('2025-01-01T00:00:00Z') },
+      confirmedAt: new Date('2025-01-01T00:05:00Z'), metadata: { profile: 'imported' }
+    })
+    await newsletter.subscribe({
+      email: 'person@example.com', audience: 'product', consent: consent(), metadata: { signupSource: 'pricing' }
+    })
+    await waitForMail()
+    expect((await newsletter.getContact({ email: 'person@example.com' }))?.metadata).toEqual({ profile: 'imported' })
+    expect((await newsletter.listEvents({ email: 'person@example.com' }))
+      .find(event => event.type === NEWSLETTER_EVENT_TYPES.SIGNED_UP)?.metadata)
+      .toEqual({ signupSource: 'pricing', audienceKey: 'product', consentVersion: 'v1', source: 'landing-page' })
   })
 
   it('keeps system metadata authoritative for signup and resubscribe collisions', async () => {

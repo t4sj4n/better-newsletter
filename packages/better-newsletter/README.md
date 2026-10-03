@@ -785,7 +785,9 @@ Public request data is never persisted as newsletter metadata automatically. The
 
 The hook returns the existing general JSON `metadata` object, or `undefined` to omit it. Keys such as `placement` belong entirely to the host; Better Newsletter does not interpret them or merge client `metadata`. Synchronous and asynchronous hooks are supported. The hook runs after validation and the honeypot check, once per subscribe request, before `securityContext`; all requested audiences receive the same result. It does not run for resend requests.
 
-`metadata` is persistent application context, stored on the contact. `securityContext` is separate, transient security/abuse context for guards and is not persisted.
+`SubscribeInput.metadata` describes host context for the concrete subscribe operation, for example `metadata: { signupSource: 'pricing', campaign: 'launch' }`. It is preserved in the corresponding `SIGNED_UP` or `RESUBSCRIBED` lifecycle event. Each audience gets its own event metadata object; earlier events remain unchanged. Host metadata is merged into lifecycle event metadata, but Better Newsletter system metadata takes precedence on key collisions.
+
+For compatibility, metadata is also used as initial `Contact.metadata` when the contact is first created. Later subscribe metadata does not automatically overwrite existing contact metadata. `securityContext` remains separate, transient security/abuse context for guards and is not persisted.
 
 #### Custom public routes
 

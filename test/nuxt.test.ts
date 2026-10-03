@@ -164,8 +164,12 @@ describe('Nuxt server integration', () => {
     expect(contact?.metadata).toEqual({ trusted: true, signupSource: 'pricing' })
     expect(JSON.stringify(contact)).not.toContain('captcha')
     expect(await storage.transaction(tx => tx.listSubscriptions(contact!.id))).toHaveLength(1)
-    expect((await storage.transaction(tx => tx.listEvents(contact!.id)))
-      .filter(event => event.type === NEWSLETTER_EVENT_TYPES.SIGNED_UP)).toHaveLength(1)
+    const signupEvents = (await storage.transaction(tx => tx.listEvents(contact!.id)))
+      .filter(event => event.type === NEWSLETTER_EVENT_TYPES.SIGNED_UP)
+    expect(signupEvents.map(event => event.metadata)).toEqual([{
+      trusted: true, signupSource: 'pricing', audienceKey: 'default',
+      consentVersion: '2026-01', source: 'test-form'
+    }])
     await http.request('resendConfirmation', { email: 'person@example.com' })
     expect(mapper).toHaveBeenCalledTimes(1)
   })
@@ -206,6 +210,25 @@ describe('Nuxt server integration', () => {
     expect(contact?.metadata).toEqual(metadata)
     const subscriptions = await storage.transaction(tx => tx.listSubscriptions(contact!.id))
     expect(subscriptions.map(subscription => subscription.audienceKey)).toEqual(['default', 'product'])
+    const signups = (await storage.transaction(tx => tx.listEvents(contact!.id)))
+      .filter(event => event.type === NEWSLETTER_EVENT_TYPES.SIGNED_UP)
+    expect(signups.map(event => event.metadata)).toEqual(['default', 'product'].map(audienceKey => ({
+      ...metadata, audienceKey, consentVersion: '2026-01', source: 'test-form'
+    })))
+    expect(signups[0]!.metadata).not.toBe(signups[1]!.metadata)
+    const service = await useBetterNewsletter({ context: {} } as Parameters<typeof useBetterNewsletter>[0], config)
+    const capability = await service.createUnsubscribeCapability({ email: 'person@example.com', all: true })
+    await http.request('unsubscribeAll', { capability })
+    await http.request('subscribe', {
+      email: 'person@example.com', consent: true, consentVersion: '2026-01',
+      audiences: ['default', 'product']
+    })
+    expect(mapper).toHaveBeenCalledTimes(2)
+    const events = await storage.transaction(tx => tx.listEvents(contact!.id))
+    const resubscribes = events.filter(event => event.type === NEWSLETTER_EVENT_TYPES.RESUBSCRIBED)
+    expect(resubscribes.map(event => event.metadata)).toEqual(signups.map(event => event.metadata))
+    expect(resubscribes[0]!.metadata).not.toBe(resubscribes[1]!.metadata)
+    expect(events.filter(event => event.type === NEWSLETTER_EVENT_TYPES.SIGNED_UP)).toEqual(signups)
   })
 
   it('limits the request body by bytes while streaming, including chunked requests', async () => {

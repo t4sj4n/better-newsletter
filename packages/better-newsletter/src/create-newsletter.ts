@@ -809,6 +809,7 @@ export function createNewsletterWithSubscriptionBatch(config: BetterNewsletterOp
           type: NEWSLETTER_EVENT_TYPES.SIGNED_UP,
           occurredAt: now,
           metadata: {
+            ...input.metadata,
             audienceKey,
             consentVersion: consent.version,
             ...(consent.source != null ? { source: consent.source } : {})
@@ -844,6 +845,7 @@ export function createNewsletterWithSubscriptionBatch(config: BetterNewsletterOp
           type: NEWSLETTER_EVENT_TYPES.RESUBSCRIBED,
           occurredAt: now,
           metadata: {
+            ...input.metadata,
             audienceKey,
             consentVersion: consent.version,
             ...(consent.source != null ? { source: consent.source } : {})

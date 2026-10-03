@@ -153,15 +153,7 @@ import BetterNewsletter from 'better-newsletter/nuxt'
 
 export default defineNuxtConfig({
   modules: [BetterNewsletter],
-  betterNewsletter: {
-    audiences: {
-      default: { public: true }
-    },
-    consent: {
-      version: 'v1',
-      source: 'signup-form'
-    }
-  }
+  betterNewsletter: { basePath: '/api/newsletter' }
 })
 ```
 
@@ -175,13 +167,17 @@ export default defineBetterNewsletterConfig(() => ({
   origin: 'https://example.com',
   storage,
   mailer,
-  capabilities
+  capabilities,
+  publicApi: {
+    audiences: { default: { public: true } },
+    consent: { version: 'v1', source: 'signup-form' }
+  }
 }))
 ```
 
 The Nuxt integration supplies the lifecycle API routes. Your application still owns the signup form, confirmation/unsubscribe pages and mail copy.
 
-If you implement a custom public signup endpoint with `useBetterNewsletter(event)`, set `betterNewsletter.routes.subscribe: false` so callers cannot bypass your endpoint's additional validation or abuse checks through the built-in route. Apply the same rule to other public flows you replace. See [custom public routes](packages/better-newsletter/README.md#custom-public-routes).
+If you implement a custom public signup endpoint with `useBetterNewsletter(event)`, set `publicApi.routes.subscribe: false` in the server configuration so callers cannot bypass your endpoint's additional validation or abuse checks through the built-in route. Apply the same rule to other public flows you replace. See [custom public routes](packages/better-newsletter/README.md#custom-public-routes).
 
 See [examples/basic](examples/basic/README.md) for a minimal Nuxt example ([try directly on StackBlitz](https://stackblitz.com/github/t4sj4n/better-newsletter/tree/main/examples/basic)) and the [runtime package documentation](packages/better-newsletter/README.md) for security, migrations, adapters and the full API.
 

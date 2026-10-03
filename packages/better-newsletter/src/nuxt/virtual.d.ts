@@ -3,9 +3,3 @@ declare module '#better-newsletter-config' {
   const config: () => BetterNewsletterServerConfig | Promise<BetterNewsletterServerConfig>
   export default config
 }
-
-declare module '#better-newsletter-options' {
-  import type { BetterNewsletterModuleOptions } from '../nuxt.js'
-  const options: Pick<BetterNewsletterModuleOptions, 'defaultAudience' | 'audiences' | 'consent'>
-  export default options
-}

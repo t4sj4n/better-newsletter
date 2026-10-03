@@ -1,16 +1,17 @@
-import type { BetterNewsletterModuleOptions } from '../nuxt.js'
-
-type Routes = BetterNewsletterModuleOptions['routes']
+import { assertNewsletterBasePath, newsletterRoutes, type NewsletterRoutingOptions } from './routing.js'
+export type { NewsletterRoutingOptions, NewsletterRoute, NewsletterRoutes } from './routing.js'
 type Fetcher = (url: string, init: RequestInit) => Promise<Response>
 
 /** UI-agnostic browser helper; configure paths to match the Nuxt module. */
 export function createNewsletterClient(
-  routes: Routes,
+  { basePath = '/api/newsletter', routes: overrides }: NewsletterRoutingOptions = {},
   fetcher: Fetcher = fetch
 ) {
+  assertNewsletterBasePath(basePath)
+  const routes = newsletterRoutes(overrides)
   async function post(route: string | false, body: object): Promise<unknown> {
     if (!route) throw new Error('This newsletter route is disabled.')
-    const response = await fetcher(route, {
+    const response = await fetcher(`${basePath}${route}`, {
       method: 'POST',
       headers: { 'content-type': 'application/json' },
       body: JSON.stringify(body)

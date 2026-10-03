@@ -1,13 +1,52 @@
-import { createError, getMethod, type H3Event } from 'h3'
+import { createError, defineEventHandler, getMethod, getRequestURL, type H3Event } from 'h3'
 import {
   NEWSLETTER_ERROR_CODES,
   NewsletterError,
   normalizeAndValidateEmail
 } from '../index.js'
-import type { BetterNewsletterModuleOptions, NewsletterRoute } from '../nuxt.js'
-import { flushBetterNewsletter, newsletterPublicSubscribeMetadata, newsletterSecurityContext, subscribeNewsletterAudiences, useBetterNewsletter, type BetterNewsletterServerConfig } from './server.js'
+import { assertAudienceKey, DEFAULT_AUDIENCE_KEY } from '../normalize.js'
+import { assertNewsletterBasePath, newsletterRoutes, type NewsletterRoute } from './routing.js'
+import { flushBetterNewsletter, newsletterPublicSubscribeMetadata, newsletterSecurityContext, subscribeNewsletterAudiences, useBetterNewsletter, newsletterServerConfig, type NewsletterServerConfiguration, type BetterNewsletterServerConfig } from './server.js'
 
-type PublicOptions = Pick<BetterNewsletterModuleOptions, 'defaultAudience' | 'audiences' | 'consent'>
+interface PublicOptions {
+  defaultAudience: string
+  audiences: Record<string, { public: boolean }>
+  consent: { version: string; source: string }
+}
+
+/** One HTTP boundary; lifecycle actions and policy belong behind this handler. */
+export function createNewsletterHandler(
+  { basePath = '/api/newsletter' }: { basePath?: string } = {},
+  configuration?: NewsletterServerConfiguration
+) {
+  assertNewsletterBasePath(basePath)
+  return defineEventHandler(async event => {
+    const pathname = getRequestURL(event).pathname
+    if (!pathname.startsWith(`${basePath}/`)) {
+      throw createError({ statusCode: 404, statusMessage: 'Newsletter action not found.' })
+    }
+    const config = await newsletterServerConfig(event, configuration)
+    const policy = config.publicApi
+    const routes = newsletterRoutes(policy?.routes)
+    const path = pathname.slice(basePath.length)
+    const action = (Object.keys(routes) as NewsletterRoute[]).find(action => routes[action] === path)
+    if (action == null) {
+      throw createError({ statusCode: 404, statusMessage: 'Newsletter action not found.' })
+    }
+    const options: PublicOptions = {
+      defaultAudience: policy?.defaultAudience ?? DEFAULT_AUDIENCE_KEY,
+      audiences: policy?.audiences ?? { [DEFAULT_AUDIENCE_KEY]: { public: true } },
+      consent: policy?.consent ?? { version: 'v1', source: 'signup-form' }
+    }
+    assertAudienceKey(options.defaultAudience)
+    for (const audience of Object.keys(options.audiences)) assertAudienceKey(audience)
+    if (typeof options.consent.version !== 'string' || typeof options.consent.source !== 'string'
+      || !options.consent.version.trim() || !options.consent.source.trim()) {
+      throw new Error('Newsletter public consent requires a version and source.')
+    }
+    return handleNewsletterRequest(event, action, options, config)
+  })
+}
 
 const accepted = Object.freeze({ accepted: true as const })
 
@@ -41,7 +80,7 @@ async function payload(event: H3Event): Promise<Record<string, unknown>> {
   }
 }
 
-export async function handleNewsletterRequest(
+async function handleNewsletterRequest(
   event: H3Event,
   action: NewsletterRoute,
   options: PublicOptions,

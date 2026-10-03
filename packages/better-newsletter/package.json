@@ -80,10 +80,14 @@
       "types": "./dist/nuxt/client.d.ts",
       "import": "./dist/nuxt/client.js"
     },
-    "./package.json": "./package.json"
+    "./package.json": "./package.json",
+    "./nuxt/handler": {
+      "types": "./dist/nuxt/handler.d.ts",
+      "import": "./dist/nuxt/handler.js"
+    }
   },
   "scripts": {
-    "build": "tsc -p tsconfig.build.json",
+    "build": "node --eval \"require('node:fs').rmSync('dist', { recursive: true, force: true })\" && tsc -p tsconfig.build.json",
     "prepack": "pnpm build",
     "typecheck": "tsc -p tsconfig.json"
   },

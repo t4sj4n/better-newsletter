@@ -1,4 +1,5 @@
 import { createNewsletterWithSubscriptionBatch } from '../create-newsletter.js'
+import type { NewsletterRoutes } from './routing.js'
 import type { JsonValue } from '../domain.js'
 import type { SubscribeInput } from '../operations.js'
 import type { H3Event } from 'h3'
@@ -10,6 +11,13 @@ import type {
 import { createHmacRateLimitKeyProvider, type RateLimiter } from '../security.js'
 
 export interface BetterNewsletterServerConfig extends Omit<BetterNewsletterOptions, 'runBackground' | 'rateLimitChecks'> {
+  /** Public HTTP policy; never serialized into Nuxt module options. */
+  readonly publicApi?: {
+    readonly defaultAudience?: string
+    readonly audiences?: Record<string, { public: boolean }>
+    readonly consent?: { version: string; source: string }
+    readonly routes?: Partial<NewsletterRoutes>
+  }
   /** Absolute trusted application origin, never computed from request headers. */
   readonly origin: string
   /** Host-approved client identity; never read arbitrary forwarded headers here. */
@@ -43,7 +51,24 @@ const requestServices = new WeakMap<H3Event, {
   tasks: Promise<void>[]
 }>()
 const requestBatches = new WeakMap<H3Event, ReturnType<typeof createNewsletterWithSubscriptionBatch>['subscribeMany']>()
-const requestConfigs = new WeakMap<H3Event, BetterNewsletterServerConfig>()
+const requestConfigs = new WeakMap<H3Event, Promise<BetterNewsletterServerConfig>>()
+
+export type NewsletterServerConfiguration = BetterNewsletterServerConfig
+  | (() => BetterNewsletterServerConfig | Promise<BetterNewsletterServerConfig>)
+
+/** Shares the server-only configuration between HTTP routing and trusted service access. */
+export function newsletterServerConfig(
+  event: H3Event,
+  configuration?: NewsletterServerConfiguration
+): Promise<BetterNewsletterServerConfig> {
+  const existing = requestConfigs.get(event)
+  if (existing != null) return existing
+  const config = (async () => configuration == null
+    ? (await import('#better-newsletter-config')).default()
+    : typeof configuration === 'function' ? configuration() : configuration)()
+  requestConfigs.set(event, config)
+  return config
+}
 
 function assertOrigin(origin: string): void {
   const url = new URL(origin)
@@ -68,16 +93,13 @@ export function newsletterUrl(origin: string, path: string, token: string): stri
 
 export async function useBetterNewsletter(
   event: H3Event,
-  configuration?: BetterNewsletterServerConfig | (() => BetterNewsletterServerConfig | Promise<BetterNewsletterServerConfig>)
+  configuration?: NewsletterServerConfiguration
 ): Promise<BetterNewsletter> {
   const existing = requestServices.get(event)
   if (existing != null) return existing.service
   const tasks: Promise<void>[] = []
   const service = (async () => {
-    const config = configuration == null
-      ? await (await import('#better-newsletter-config')).default()
-      : typeof configuration === 'function' ? await configuration() : configuration
-    requestConfigs.set(event, config)
+    const config = await newsletterServerConfig(event, configuration)
     assertOrigin(config.origin)
     if ((config.clientRateLimit == null) !== (config.trustedClientIdentity == null)) {
       throw new Error('Client rate limiting requires both a limiter and a trusted identity resolver.')
@@ -95,7 +117,7 @@ export async function useBetterNewsletter(
         secret: clientRateLimit.secret,
         material: input => `${input.action}\u0000${identity}`
       }),
-      rateLimits: clientRateLimit.policies
+      ...(clientRateLimit.policies === undefined ? {} : { rateLimits: clientRateLimit.policies })
     }]
     const batch = createNewsletterWithSubscriptionBatch({
       ...config,
@@ -139,14 +161,14 @@ export async function newsletterPublicSubscribeMetadata(
   event: H3Event,
   body: Readonly<Record<string, unknown>>
 ): Promise<Readonly<Record<string, JsonValue>> | undefined> {
-  return requestConfigs.get(event)?.publicSubscribeMetadata?.(event, body)
+  return (await requestConfigs.get(event))?.publicSubscribeMetadata?.(event, body)
 }
 
 export async function newsletterSecurityContext(
   event: H3Event,
   body: Readonly<Record<string, unknown>>
 ): Promise<unknown> {
-  return requestConfigs.get(event)?.securityContext?.(event, body)
+  return (await requestConfigs.get(event))?.securityContext?.(event, body)
 }
 
 /** Waits for any queued delivery work; public service methods flush automatically. */

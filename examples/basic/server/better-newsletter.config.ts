@@ -11,6 +11,16 @@ export default defineBetterNewsletterConfig(() => {
   }
 
   return {
+    publicApi: {
+      defaultAudience: 'default',
+      audiences: { default: { public: true } },
+      consent: { version: 'basic-v1', source: 'basic-signup-form' },
+      routes: {
+        resendConfirmation: false,
+        unsubscribeAll: false,
+        preferences: false
+      }
+    },
     origin: getBasicOrigin(),
     storage,
     capabilities,

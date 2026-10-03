@@ -10,6 +10,7 @@ import {
 import { createHmacRateLimitKeyProvider } from '../packages/better-newsletter/src/security.js'
 import { memoryCapabilities, memoryRateLimiter, memoryAdapter } from '../packages/better-newsletter/src/adapters/memory.js'
 import { handleNewsletterRequest } from '../packages/better-newsletter/src/nuxt/handler.js'
+import * as newsletterServer from '../packages/better-newsletter/src/nuxt/server.js'
 import { newsletterUrl, useBetterNewsletter, type BetterNewsletterServerConfig } from '../packages/better-newsletter/src/nuxt/server.js'
 import type { BetterNewsletterModuleOptions, NewsletterRoute } from '../packages/better-newsletter/src/nuxt.js'
 
@@ -25,6 +26,7 @@ afterEach(async () => {
     server!.close(error => error ? reject(error) : resolve())
   )
   server = undefined
+  vi.restoreAllMocks()
 })
 
 async function fixture(config: BetterNewsletterServerConfig) {
@@ -98,7 +100,8 @@ describe('Nuxt server integration', () => {
 
   it('rejects malformed requests, missing consent, and non-public audiences before storage', async () => {
     const { config, storage } = configuration()
-    const http = await fixture(config)
+    const mapper = vi.fn(() => ({ trusted: true }))
+    const http = await fixture({ ...config, publicSubscribeMetadata: mapper })
     for (const body of [
       { email: 'person@example.com', consent: false, consentVersion: '2026-01' },
       { email: 'person@example.com', consent: true, consentVersion: 'old' },
@@ -114,6 +117,95 @@ describe('Nuxt server integration', () => {
       website: 'honeypot'
     })).body).toEqual({ accepted: true })
     expect(await storage.transaction(tx => tx.getContactByEmail('person@example.com'))).toBeNull()
+    expect(mapper).not.toHaveBeenCalled()
+  })
+
+  it.each(['absent', 'undefined'] as const)('omits metadata with an %s hook and ignores client metadata', async mode => {
+    const { config, storage } = configuration()
+    const http = await fixture({
+      ...config,
+      ...(mode === 'undefined' ? { publicSubscribeMetadata: () => undefined } : {})
+    })
+    expect(await http.request('subscribe', {
+      email: 'person@example.com', consent: true, consentVersion: '2026-01',
+      metadata: { admin: true, anything: 'forged' }
+    })).toEqual({ status: 200, body: { accepted: true } })
+    const contact = await storage.transaction(tx => tx.getContactByEmail('person@example.com'))
+    expect(contact).not.toBeNull()
+    expect(contact).not.toHaveProperty('metadata')
+    const events = await storage.transaction(tx => tx.listEvents(contact!.id))
+    expect(events.some(event => event.type === NEWSLETTER_EVENT_TYPES.SIGNED_UP)).toBe(true)
+    expect(JSON.stringify(events)).not.toContain('forged')
+    expect(events.every(event => !Object.hasOwn(event.metadata, 'admin'))).toBe(true)
+  })
+
+  it.each([false, true])('persists only host-selected metadata (async=%s) before security context', async asynchronous => {
+    const { config, storage } = configuration()
+    const calls: string[] = []
+    const select: NonNullable<BetterNewsletterServerConfig['publicSubscribeMetadata']> = (_event, body) => {
+      calls.push('metadata')
+      return { trusted: true, signupSource: body.source === 'pricing' ? 'pricing' : 'other' }
+    }
+    const mapper = vi.fn(asynchronous
+      ? async (...args: Parameters<typeof select>) => select(...args)
+      : select)
+    const http = await fixture({
+      ...config,
+      publicSubscribeMetadata: mapper,
+      securityContext: () => { calls.push('security'); return { captcha: 'transient' } }
+    })
+    expect(await http.request('subscribe', {
+      email: 'person@example.com', consent: true, consentVersion: '2026-01',
+      source: 'pricing', metadata: { admin: true, anything: 'forged' }
+    })).toEqual({ status: 200, body: { accepted: true } })
+    expect(mapper).toHaveBeenCalledTimes(1)
+    expect(calls).toEqual(['metadata', 'security'])
+    const contact = await storage.transaction(tx => tx.getContactByEmail('person@example.com'))
+    expect(contact?.metadata).toEqual({ trusted: true, signupSource: 'pricing' })
+    expect(JSON.stringify(contact)).not.toContain('captcha')
+    expect(await storage.transaction(tx => tx.listSubscriptions(contact!.id))).toHaveLength(1)
+    expect((await storage.transaction(tx => tx.listEvents(contact!.id)))
+      .filter(event => event.type === NEWSLETTER_EVENT_TYPES.SIGNED_UP)).toHaveLength(1)
+    await http.request('resendConfirmation', { email: 'person@example.com' })
+    expect(mapper).toHaveBeenCalledTimes(1)
+  })
+
+  it('skips host hooks and all storage writes for honeypot requests', async () => {
+    const { config, storage, sent } = configuration()
+    const mapper = vi.fn(() => ({ trusted: true }))
+    const securityContext = vi.fn()
+    const transaction = vi.spyOn(storage, 'transaction')
+    const http = await fixture({ ...config, publicSubscribeMetadata: mapper, securityContext })
+    expect(await http.request('subscribe', {
+      email: 'person@example.com', consent: true, consentVersion: '2026-01', website: 'bot'
+    })).toEqual({ status: 200, body: { accepted: true } })
+    expect(mapper).not.toHaveBeenCalled()
+    expect(securityContext).not.toHaveBeenCalled()
+    expect(transaction).not.toHaveBeenCalled()
+    expect(sent).toEqual([])
+    expect(await storage.transaction(tx => tx.getContactByEmail('person@example.com'))).toBeNull()
+  })
+
+  it('maps once and passes the same immutable metadata to every audience input', async () => {
+    const { config, storage } = configuration()
+    const metadata = Object.freeze({ trusted: true, context: Object.freeze({ placement: 'pricing' }) })
+    const mapper = vi.fn(() => metadata)
+    const subscribe = vi.spyOn(newsletterServer, 'subscribeNewsletterAudiences')
+    const http = await fixture({ ...config, publicSubscribeMetadata: mapper })
+    expect(await http.request('subscribe', {
+      email: 'person@example.com', consent: true, consentVersion: '2026-01',
+      audiences: ['default', 'product']
+    })).toEqual({ status: 200, body: { accepted: true } })
+    expect(mapper).toHaveBeenCalledTimes(1)
+    expect(subscribe).toHaveBeenCalledTimes(1)
+    const inputs = subscribe.mock.calls[0]![1]
+    expect(inputs.map(input => input.audience)).toEqual(['default', 'product'])
+    expect(inputs.every(input => input.metadata === metadata)).toBe(true)
+    expect(metadata).toEqual({ trusted: true, context: { placement: 'pricing' } })
+    const contact = await storage.transaction(tx => tx.getContactByEmail('person@example.com'))
+    expect(contact?.metadata).toEqual(metadata)
+    const subscriptions = await storage.transaction(tx => tx.listSubscriptions(contact!.id))
+    expect(subscriptions.map(subscription => subscription.audienceKey)).toEqual(['default', 'product'])
   })
 
   it('limits the request body by bytes while streaming, including chunked requests', async () => {

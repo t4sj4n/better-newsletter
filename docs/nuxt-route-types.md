@@ -1,5 +1,7 @@
 # Nitro route typing investigation (#43)
 
+> Historical investigation of the six-route integration. Issue #48 replaced those routes with one handler and retired the synthetic negative probe and per-route `InternalApi` assertions. Paths and commands below describe the earlier implementation; see [the current architecture and migration](nuxt-single-handler.md). The upstream matcher finding remains relevant to unrelated host fetch calls.
+
 ## Finding
 
 The reported `TS2589: Type instantiation is excessively deep and possibly infinite` is reproducible in a large Nuxt consumer when Better Newsletter routes remain in Nitro's generated `InternalApi`.
@@ -12,7 +14,7 @@ Sources: [Investigated Nuxt useFetch types](https://github.com/nuxt/nuxt/blob/v4
 
 ## Controlled checks
 
-The affected application's source was copied to an isolated directory. Application checkout files and dependencies were not edited. The original checks used the version matrix recorded in the [fixture manifest at commit 9041efb](https://github.com/t4sj4n/better-newsletter/blob/9041efb1f3497632fdc90896bf364723e437bec7/test/fixtures/nuxt-type-limit/package.json). The maintained probe matrix is defined in the [current fixture package.json](../test/fixtures/nuxt-type-limit/package.json); smoke code reads its dependencies, development dependencies and pnpm overrides directly.
+The affected application's source was copied to an isolated directory. Application checkout files and dependencies were not edited. The original checks used the version matrix recorded in the [fixture manifest at commit 9041efb](https://github.com/t4sj4n/better-newsletter/blob/9041efb1f3497632fdc90896bf364723e437bec7/test/fixtures/nuxt-type-limit/package.json). The maintained probe matrix is defined in the [historical fixture package.json](https://github.com/t4sj4n/better-newsletter/blob/6e6a085/test/fixtures/nuxt-type-limit/package.json); smoke code reads its dependencies, development dependencies and pnpm overrides directly.
 
 | Change in the isolated consumer | Result |
 | --- | --- |
@@ -28,7 +30,7 @@ A separate small packed consumer passes with all six built-in routes. Its succes
 
 ## Host-independent reproduction
 
-[`test/fixtures/nuxt-type-limit`](../test/fixtures/nuxt-type-limit/) contains only a finite `Item` response, a small Nuxt configuration, and a generator for 300 synthetic route types. There are no host business types, recursive JSON models or database dependencies. The synthetic entries model a large generated route table; only `/api/items` and the newsletter endpoints are actual registered HTTP handlers.
+[`test/fixtures/nuxt-type-limit`](https://github.com/t4sj4n/better-newsletter/tree/6e6a085/test/fixtures/nuxt-type-limit) contains only a finite `Item` response, a small Nuxt configuration, and a generator for 300 synthetic route types. There are no host business types, recursive JSON models or database dependencies. The synthetic entries model a large generated route table; only `/api/items` and the newsletter endpoints are actual registered HTTP handlers.
 
 The pack smoke installs the freshly packed runtime in a clean consumer using the fixture manifest's exact upstream version matrix. It distinguishes two contracts:
 

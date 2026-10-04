@@ -1,6 +1,6 @@
 import { createServer, IncomingMessage, request as httpRequest, ServerResponse, type Server } from 'node:http'
 import { Socket } from 'node:net'
-import { createApp, createEvent, defineEventHandler, toNodeListener } from 'h3'
+import { createApp, createEvent, toNodeListener } from 'h3'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import {
   CONTACT_STATUSES,
@@ -9,12 +9,12 @@ import {
 } from '../packages/better-newsletter/src/index.js'
 import { createHmacRateLimitKeyProvider } from '../packages/better-newsletter/src/security.js'
 import { memoryCapabilities, memoryRateLimiter, memoryAdapter } from '../packages/better-newsletter/src/adapters/memory.js'
-import { handleNewsletterRequest } from '../packages/better-newsletter/src/nuxt/handler.js'
+import { createNewsletterHandler } from '../packages/better-newsletter/src/nuxt/handler.js'
 import * as newsletterServer from '../packages/better-newsletter/src/nuxt/server.js'
 import { newsletterUrl, useBetterNewsletter, type BetterNewsletterServerConfig } from '../packages/better-newsletter/src/nuxt/server.js'
-import type { BetterNewsletterModuleOptions, NewsletterRoute } from '../packages/better-newsletter/src/nuxt.js'
+import type { NewsletterRoute } from '../packages/better-newsletter/src/nuxt/routing.js'
 
-const options: Pick<BetterNewsletterModuleOptions, 'defaultAudience' | 'audiences' | 'consent'> = {
+const options = {
   defaultAudience: 'default',
   audiences: { default: { public: true }, product: { public: true }, private: { public: false } },
   consent: { version: '2026-01', source: 'test-form' }
@@ -31,16 +31,16 @@ afterEach(async () => {
 
 async function fixture(config: BetterNewsletterServerConfig) {
   const app = createApp()
-  for (const action of ['unsubscribeAll', 'unsubscribe', 'subscribe', 'resendConfirmation', 'confirm', 'preferences'] as NewsletterRoute[]) {
-    app.use(`/${action}`, defineEventHandler(event =>
-      handleNewsletterRequest(event, action, options, config)
-    ))
-  }
+  const routes = Object.fromEntries(['unsubscribeAll', 'unsubscribe', 'subscribe', 'resendConfirmation', 'confirm', 'preferences']
+    .map(action => [action, `/${action}`])) as Record<NewsletterRoute, string>
+  app.use(createNewsletterHandler({ basePath: '/newsletter' }, {
+    ...config, publicApi: { ...options, routes, ...config.publicApi }
+  }))
   server = createServer(toNodeListener(app))
   await new Promise<void>(resolve => server!.listen(0, '127.0.0.1', resolve))
   const address = server.address()
   if (address == null || typeof address === 'string') throw new Error('Missing test address.')
-  const base = `http://127.0.0.1:${address.port}`
+  const base = `http://127.0.0.1:${address.port}/newsletter`
   return {
     request: async (action: string, body: object, method = 'POST', headers: Record<string, string> = {}) => {
       const response = await fetch(`${base}/${action}`, {
@@ -74,6 +74,19 @@ function configuration() {
 }
 
 describe('Nuxt server integration', () => {
+  it('dispatches only enabled exact paths and rejects unknown or moved actions before service access', async () => {
+    const { config, storage } = configuration()
+    const transaction = vi.spyOn(storage, 'transaction')
+    const http = await fixture({ ...config, publicApi: { routes: { subscribe: '/signup', preferences: false } } })
+    for (const action of ['subscribe', 'preferences', 'unknown', 'signup/extra', 'signup/']) {
+      expect((await http.request(action, {})).status).toBe(404)
+    }
+    expect(transaction).not.toHaveBeenCalled()
+    expect(await http.request('signup', {
+      email: 'person@example.com', consent: true, consentVersion: '2026-01'
+    })).toEqual({ status: 200, body: { accepted: true } })
+  })
+
   it('exposes trusted confirmation APIs through the request service without sending mail', async () => {
     const { config, sent } = configuration()
     const event = createEvent(new IncomingMessage(new Socket()), new ServerResponse(new IncomingMessage(new Socket())))
@@ -278,16 +291,17 @@ describe('Nuxt server integration', () => {
     const { config } = configuration()
     const incoming = new IncomingMessage(new Socket())
     incoming.method = 'POST'
+    incoming.url = '/api/newsletter/subscribe'
     const event = createEvent(incoming, new ServerResponse(incoming))
     event.web = {
-      request: new Request('http://localhost/subscribe', {
+      request: new Request('http://localhost/api/newsletter/subscribe', {
         method: 'POST',
         body: JSON.stringify({
           email: 'person@example.com', consent: true, consentVersion: '2026-01'
         })
       })
     }
-    await expect(handleNewsletterRequest(event, 'subscribe', options, config))
+    await expect(createNewsletterHandler({}, { ...config, publicApi: options })(event))
       .resolves.toEqual({ accepted: true })
   })
 

@@ -703,15 +703,7 @@ import BetterNewsletter from 'better-newsletter/nuxt'
 
 export default defineNuxtConfig({
   modules: [BetterNewsletter],
-  betterNewsletter: {
-    defaultAudience: 'default',
-    consent: { version: 'privacy-2026-09', source: 'landing-page' },
-    audiences: {
-      default: { public: true },
-      'product-news': { public: true },
-      'weekly-analysis': { public: true }
-    }
-  }
+  betterNewsletter: { basePath: '/api/newsletter' }
 })
 ```
 
@@ -727,6 +719,15 @@ const capabilities = memoryCapabilities()
 const appOrigin = new URL(process.env.APP_ORIGIN ?? 'http://localhost:3000').origin
 
 export default defineBetterNewsletterConfig(async () => ({
+  publicApi: {
+    defaultAudience: 'default',
+    consent: { version: 'privacy-2026-09', source: 'landing-page' },
+    audiences: {
+      default: { public: true },
+      'product-news': { public: true },
+      'weekly-analysis': { public: true }
+    }
+  },
   origin: appOrigin,
   storage,
   capabilities,
@@ -747,11 +748,17 @@ This placeholder mailer deliberately does **not** deliver. Replace it with a pro
 
 | Option | Meaning |
 | --- | --- |
-| `defaultAudience` | Audience used when none is supplied (default: `default`). |
-| `audiences` | Map of audience keys to `{ public: boolean }`. Only explicitly public audiences should be accepted by public endpoints. |
-| `consent` | Version and source stored with explicit public consent (defaults: `{ version: 'v1', source: 'signup-form' }`). |
+| `basePath` | Single handler mount, default `/api/newsletter` (no trailing slash). |
 | `configFile` | Server config path, default `server/better-newsletter.config.ts`. |
-| `routes` | Override a POST route path with a string or disable it with `false`. |
+
+Public policy belongs in the server factory's optional `publicApi` object:
+
+| Option | Meaning |
+| --- | --- |
+| `defaultAudience` | Audience used when none is supplied (default: `default`). |
+| `audiences` | Public audience allowlist (default: `{ default: { public: true } }`). |
+| `consent` | Version and source stored with explicit public consent (default: `{ version: 'v1', source: 'signup-form' }`). |
+| `routes` | Relative action paths within the mount, or `false` to disable an action. |
 
 The built-in lifecycle actions and authorized preferences read are **POST only**:
 
@@ -764,7 +771,7 @@ The built-in lifecycle actions and authorized preferences read are **POST only**
 | `/api/newsletter/unsubscribe-all` | `{ capability }` |
 | `/api/newsletter/preferences` | `{ capability }` (read-only; returns `{ subscriptions: { audience, status, unsubscribeCapability }[] \| null }`) |
 
-For example, `routes: { resendConfirmation: '/api/mail/resend', preferences: false }` moves one endpoint and omits another. The route keys are `subscribe`, `resendConfirmation`, `confirm`, `unsubscribe`, `unsubscribeAll` and `preferences`. If you disable a route, implement its POST behavior yourself or omit that UI feature. Do not put secrets, storage, or provider credentials in `nuxt.config.ts` public runtime config or browser bundles.
+For example, `publicApi: { routes: { resendConfirmation: '/resend', preferences: false } }` moves resend to `/api/newsletter/resend` and disables preferences behind the same handler. The route keys are `subscribe`, `resendConfirmation`, `confirm`, `unsubscribe`, `unsubscribeAll` and `preferences`. Disabled, unknown and old moved paths return 404; enabled paths require POST; rejection status for other methods depends on the host router. To move the entire API, configure the module’s `basePath`. Do not put secrets, storage, or provider credentials in `nuxt.config.ts` public runtime config or browser bundles.
 
 #### Public subscribe metadata
 
@@ -796,8 +803,8 @@ Use the built-in public routes when their request validation and response format
 When replacing public signup, disable the built-in endpoint:
 
 ```ts
-// Inside defineNuxtConfig({ ... })
-betterNewsletter: {
+// Inside the server configuration factory
+publicApi: {
   routes: {
     subscribe: false
   }
@@ -812,7 +819,7 @@ The custom handler owns the public HTTP boundary: validate and bound the request
 
 The module supplies API endpoints, **not** consent forms, mail copy, confirmation pages, unsubscribe/preferences pages, or authentication. Build your own UI. GET confirmation/unsubscribe links should render landing pages with explicit POST buttons; GET preferences pages should likewise make no authorized read until an explicit POST. Never issue unsubscribe or preferences capabilities to an anonymous caller based solely on an email address. Generate links in trusted server code (for example, after authenticating the user or while sending their mail).
 
-Public signup is anonymous and requires explicit versioned consent: the UI must obtain consent before POSTing `consent: true` and the `consentVersion` configured in `nuxt.config.ts`. The module uses the trusted configured source; it does not trust a source, locale, or subject in public JSON. Do not trust a claimed user ID from query parameters or headers. Use `await useBetterNewsletter(event)` in a protected server handler and call `linkSubject()` only after your application's **verified** session has supplied the identity; linking does not create consent. Likewise, `suppressContact`, `unsuppressContact`, imports and unsubscribe-capability issuance are trusted server operations, not public-by-email endpoints.
+Public signup is anonymous and requires explicit versioned consent: the UI must obtain consent before POSTing `consent: true` and the `consentVersion` configured in the server factory’s `publicApi.consent`. The module uses the trusted configured source; it does not trust a source, locale, or subject in public JSON. Do not trust a claimed user ID from query parameters or headers. Use `await useBetterNewsletter(event)` in a protected server handler and call `linkSubject()` only after your application's **verified** session has supplied the identity; linking does not create consent. Likewise, `suppressContact`, `unsuppressContact`, imports and unsubscribe-capability issuance are trusted server operations, not public-by-email endpoints.
 
 Protect subscribe and resend with the optional `website` honeypot or `abuseGuard` and production rate limiting. Plan separate limits for action, audience, normalized address and trusted client IP/network (plus global budgets); a single per-address limit cannot stop many-address abuse. Resolve proxy IPs only through configured, trusted infrastructure and use HMAC-derived opaque keys rather than raw address/IP in rate-limit storage. The core accepts `rateLimiter`, `rateLimitKeyProvider` and `rateLimits`; the Nuxt factory can supply these alongside its mailer and storage. For an additional client-identity dimension, configure both `trustedClientIdentity(event)` (from verified infrastructure, not arbitrary forwarded headers) and `clientRateLimit: { secret, limiter, policies? }` in the server factory.
 
@@ -834,22 +841,24 @@ The handler passes this transient context to the core `abuseGuard` and `rateLimi
 
 For production, replace memory adapters with `postgresAdapter(db)` and `postgresRateLimiter(db)` from `better-newsletter/adapters/postgres`, configure `postgresMigration(db)`, and apply the schema with `better-newsletter migrate` or your host-managed `generate` workflow, `createSecureCapabilities({ secrets: [{ version: 1, value: signingSecret }] })`, `createHmacRateLimitKeyProvider({ secret })`, and `resendMailer({ apiKey, from, renderConfirmation })` from `better-newsletter/mailers/resend`. Configure a verified sender, durable PostgreSQL connection, stable server-side signing/rate-limit secrets, a trusted origin for URLs, and runtime-safe background delivery (`waitUntil`, an awaited fallback or a durable worker). See the adapter sections above for integration details; the example deliberately uses none of these external services.
 
-### TypeScript and large Nitro route tables
-
-Large applications can hit `TS2589` in Nitro's typed route matcher when a fetch request generic covers the entire route table. This can also happen without Better Newsletter. With the investigated Nuxt/Nitro signatures, narrow the request type at affected calls, especially when supplying an explicit response type:
+### Package-owned typed client
 
 ```ts
-import type { NuxtError } from '#app'
+import { createNewsletterClient } from 'better-newsletter/nuxt/client'
 
-interface Item { id: string }
-
-const { data } = await useFetch<Item[], NuxtError, '/api/items'>(
-  '/api/items',
-  { default: () => [] }
-)
+const client = createNewsletterClient({
+  basePath: '/api/newsletter',
+  routes: { resendConfirmation: '/resend', preferences: false }
+})
+await client.subscribe({ email, consent: true, consentVersion: 'privacy-2026-09' })
+await client.confirm(token)
 ```
 
-For `$fetch`, the request is its second generic: `$fetch<Response, '/api/items'>('/api/items')`. Use a suitable bounded request type for dynamic paths. Keep newsletter entries in generated `InternalApi` to retain route and method checking. The [#43 investigation](https://github.com/t4sj4n/better-newsletter/blob/main/docs/nuxt-route-types.md) contains the reproduction, TypeScript trace evidence and a packed-consumer test that retains all six module routes. This is a mitigation for upstream route matching; it does not guarantee that every large application will stay within TypeScript's limits.
+The default client needs no options. Match its mount and relative paths to your server policy; disabled client actions throw before fetching. The helper owns action and input typing and always uses POST through standard `fetch`. It imports no Nuxt types and does not depend on Nitro's generated `InternalApi`. Hosts that need extra signup fields can send their own validated JSON through standard fetch.
+
+Nuxt registers one POST-only catch-all handler instead of six individual POST routes. Nitro may generate a catch-all type, but the package no longer promises individual `$fetch` route/method inference. Use the typed client for newsletter calls. This reduces route-union exposure without claiming to fix Nitro's general `TS2589` limits in large applications. See the [architecture comparison](https://github.com/t4sj4n/better-newsletter/blob/main/docs/nuxt-single-handler.md).
+
+For a host-owned H3 boundary, `createNewsletterHandler({ basePath }, configuration?)` from `better-newsletter/nuxt/handler` returns a ready event handler; an explicit server configuration or factory avoids the Nuxt virtual import. Lifecycle core operations remain framework-independent.
 
 ### Consumer example and maintainer playground
 

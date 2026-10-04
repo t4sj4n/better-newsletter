@@ -61,7 +61,7 @@ In real-delivery mode, the development state view still shows Contact, Subscript
 
 If the received email is opened on another device, `DEMO_APP_ORIGIN` must point to a development URL that device can reach; `http://localhost:3000` only resolves on the device opening the link.
 
-`nuxt.config.ts` registers `BetterNewsletter` from `better-newsletter/nuxt` with a public allowlist for `default`, `product-news` and `weekly-analysis`, and a fixed consent version/source. `server/better-newsletter.config.ts` uses the server-only `defineBetterNewsletterConfig` factory with a trusted application origin. Demo-only routes call the server-only `useBetterNewsletter(event)` accessor. The module owns five POST lifecycle endpoints and the read-only POST preferences endpoint; the example provides pages and **development-only** helper routes, not replacement public lifecycle endpoints.
+`nuxt.config.ts` registers the single `BetterNewsletter` handler from `better-newsletter/nuxt`. The server factory’s `publicApi` defines a public allowlist for `default`, `product-news` and `weekly-analysis`, and a fixed consent version/source. `server/better-newsletter.config.ts` uses the server-only `defineBetterNewsletterConfig` factory with a trusted application origin. Demo-only routes call the server-only `useBetterNewsletter(event)` accessor. The module owns five POST lifecycle endpoints and the read-only POST preferences endpoint; the example provides pages and **development-only** helper routes, not replacement public lifecycle endpoints.
 
 ## Walk through the lifecycle
 

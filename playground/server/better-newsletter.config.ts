@@ -79,6 +79,15 @@ export default defineBetterNewsletterConfig(async () => {
   const mailerMode = getDemoMailerMode()
 
   return {
+    publicApi: {
+      defaultAudience: 'default',
+      consent: { version: 'demo-privacy-v1', source: 'nuxt-demo' },
+      audiences: {
+        default: { public: true },
+        'product-news': { public: true },
+        'weekly-analysis': { public: true }
+      }
+    },
     // Application-owned, never inferred from an incoming Host header.
     origin,
     storage,

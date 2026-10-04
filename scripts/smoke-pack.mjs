@@ -5,7 +5,7 @@ import { existsSync, mkdirSync, readFileSync, readdirSync, rmSync, writeFileSync
 import { dirname, join } from 'node:path'
 import process from 'node:process'
 import { fileURLToPath } from 'node:url'
-import { checkNuxtRouteTypes } from './smoke-nuxt-types.mjs'
+import { checkNuxtHandler } from './smoke-nuxt-handler.mjs'
 
 const root = dirname(dirname(fileURLToPath(import.meta.url)))
 const runtimeManifest = JSON.parse(readFileSync(join(root, 'packages/better-newsletter/package.json'), 'utf8'))
@@ -155,8 +155,11 @@ export async function resolve(specifier, context, nextResolve) {
     '.', './adapters/memory', './adapters/postgres', './mailers', './mailers/resend',
     './webhooks/resend',
     './security', './storage', './db/migration', './nuxt', './nuxt/server',
-    './nuxt/client', './package.json'
+    './nuxt/client', './nuxt/handler', './package.json'
   ], ['package/migrations/postgres/001_newsletter.sql'])
+  if ([...runtime.files].some(file => file.startsWith('package/dist/nuxt/routes/'))) {
+    throw new Error('Packed runtime still contains obsolete individual newsletter routes')
+  }
   if (runtime.packed.peerDependencies?.kysely !== '>=0.28.17 <0.30.0') {
     throw new Error('Packed runtime must declare the supported Kysely peer range')
   }
@@ -189,6 +192,9 @@ export async function resolve(specifier, context, nextResolve) {
   checkConsumer('core', runtimeDependency, {}, `
 import { betterNewsletter, type BetterNewsletterOptions, type BetterNewsletter } from 'better-newsletter'
 import { memoryAdapter } from 'better-newsletter/adapters/memory'
+import { createNewsletterClient } from 'better-newsletter/nuxt/client'
+const browserClient = createNewsletterClient()
+void browserClient.confirm
 import { MAIL_DELIVERY_REASONS, type NewsletterMailer, type ConfirmationMailInput } from 'better-newsletter/mailers'
 import type { NewsletterCapabilities, AbuseGuard, RateLimiter, RateLimitKeyProvider, NewsletterRateLimitCheck } from 'better-newsletter/security'
 import type { NewsletterStorage } from 'better-newsletter/storage'
@@ -238,6 +244,8 @@ void [service, memory, migrations, security, storage, mailer, MAIL_DELIVERY_REAS
 import { betterNewsletter } from 'better-newsletter'
 import { memoryAdapter } from 'better-newsletter/adapters/memory'
 import { getMigrations } from 'better-newsletter/db/migration'
+const { createNewsletterClient } = await import('better-newsletter/nuxt/client')
+if (typeof createNewsletterClient().confirm !== 'function') throw new Error('Client requires unexpected framework peers')
 const modules = await Promise.all([
   import('better-newsletter/security'), import('better-newsletter/storage'),
   import('better-newsletter/mailers')
@@ -427,7 +435,7 @@ try {
   } else {
     console.log('DATABASE_URL is unset; skipping packed CLI PostgreSQL generate smoke')
   }
-  checkNuxtRouteTypes({ scratch, runtimeTarball, run })
+  checkNuxtHandler({ scratch, runtimeTarball, run })
   console.log('\nBoth packed-artifact smoke tests passed')
 } finally {
   rmSync(scratch, { recursive: true, force: true })

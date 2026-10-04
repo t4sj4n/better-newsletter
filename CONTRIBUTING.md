@@ -166,6 +166,8 @@ PostgreSQL's canonical target uses `POSTGRES_NEWSLETTER_SCHEMA.revision`, curren
 
 `test/fixtures/postgres-schema-revision.json` checks the approved PostgreSQL revision and SHA-256 of the canonical DDL. Its regression fails with a maintenance message when either changes. Decide the revision policy first, then deliberately update this independent contract and document the required upgrade. Do not automatically refresh it when generating SQL or enlarge it into an automatic semantic DDL classifier.
 
+The provider and canonical snapshot share one runtime-owned version constant derived from that runtime artifact’s own package metadata; the CLI never resolves a provenance version independently.
+
 After changing the model or runtime package version, run `pnpm migration:snapshot:write` to refresh the packaged canonical SQL and deterministic provenance comments. This command intentionally does not update the independent revision/hash contract. Package-only provenance changes do not change the DDL hash. `pnpm check` verifies both contracts, and the packed smoke tests verify public metadata, initial/delta provenance and direct migration without a ledger.
 
 Generated host migrations remain immutable. A package upgrade creates a new reviewed host migration against the previous applied schema; it never rewrites old host migration files. No database revision table is introduced by target metadata.

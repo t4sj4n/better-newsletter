@@ -1,5 +1,4 @@
 import { existsSync, writeFileSync } from 'node:fs'
-import { createRequire } from 'node:module'
 import { resolve } from 'node:path'
 import process from 'node:process'
 import { createInterface } from 'node:readline/promises'
@@ -184,8 +183,7 @@ export async function runBetterNewsletterCli(
         env.stdout('Migration generation cancelled.\n')
         return 0
       }
-      const runtime = createRequire(import.meta.url)('better-newsletter/package.json') as { version: string }
-      env.writeFile(output, renderMigrationSql(migrations, runtime.version))
+      env.writeFile(output, renderMigrationSql(migrations))
       env.stdout(`Wrote migration SQL to ${output}.\n`)
       return 0
     }

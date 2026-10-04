@@ -4,15 +4,15 @@ import { dirname, join } from 'node:path'
 import process from 'node:process'
 import { fileURLToPath } from 'node:url'
 import { renderMigrationSql } from '../packages/better-newsletter/dist/db/migration.js'
+import { BETTER_NEWSLETTER_VERSION } from '../packages/better-newsletter/dist/migration/runtime-version.js'
 import { POSTGRES_NEWSLETTER_SCHEMA, renderPostgresSchemaSql } from '../packages/better-newsletter/dist/migration/postgres-schema.js'
 
 const root = dirname(dirname(fileURLToPath(import.meta.url)))
 const path = join(root, 'packages/better-newsletter/migrations/postgres/001_newsletter.sql')
-const runtime = JSON.parse(readFileSync(join(root, 'packages/better-newsletter/package.json'), 'utf8'))
 const expected = renderMigrationSql({
   dialect: 'postgres', targetRevision: POSTGRES_NEWSLETTER_SCHEMA.revision,
-  kind: 'initial', sql: renderPostgresSchemaSql()
-}, runtime.version)
+  kind: 'initial', runtimeVersion: BETTER_NEWSLETTER_VERSION, sql: renderPostgresSchemaSql()
+})
 
 if (process.argv.includes('--write')) {
   writeFileSync(path, expected, 'utf8')

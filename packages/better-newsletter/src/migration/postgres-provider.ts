@@ -1,4 +1,5 @@
 import { sql, type Kysely } from 'kysely'
+import { BETTER_NEWSLETTER_VERSION } from './runtime-version.js'
 import type { MigrationPlan, MigrationProvider } from '../migration.js'
 import {
   POSTGRES_NEWSLETTER_SCHEMA,
@@ -167,6 +168,7 @@ async function createPlan<DB>(
 
   return {
     dialect: 'postgres',
+    runtimeVersion: BETTER_NEWSLETTER_VERSION,
     targetRevision: POSTGRES_NEWSLETTER_SCHEMA.revision,
     kind: existingTables.size === 0
       && !POSTGRES_NEWSLETTER_SCHEMA.indexes.some(index => state.indexes.has(index.name))

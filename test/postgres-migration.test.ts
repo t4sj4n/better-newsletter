@@ -4,6 +4,7 @@ import { Pool } from 'pg'
 import { afterAll, beforeAll, describe, expect, it } from 'vitest'
 import { getMigrations, renderMigrationSql } from '../packages/better-newsletter/src/db/migration.js'
 import { postgresMigration } from '../packages/better-newsletter/src/adapters/postgres.js'
+import { BETTER_NEWSLETTER_VERSION } from '../packages/better-newsletter/src/migration/runtime-version.js'
 import { POSTGRES_NEWSLETTER_SCHEMA, renderPostgresSchemaSql } from '../packages/better-newsletter/src/migration/postgres-schema.js'
 
 const databaseUrl = process.env.DATABASE_URL
@@ -67,6 +68,7 @@ describe.skipIf(!databaseUrl)('PostgreSQL migration tooling', () => {
 
       expect(migrations.dialect).toBe('postgres')
       expect(migrations.targetRevision).toBe(1)
+      expect(migrations.runtimeVersion).toBe(BETTER_NEWSLETTER_VERSION)
       expect(migrations.kind).toBe('initial')
       expect(migrations.namespace).toBe(schema)
       expect(migrations.toBeCreated).toEqual([
@@ -134,11 +136,10 @@ describe.skipIf(!databaseUrl)('PostgreSQL migration tooling', () => {
         new URL('../packages/better-newsletter/migrations/postgres/001_newsletter.sql', import.meta.url),
         'utf8'
       )
-      const runtimeVersion: string = JSON.parse(readFileSync(new URL('../packages/better-newsletter/package.json', import.meta.url), 'utf8')).version
       expect(snapshot).toBe(renderMigrationSql({
         dialect: 'postgres', targetRevision: POSTGRES_NEWSLETTER_SCHEMA.revision,
-        kind: 'initial', sql: renderPostgresSchemaSql()
-      }, runtimeVersion))
+        kind: 'initial', runtimeVersion: BETTER_NEWSLETTER_VERSION, sql: renderPostgresSchemaSql()
+      }))
 
       await pool.query(snapshot)
       const migrations = await getMigrations({
@@ -185,6 +186,7 @@ describe.skipIf(!databaseUrl)('PostgreSQL migration tooling', () => {
       })
 
       expect(migrations.targetRevision).toBe(1)
+      expect(migrations.runtimeVersion).toBe(BETTER_NEWSLETTER_VERSION)
       expect(migrations.kind).toBe('delta')
       expect(migrations.toBeCreated).not.toContain('newsletter_contacts')
       expect(migrations.toBeCreated).toContain('newsletter_subscriptions')

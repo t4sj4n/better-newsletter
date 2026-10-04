@@ -650,7 +650,7 @@ The CLI writes deterministic provenance before generated SQL:
 -- Plan: initial
 ```
 
-Partial-schema generation uses `Plan: delta`. The version comes from the runtime package that owns the schema, rather than the CLI package. Headers contain no timestamps, hostnames or connection credentials. Namespace selection remains explicit in the SQL itself. Programmatic hosts can call `renderMigrationSql(plan, runtimePackageVersion)` from `better-newsletter/db/migration` to render the same static format.
+Partial-schema generation uses `Plan: delta`. The migration provider records `plan.runtimeVersion` from the Better Newsletter runtime package that owns the schema target. Generated SQL preserves that provenance; `runtimeVersion` is independent of the CLI package version, even when the packages are normally released together. Headers contain no timestamps, hostnames or connection credentials. Namespace selection remains explicit in the SQL itself. Programmatic hosts can call `renderMigrationSql(plan)` from `better-newsletter/db/migration` to render the same static format.
 
 Commit generated SQL as an immutable host migration; upgrades never regenerate historical files automatically. Generation against an already-current database continues to produce no file.
 

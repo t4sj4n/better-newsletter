@@ -761,7 +761,11 @@ export default defineBetterNewsletterConfig(event => {
 })
 ```
 
-Here `useMyRequestScopedDatabase`, `capabilities` and `mailer` are supplied by the host. Better Newsletter does not own or close these resources; the host manages their request lifetime, including background work. Explicit configuration factories passed to `createNewsletterHandler` or `useBetterNewsletter` also receive the event. Simple parameterless factories work as before:
+Here `useMyRequestScopedDatabase`, `capabilities` and `mailer` are supplied by the host. Better Newsletter does not own or close these resources; the host manages their request lifetime, including background work.
+
+Request-scoped resources must remain valid until background delivery completes. If the host releases them when the HTTP response completes, configure `backgroundMode: 'await'` unless their lifetime is explicitly extended. Platform `waitUntil` extends execution lifetime; it does not automatically manage host-owned resources. With `backgroundMode: 'await'`, the Nuxt service waits for delivery work before `subscribe()` or `resendConfirmation()` resolves; host handlers must await these methods before completing the response.
+
+Explicit configuration factories passed to `createNewsletterHandler` or `useBetterNewsletter` also receive the event. Simple parameterless factories work as before:
 
 ```ts
 // server/better-newsletter.config.ts

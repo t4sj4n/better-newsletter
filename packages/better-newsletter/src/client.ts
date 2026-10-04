@@ -1,6 +1,5 @@
 import {
   assertNewsletterBasePath,
-  defaultNewsletterRoutes,
   newsletterRoutes,
   type NewsletterRoute,
   type NewsletterRoutes,
@@ -12,14 +11,11 @@ import type {
   UnsubscribeResult
 } from './operations.js'
 
-export {
-  assertNewsletterBasePath,
-  defaultNewsletterRoutes,
-  newsletterRoutes,
-  type NewsletterRoute,
-  type NewsletterRoutes,
-  type NewsletterRoutingOptions
-}
+export type {
+  NewsletterRoute,
+  NewsletterRoutes,
+  NewsletterRoutingOptions
+} from './routing.js'
 
 export type Fetcher = (url: string, init: RequestInit) => Promise<Response>
 
@@ -49,7 +45,7 @@ export type NewsletterClientConfirmResult = ConfirmResult
 export type NewsletterClientUnsubscribeResult = UnsubscribeResult
 
 export interface NewsletterClientPreferencesResult {
-  readonly subscriptions: readonly PreferenceSubscription[]
+  readonly subscriptions: readonly PreferenceSubscription[] | null
 }
 
 export interface NewsletterClient {

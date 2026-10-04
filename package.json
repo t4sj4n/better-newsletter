@@ -15,7 +15,8 @@
     "test": "vitest run",
     "check": "pnpm lint && pnpm typecheck && pnpm build && pnpm migration:snapshot:check && pnpm test",
     "migration:snapshot:check": "node scripts/check-postgres-migration.mjs",
-    "migration:snapshot:write": "pnpm --filter better-newsletter build && node scripts/check-postgres-migration.mjs --write"
+    "migration:snapshot:write": "pnpm --filter better-newsletter build && node scripts/check-postgres-migration.mjs --write",
+    "release:prepare": "node scripts/release-prepare.mjs"
   },
   "devDependencies": {
     "@arethetypeswrong/cli": "^0.18.5",
@@ -23,6 +24,8 @@
     "@nuxt/kit": "^4.5.2",
     "@types/pg": "^8.23.1",
     "better-newsletter": "workspace:*",
+    "bumpp": "^10.4.1",
+    "changelogen": "^0.6.2",
     "eslint": "^9.35.0",
     "h3": "^1.15.11",
     "kysely": "^0.28.17",

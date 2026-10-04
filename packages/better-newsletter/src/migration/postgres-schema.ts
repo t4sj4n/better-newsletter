@@ -356,3 +356,15 @@ export function renderPostgresSchemaSql(): string {
   ]
   return `${statements.join(';\n\n')};\n`
 }
+
+/** Stable packaged target snapshot; runtime provenance belongs to generated plans. */
+export function renderPostgresSchemaSnapshot(): string {
+  return [
+    '-- Better Newsletter canonical schema',
+    '-- Dialect: postgres',
+    `-- Target schema revision: ${POSTGRES_NEWSLETTER_SCHEMA.revision}`,
+    '-- Plan: initial',
+    '',
+    renderPostgresSchemaSql()
+  ].join('\n')
+}

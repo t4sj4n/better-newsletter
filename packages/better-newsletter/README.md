@@ -688,7 +688,7 @@ console.log(migrations.toBeCreated, migrations.toBeAdded)
 await migrations.runMigrations()
 ```
 
-`packages/better-newsletter/migrations/postgres/001_newsletter.sql` remains an inspectable generated snapshot of the current empty-database target, not the primary installation/upgrade API and not an independent schema source. `pnpm migration:snapshot:check` verifies it against the canonical schema model; contributors update the model first and regenerate the snapshot with `pnpm migration:snapshot:write`.
+`packages/better-newsletter/migrations/postgres/001_newsletter.sql` remains an inspectable generated snapshot of the current empty-database target, not the primary installation/upgrade API and not an independent schema source. Its stable header identifies the dialect and schema revision, without a package version; package-only releases do not change this snapshot. CLI-generated host migrations still record the provider-owned runtime version. `pnpm migration:snapshot:check` verifies it against the canonical schema model; contributors update the model first and regenerate the snapshot with `pnpm migration:snapshot:write`.
 
 ```ts
 import { betterNewsletter } from 'better-newsletter'

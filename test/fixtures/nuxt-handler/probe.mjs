@@ -4,6 +4,7 @@ import assert from 'node:assert/strict'
 import { spawn } from 'node:child_process'
 import { createServer } from 'node:net'
 import { setTimeout } from 'node:timers/promises'
+import { URLSearchParams } from 'node:url'
 
 const reservation = createServer()
 await new Promise(resolve => reservation.listen(0, '127.0.0.1', resolve))
@@ -55,8 +56,30 @@ try {
   assert.deepEqual(await request('/api/mail/resend-confirmation', {
     email: 'missing@example.com', captcha: 'verified'
   }), { accepted: true })
+  const beforeGet = await request('/api/smoke', {})
+  const subscriptionStates = async () => (await request('/api/mail/manage', { capability: host.manage }))
+    .subscriptions.map(({ audience, status }) => ({ audience, status }))
+  const beforeGetSubscriptions = await subscriptionStates()
+  for (const [action, query] of [
+    ['subscribe', { email: input.email, consent: 'true', consentVersion: input.consentVersion }],
+    ['resend-confirmation', { email: input.email }],
+    ['confirm', { token: host.tokens[0] }],
+    ['unsubscribe', { capability: host.unsubscribe }],
+    ['unsubscribe-all', { capability: host.all }],
+    ['manage', { capability: host.manage }]
+  ]) {
+    const response = await globalThis.fetch(`${base}/api/mail/${action}?${new URLSearchParams(query)}`, { method: 'GET' })
+    // An unmatched GET can fall through to Nuxt's HTML renderer, even with status 200.
+    assert.ok(response.status !== 200 || !response.headers.get('content-type')?.includes('application/json'),
+      `GET must not return a successful newsletter API response for ${action}`)
+    await response.arrayBuffer()
+  }
+  const afterGet = await request('/api/smoke', {})
+  assert.deepEqual(afterGet.contact, beforeGet.contact, 'GET must not mutate the contact')
+  assert.deepEqual(afterGet.events, beforeGet.events, 'GET must not mutate lifecycle history')
+  assert.deepEqual(afterGet.tokens, beforeGet.tokens, 'GET must not send confirmation mail')
+  assert.deepEqual(await subscriptionStates(), beforeGetSubscriptions, 'GET must not mutate subscription state')
   for (const token of host.tokens) assert.deepEqual(await request('/api/mail/confirm', { token }), { confirmed: true })
-  await request('/api/mail/confirm', {}, 405, 'GET')
   await request('/api/mail/unknown', {}, 404)
   await request('/api/mail/preferences', { capability: host.manage }, 404)
   assert.equal((await request('/api/mail/manage', { capability: host.manage })).subscriptions.length, 2)

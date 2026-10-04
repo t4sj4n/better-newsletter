@@ -23,7 +23,7 @@ describe('Nuxt module installation', () => {
       expect(routes.map(route => route.route)).toEqual([
         '/api/newsletter/**'
       ])
-      expect(routes[0]?.method).toBeUndefined()
+      expect(routes[0]?.method).toBe('post')
       const nitro: unknown = Reflect.get(nuxt.options, 'nitro')
       expect(nitro).toMatchObject({
         virtual: {
@@ -51,7 +51,7 @@ describe('Nuxt module installation', () => {
     })
     try {
       expect(registeredRoutes(nuxt).filter(handler => handler.route?.startsWith('/api/signup')))
-        .toMatchObject([{ route: '/api/signup/**' }])
+        .toEqual([expect.objectContaining({ route: '/api/signup/**', method: 'post' })])
       expect(registeredRoutes(nuxt).some(handler => handler.route?.startsWith('/api/newsletter/'))).toBe(false)
     } finally {
       await nuxt.close()

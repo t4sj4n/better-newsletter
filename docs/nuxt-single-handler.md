@@ -6,7 +6,7 @@ PR #47's finalized metadata contract is preserved: public subscribe metadata bel
 
 | Piece | Before | After |
 | --- | --- | --- |
-| Nuxt module | Validates public policy, serializes it, registers six POST handlers | Resolves server config and mounts one catch-all handler with `basePath` |
+| Nuxt module | Validates public policy, serializes it, registers six POST handlers | Resolves server config and mounts one POST-only catch-all handler with `basePath` |
 | `handleNewsletterRequest` | Validates body and delegates one preselected action to the service | Retained as private dispatch implementation behind `createNewsletterHandler`; validation and operations unchanged |
 | Individual routes | Six files import virtual policy and select an action | Deleted; one server-only virtual handler adapts the mount |
 | `#better-newsletter-options` | Serializes audience and consent policy for route imports | Deleted; no runtime policy serialization |
@@ -33,7 +33,7 @@ After:
 
 ```text
 POST /api/newsletter/subscribe
-  -> one Nitro /api/newsletter/** mount
+  -> one Nitro POST /api/newsletter/** mount
   -> createNewsletterHandler({ basePath })
   -> request-cached server config -> internal action table -> POST check
   -> handleNewsletterRequest -> request service -> same lifecycle operation

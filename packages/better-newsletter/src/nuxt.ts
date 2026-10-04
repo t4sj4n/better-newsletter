@@ -58,6 +58,7 @@ export default createNewsletterHandler(${JSON.stringify({ basePath: options.base
     nitro.nitro.externals.inline.push(resolve('.'))
     addServerHandler({
       route: `${options.basePath}/**`,
+      method: 'post',
       handler: '#better-newsletter-handler'
     })
   }

@@ -771,7 +771,7 @@ The built-in lifecycle actions and authorized preferences read are **POST only**
 | `/api/newsletter/unsubscribe-all` | `{ capability }` |
 | `/api/newsletter/preferences` | `{ capability }` (read-only; returns `{ subscriptions: { audience, status, unsubscribeCapability }[] \| null }`) |
 
-For example, `publicApi: { routes: { resendConfirmation: '/resend', preferences: false } }` moves resend to `/api/newsletter/resend` and disables preferences behind the same handler. The route keys are `subscribe`, `resendConfirmation`, `confirm`, `unsubscribe`, `unsubscribeAll` and `preferences`. Disabled, unknown and old moved paths return 404; enabled paths require POST (405 otherwise). To move the entire API, configure the module’s `basePath`. Do not put secrets, storage, or provider credentials in `nuxt.config.ts` public runtime config or browser bundles.
+For example, `publicApi: { routes: { resendConfirmation: '/resend', preferences: false } }` moves resend to `/api/newsletter/resend` and disables preferences behind the same handler. The route keys are `subscribe`, `resendConfirmation`, `confirm`, `unsubscribe`, `unsubscribeAll` and `preferences`. Disabled, unknown and old moved paths return 404; enabled paths require POST; rejection status for other methods depends on the host router. To move the entire API, configure the module’s `basePath`. Do not put secrets, storage, or provider credentials in `nuxt.config.ts` public runtime config or browser bundles.
 
 #### Public subscribe metadata
 
@@ -856,7 +856,7 @@ await client.confirm(token)
 
 The default client needs no options. Match its mount and relative paths to your server policy; disabled client actions throw before fetching. The helper owns action and input typing and always uses POST through standard `fetch`. It imports no Nuxt types and does not depend on Nitro's generated `InternalApi`. Hosts that need extra signup fields can send their own validated JSON through standard fetch.
 
-Nuxt registers one catch-all handler instead of six method-specific routes. Nitro may generate a catch-all type, but the package no longer promises individual `$fetch` route/method inference. Use the typed client for newsletter calls. This reduces route-union exposure without claiming to fix Nitro's general `TS2589` limits in large applications. See the [architecture comparison](https://github.com/t4sj4n/better-newsletter/blob/main/docs/nuxt-single-handler.md).
+Nuxt registers one POST-only catch-all handler instead of six individual POST routes. Nitro may generate a catch-all type, but the package no longer promises individual `$fetch` route/method inference. Use the typed client for newsletter calls. This reduces route-union exposure without claiming to fix Nitro's general `TS2589` limits in large applications. See the [architecture comparison](https://github.com/t4sj4n/better-newsletter/blob/main/docs/nuxt-single-handler.md).
 
 For a host-owned H3 boundary, `createNewsletterHandler({ basePath }, configuration?)` from `better-newsletter/nuxt/handler` returns a ready event handler; an explicit server configuration or factory avoids the Nuxt virtual import. Lifecycle core operations remain framework-independent.
 

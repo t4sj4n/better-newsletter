@@ -21,7 +21,7 @@ export interface PostgresSchemaIndex {
 }
 
 export interface PostgresSchemaModel {
-  readonly version: number
+  readonly revision: number
   readonly tables: readonly PostgresSchemaTable[]
   readonly indexes: readonly PostgresSchemaIndex[]
 }
@@ -31,7 +31,7 @@ export interface PostgresSchemaModel {
  * snapshot, CLI generation and direct migration all derive from this model.
  */
 export const POSTGRES_NEWSLETTER_SCHEMA: PostgresSchemaModel = Object.freeze({
-  version: 1,
+  revision: 1,
   tables: [
     {
       name: 'newsletter_contacts',

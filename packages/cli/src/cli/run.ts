@@ -1,8 +1,9 @@
 import { existsSync, writeFileSync } from 'node:fs'
+import { createRequire } from 'node:module'
 import { resolve } from 'node:path'
 import process from 'node:process'
 import { createInterface } from 'node:readline/promises'
-import { getMigrations, type NewsletterMigrations } from 'better-newsletter/db/migration'
+import { getMigrations, renderMigrationSql, type NewsletterMigrations } from 'better-newsletter/db/migration'
 import { loadMigrationConfig } from '../migration/config-loader.js'
 
 export interface BetterNewsletterCliEnvironment {
@@ -122,10 +123,10 @@ function redactSecrets(message: string): string {
 
 function describePlan(migrations: NewsletterMigrations): string {
   if (migrations.isCurrent) {
-    return `Database schema is current (${migrations.dialect}:${migrations.namespace}).\n`
+    return `Database schema has no supported changes for target revision ${migrations.targetRevision} (${migrations.dialect}:${migrations.namespace}).\n`
   }
   const lines = [
-    `Migration plan (${migrations.dialect}:${migrations.namespace}):`
+    `Migration plan (${migrations.dialect}:${migrations.namespace}, target revision ${migrations.targetRevision}, ${migrations.kind}):`
   ]
   for (const table of migrations.toBeCreated) lines.push(`  create ${table}`)
   for (const item of migrations.toBeAdded) lines.push(`  add ${item}`)
@@ -183,7 +184,8 @@ export async function runBetterNewsletterCli(
         env.stdout('Migration generation cancelled.\n')
         return 0
       }
-      env.writeFile(output, migrations.sql)
+      const runtime = createRequire(import.meta.url)('better-newsletter/package.json') as { version: string }
+      env.writeFile(output, renderMigrationSql(migrations, runtime.version))
       env.stdout(`Wrote migration SQL to ${output}.\n`)
       return 0
     }

@@ -114,9 +114,10 @@ Update the version in **two** files (three locations total):
 *(Note: `examples/basic/package.json` specifies `"latest"` and never needs manual version changes).*
 
 #### 3. Update Lockfile and Verify
-Run `pnpm install` to update `pnpm-lock.yaml`, then run the full test and packaging verification suite:
+Run `pnpm install` to update `pnpm-lock.yaml`, refresh the canonical SQL provenance for the new runtime version, then run the full test and packaging verification suite:
 ```bash
 pnpm install
+pnpm migration:snapshot:write
 pnpm check
 node scripts/smoke-pack.mjs
 ```
@@ -155,3 +156,16 @@ pnpm --filter "./packages/*" publish --tag next --no-git-checks
 git tag v0.1.0-alpha.4
 git push origin v0.1.0-alpha.4
 ```
+
+## Schema revisions and releases
+
+PostgreSQL's canonical target uses `POSTGRES_NEWSLETTER_SCHEMA.revision`, currently 1. Schema revisions belong to each dialect and must never be derived automatically from SemVer.
+
+- **Package-only release:** change the synchronized npm package versions; leave the schema revision unchanged when no required database target changes. Runtime, API, documentation and Nuxt integration changes alone do not require a revision bump.
+- **Schema-changing release:** deliberately increment the PostgreSQL revision when required DDL, ordered changes or data transformations change its target. Release notes must name the new revision and explain the migration requirement. Inspection alone must not be presented as proof that historical transformations ran.
+
+`test/fixtures/postgres-schema-revision.json` checks the approved PostgreSQL revision and SHA-256 of the canonical DDL. Its regression fails with a maintenance message when either changes. Decide the revision policy first, then deliberately update this independent contract and document the required upgrade. Do not automatically refresh it when generating SQL or enlarge it into an automatic semantic DDL classifier.
+
+After changing the model or runtime package version, run `pnpm migration:snapshot:write` to refresh the packaged canonical SQL and deterministic provenance comments. This command intentionally does not update the independent revision/hash contract. Package-only provenance changes do not change the DDL hash. `pnpm check` verifies both contracts, and the packed smoke tests verify public metadata, initial/delta provenance and direct migration without a ledger.
+
+Generated host migrations remain immutable. A package upgrade creates a new reviewed host migration against the previous applied schema; it never rewrites old host migration files. No database revision table is introduced by target metadata.

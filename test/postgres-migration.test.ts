@@ -2,9 +2,10 @@ import { readFileSync } from 'node:fs'
 import { Kysely, PostgresDialect } from 'kysely'
 import { Pool } from 'pg'
 import { afterAll, beforeAll, describe, expect, it } from 'vitest'
-import { getMigrations } from '../packages/better-newsletter/src/db/migration.js'
+import { getMigrations, renderMigrationSql } from '../packages/better-newsletter/src/db/migration.js'
 import { postgresMigration } from '../packages/better-newsletter/src/adapters/postgres.js'
-import { renderPostgresSchemaSql } from '../packages/better-newsletter/src/migration/postgres-schema.js'
+import { BETTER_NEWSLETTER_VERSION } from '../packages/better-newsletter/src/migration/runtime-version.js'
+import { POSTGRES_NEWSLETTER_SCHEMA, renderPostgresSchemaSql } from '../packages/better-newsletter/src/migration/postgres-schema.js'
 
 const databaseUrl = process.env.DATABASE_URL
 
@@ -66,6 +67,9 @@ describe.skipIf(!databaseUrl)('PostgreSQL migration tooling', () => {
       const migrations = await getMigrations(config)
 
       expect(migrations.dialect).toBe('postgres')
+      expect(migrations.targetRevision).toBe(1)
+      expect(migrations.runtimeVersion).toBe(BETTER_NEWSLETTER_VERSION)
+      expect(migrations.kind).toBe('initial')
       expect(migrations.namespace).toBe(schema)
       expect(migrations.toBeCreated).toEqual([
         'newsletter_contacts',
@@ -93,8 +97,32 @@ describe.skipIf(!databaseUrl)('PostgreSQL migration tooling', () => {
 
       const current = await getMigrations(config)
       expect(current.isCurrent).toBe(true)
+      expect(current.targetRevision).toBe(1)
+      expect(current.kind).toBe('delta')
       expect(current.statements).toEqual([])
       expect(current.sql).toBe('')
+    } finally {
+      await db.destroy()
+    }
+  })
+
+  it('classifies a host-only schema as initial and still inspects missing objects at the same target revision', async () => {
+    const schema = await createSchema('revision')
+    const { db, pool } = database(schema)
+    try {
+      await pool.query('CREATE TABLE host_owned_table (id text PRIMARY KEY)')
+      const config = { provider: postgresMigration(db, { schema }) }
+      const initial = await getMigrations(config)
+      expect(initial).toMatchObject({ targetRevision: 1, kind: 'initial', isCurrent: false })
+      await initial.runMigrations()
+      await pool.query('DROP INDEX newsletter_tokens_expires_at_idx')
+      const delta = await getMigrations(config)
+      expect(delta).toMatchObject({ targetRevision: 1, kind: 'delta', isCurrent: false })
+      expect(delta.toBeAdded).toEqual(['index:newsletter_tokens_expires_at_idx'])
+      expect((await getMigrations(config)).sql).toBe(delta.sql)
+      await delta.runMigrations()
+      expect(await getMigrations(config)).toMatchObject({ targetRevision: 1, kind: 'delta', isCurrent: true })
+      expect(await tables(schema)).toHaveLength(8)
     } finally {
       await db.destroy()
     }
@@ -108,7 +136,10 @@ describe.skipIf(!databaseUrl)('PostgreSQL migration tooling', () => {
         new URL('../packages/better-newsletter/migrations/postgres/001_newsletter.sql', import.meta.url),
         'utf8'
       )
-      expect(snapshot).toBe(renderPostgresSchemaSql())
+      expect(snapshot).toBe(renderMigrationSql({
+        dialect: 'postgres', targetRevision: POSTGRES_NEWSLETTER_SCHEMA.revision,
+        kind: 'initial', runtimeVersion: BETTER_NEWSLETTER_VERSION, sql: renderPostgresSchemaSql()
+      }))
 
       await pool.query(snapshot)
       const migrations = await getMigrations({
@@ -154,6 +185,9 @@ describe.skipIf(!databaseUrl)('PostgreSQL migration tooling', () => {
         provider: postgresMigration(db, { schema })
       })
 
+      expect(migrations.targetRevision).toBe(1)
+      expect(migrations.runtimeVersion).toBe(BETTER_NEWSLETTER_VERSION)
+      expect(migrations.kind).toBe('delta')
       expect(migrations.toBeCreated).not.toContain('newsletter_contacts')
       expect(migrations.toBeCreated).toContain('newsletter_subscriptions')
       expect(migrations.toBeAdded).toContain('newsletter_contacts.capability_generation')

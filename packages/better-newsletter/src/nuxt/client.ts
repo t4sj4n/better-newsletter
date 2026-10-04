@@ -1,12 +1,9 @@
 /**
  * @deprecated Use `better-newsletter/client` instead.
- * This compatibility alias will be removed before 1.0.
+ * This compatibility alias is retained for the current prerelease line.
  */
 export {
-  assertNewsletterBasePath,
   createNewsletterClient,
-  defaultNewsletterRoutes,
-  newsletterRoutes,
   type Fetcher,
   type NewsletterClient,
   type NewsletterClientConfirmResult,

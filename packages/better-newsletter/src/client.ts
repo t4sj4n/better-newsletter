@@ -1,8 +1,6 @@
 import {
   assertNewsletterBasePath,
   newsletterRoutes,
-  type NewsletterRoute,
-  type NewsletterRoutes,
   type NewsletterRoutingOptions
 } from './routing.js'
 import type {

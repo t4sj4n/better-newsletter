@@ -22,6 +22,20 @@ export type ConfirmationReplacementStrategy =
     keyof typeof CONFIRMATION_REPLACEMENT_STRATEGIES
   ]
 
+export function assertConfirmationReplacementStrategy(
+  value: unknown
+): asserts value is ConfirmationReplacementStrategy {
+  if (
+    value !== CONFIRMATION_REPLACEMENT_STRATEGIES.REPLACE_PREVIOUS
+    && value !== CONFIRMATION_REPLACEMENT_STRATEGIES.RETAIN_PREVIOUS_UNTIL_EXPIRY
+  ) {
+    throw new NewsletterError(
+      NEWSLETTER_ERROR_CODES.INVALID_CONFIGURATION,
+      'Invalid confirmation replacement strategy.'
+    )
+  }
+}
+
 export const CAPABILITY_PURPOSES = {
   CONFIRMATION: 'CONFIRMATION',
   UNSUBSCRIBE: 'UNSUBSCRIBE',
@@ -395,6 +409,7 @@ export function createSecureCapabilities(
 
   return {
     async replaceConfirmation(input, store) {
+      assertConfirmationReplacementStrategy(input.replacementStrategy)
       const digest = await sha256Digest(input.token)
       return store.replace({
         record: {

@@ -22,7 +22,7 @@ export type ConfirmationReplacementStrategy =
     keyof typeof CONFIRMATION_REPLACEMENT_STRATEGIES
   ]
 
-export function assertConfirmationReplacementStrategy(
+function assertConfirmationReplacementStrategy(
   value: unknown
 ): asserts value is ConfirmationReplacementStrategy {
   if (

@@ -5,9 +5,11 @@
 [![npm downloads](https://img.shields.io/npm/dm/better-newsletter?logo=npm&style=flat-square)](https://www.npmjs.com/package/better-newsletter)
 [![license](https://img.shields.io/npm/l/better-newsletter?style=flat-square)](https://github.com/t4sj4n/better-newsletter/blob/main/LICENSE)
 
-Framework-agnostic newsletter subscription and consent lifecycle infrastructure for TypeScript.
+Framework-agnostic newsletter lifecycle infrastructure for TypeScript, with first-class Nuxt 4 / Nitro integration.
 
 > **In short:** Better Newsletter takes care of the awkward parts around newsletter signups: confirming an address, remembering consent, handling unsubscribe links, and keeping repeat signups consistent. You keep your own database, mail provider and UI — Better Newsletter handles the lifecycle behind them.
+>
+> The lifecycle core is framework-independent, and the browser client is framework-neutral. Better Newsletter currently provides its turnkey HTTP and server integration for Nuxt 4 / Nitro. A generic Web-standard HTTP handler is tracked separately in [#52](https://github.com/t4sj4n/better-newsletter/issues/52) and is not required for the current beta roadmap.
 
 Instead of rebuilding the same edge cases in every app, you get predictable behavior for common flows:
 

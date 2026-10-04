@@ -1,8 +1,11 @@
 <script setup lang="ts">
-import { createNewsletterClient } from 'better-newsletter/nuxt/client'
+import { createNewsletterClient } from 'better-newsletter/client'
+import { createNewsletterClient as createLegacyNewsletterClient } from 'better-newsletter/nuxt/client'
 const client = createNewsletterClient({ basePath: '/api/mail', routes: { preferences: '/manage' } })
+const legacyClient = createLegacyNewsletterClient({ basePath: '/api/mail' })
 // Compile package-owned calls without relying on generated InternalApi.
 function checkTypes() {
+  void legacyClient.subscribe
   void client.subscribe({ email: 'packed@example.com', consent: true, consentVersion: 'packed-v1' })
   void client.resendConfirmation({ email: 'packed@example.com' })
   void client.confirm('token')

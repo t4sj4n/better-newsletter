@@ -152,7 +152,7 @@ export async function resolve(specifier, context, nextResolve) {
   const runtimeTarball = packedTarball(runtimeManifest)
   const cliTarball = packedTarball(cliManifest)
   const runtime = checkArchive(runtimeTarball, runtimeManifest, [
-    '.', './adapters/memory', './adapters/postgres', './mailers', './mailers/resend',
+    '.', './client', './adapters/memory', './adapters/postgres', './mailers', './mailers/resend',
     './webhooks/resend',
     './security', './storage', './db/migration', './nuxt', './nuxt/server',
     './nuxt/client', './nuxt/handler', './package.json'
@@ -192,9 +192,12 @@ export async function resolve(specifier, context, nextResolve) {
   checkConsumer('core', runtimeDependency, {}, `
 import { betterNewsletter, type BetterNewsletterOptions, type BetterNewsletter } from 'better-newsletter'
 import { memoryAdapter } from 'better-newsletter/adapters/memory'
-import { createNewsletterClient } from 'better-newsletter/nuxt/client'
-const browserClient = createNewsletterClient()
+import { createNewsletterClient, type NewsletterClient } from 'better-newsletter/client'
+import { createNewsletterClient as createLegacyNewsletterClient } from 'better-newsletter/nuxt/client'
+const browserClient: NewsletterClient = createNewsletterClient()
+const legacyClient = createLegacyNewsletterClient()
 void browserClient.confirm
+void legacyClient.confirm
 import { MAIL_DELIVERY_REASONS, type NewsletterMailer, type ConfirmationMailInput } from 'better-newsletter/mailers'
 import type { NewsletterCapabilities, AbuseGuard, RateLimiter, RateLimitKeyProvider, NewsletterRateLimitCheck } from 'better-newsletter/security'
 import type { NewsletterStorage } from 'better-newsletter/storage'
@@ -244,8 +247,11 @@ void [service, memory, migrations, security, storage, mailer, MAIL_DELIVERY_REAS
 import { betterNewsletter } from 'better-newsletter'
 import { memoryAdapter } from 'better-newsletter/adapters/memory'
 import { getMigrations } from 'better-newsletter/db/migration'
-const { createNewsletterClient } = await import('better-newsletter/nuxt/client')
-if (typeof createNewsletterClient().confirm !== 'function') throw new Error('Client requires unexpected framework peers')
+const { createNewsletterClient } = await import('better-newsletter/client')
+const { createNewsletterClient: createLegacyNewsletterClient } = await import('better-newsletter/nuxt/client')
+if (typeof createNewsletterClient().confirm !== 'function' || typeof createLegacyNewsletterClient().confirm !== 'function') {
+  throw new Error('Client requires unexpected framework peers')
+}
 const modules = await Promise.all([
   import('better-newsletter/security'), import('better-newsletter/storage'),
   import('better-newsletter/mailers')
@@ -311,13 +317,13 @@ const checkedMapper: BetterNewsletterServerConfig['publicSubscribeMetadata'] = (
 // @ts-expect-error metadata must contain JSON values
 const invalidMapper: BetterNewsletterServerConfig['publicSubscribeMetadata'] = () => ({ invalid: new Date() })
 void [syncMapper, asyncMapper, omittedMapper, asyncOmittedMapper, checkedMapper, invalidMapper]
-import { createNewsletterClient } from 'better-newsletter/nuxt/client'
+import { createNewsletterClient } from 'better-newsletter/client'
 type Routes = Parameters<typeof createNewsletterClient>[0]
 declare const routes: Routes
 const client = createNewsletterClient(routes)
 void [module, server, client.subscribe]
 `, `
-import { createNewsletterClient } from 'better-newsletter/nuxt/client'
+import { createNewsletterClient } from 'better-newsletter/client'
 const [module, server] = await Promise.all([
   import('better-newsletter/nuxt'), import('better-newsletter/nuxt/server')
 ])

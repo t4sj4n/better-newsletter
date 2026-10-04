@@ -410,6 +410,9 @@ export default defineBetterNewsletterMigrationConfig({
   close: () => db.destroy()
 })
 `)
+    writeFileSync(join(cliConsumer, 'canonical.sql'), output('tar', [
+      '-xOzf', runtimeTarball, 'package/migrations/postgres/001_newsletter.sql'
+    ]))
     writeFileSync(join(cliConsumer, 'generate-smoke.mjs'), `
 import assert from 'node:assert/strict'
 import { execFileSync } from 'node:child_process'
@@ -447,6 +450,9 @@ try {
   assert.equal(readFileSync('generated-repeat.sql', 'utf8'), generated)
   assert.equal(generated, header(initial) + initial.sql)
   assert.equal(generated, renderMigrationSql(initial))
+  assert.equal(renderMigrationSql({
+    ...initial, sql: initial.statements.map(statement => statement + ';').join('\\n\\n') + '\\n'
+  }), readFileSync('canonical.sql', 'utf8'))
   assert.ok(!generated.includes(process.env.DATABASE_URL))
   const tables = await pool.query('SELECT tablename FROM pg_tables WHERE schemaname = $1', [schema])
   assert.equal(tables.rowCount, 0, 'generation must not mutate the database')
@@ -473,12 +479,6 @@ try {
 }
 `)
     run('node', ['generate-smoke.mjs'], cliConsumer)
-    const generated = readFileSync(join(cliConsumer, 'generated.sql'), 'utf8')
-    const canonical = output('tar', ['-xOzf', runtimeTarball, 'package/migrations/postgres/001_newsletter.sql']).trim()
-    if (!generated.startsWith(canonical.split('\n').slice(0, 4).join('\n') + '\n\n')
-      || !generated.includes(canonical.split('\n').slice(5).join('\n'))) {
-      throw new Error('Packed CLI SQL output must contain the complete canonical tables, constraints and indexes')
-    }
     console.log('Packed CLI revision/provenance smoke passed (initial/delta generation, immutable SQL, direct migrate without a ledger)')
   } else {
     console.log('DATABASE_URL is unset; skipping packed CLI PostgreSQL generate smoke')

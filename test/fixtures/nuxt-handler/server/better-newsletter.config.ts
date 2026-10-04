@@ -6,7 +6,7 @@ const storage = memoryAdapter()
 const capabilities = memoryCapabilities()
 const limiter = memoryRateLimiter()
 
-export default defineBetterNewsletterConfig(() => ({
+export default defineBetterNewsletterConfig(event => ({
   origin: 'https://newsletter.example',
   storage,
   capabilities,
@@ -15,7 +15,10 @@ export default defineBetterNewsletterConfig(() => ({
     audiences: { default: { public: true }, product: { public: true } },
     routes: { preferences: state.disabled ? false : '/manage' }
   },
-  publicSubscribeMetadata: (_event, body) => ({ placement: body.placement === 'pricing' ? 'pricing' : 'other' }),
+  publicSubscribeMetadata: (currentEvent, body) => {
+    if (currentEvent !== event) throw new Error('Server configuration must receive the current H3 event')
+    return { placement: body.placement === 'pricing' ? 'pricing' : 'other' }
+  },
   securityContext: (_event, body) => { state.securityCalls++; return { captcha: body.captcha } },
   abuseGuard: { verify: async ({ context }) => ({ allowed: (context as { captcha?: string })?.captcha === 'verified' }) },
   trustedClientIdentity: () => { state.identities++; return 'verified-network' },

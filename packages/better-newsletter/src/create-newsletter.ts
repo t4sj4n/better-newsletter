@@ -44,6 +44,7 @@ import type {
 import {
   CONFIRMATION_REPLACEMENT_STRATEGIES,
   secureTokenGenerator,
+  type ConfirmationReplacementStrategy,
   type PublicAbuseAction,
   type RateLimitPolicy
 } from './security.js'
@@ -475,7 +476,8 @@ export function createNewsletterWithSubscriptionBatch(config: BetterNewsletterOp
     subscription: Subscription,
     token: string,
     issuedAt: Date,
-    expiresAt: Date
+    expiresAt: Date,
+    effectiveReplacementStrategy: ConfirmationReplacementStrategy = replacementStrategy
   ): Promise<void> => {
     const replacement = await config.capabilities.replaceConfirmation({
       token,
@@ -484,7 +486,7 @@ export function createNewsletterWithSubscriptionBatch(config: BetterNewsletterOp
       lifecycleGeneration: subscription.lifecycleGeneration,
       issuedAt,
       expiresAt,
-      replacementStrategy,
+      replacementStrategy: effectiveReplacementStrategy,
       maxActiveTokens
     }, transaction.confirmationTokens)
     if (replacement != null) {
@@ -1011,7 +1013,9 @@ export function createNewsletterWithSubscriptionBatch(config: BetterNewsletterOp
         const token = await tokenGenerator.generate()
         const issuedAt = clock.now()
         const expiresAt = new Date(issuedAt.getTime() + expiresInMs)
-        await persistConfirmationToken(transaction, subscription, token, issuedAt, expiresAt)
+        await persistConfirmationToken(
+          transaction, subscription, token, issuedAt, expiresAt, input.replacementStrategy ?? replacementStrategy
+        )
         await appendEvent(transaction, {
           contactId: contact.id,
           subscriptionId: subscription.id,

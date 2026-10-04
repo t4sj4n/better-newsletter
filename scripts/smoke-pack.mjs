@@ -345,8 +345,9 @@ if (typeof module.default !== 'function' || !Object.keys(server).length ||
   }, `
 import type { NewsletterMigrations } from 'better-newsletter/db/migration'
 import type { CreateConfirmationTokenInput } from 'better-newsletter'
+import type { ConfirmationReplacementStrategy } from 'better-newsletter/security'
 import type { NewsletterStorageTransaction } from 'better-newsletter/storage'
-import { useBetterNewsletter, type BetterNewsletterServerConfig } from 'better-newsletter/nuxt/server'
+import { defineBetterNewsletterConfig, useBetterNewsletter, type BetterNewsletterServerConfig, type NewsletterServerConfiguration } from 'better-newsletter/nuxt/server'
 import { postgresAdapter, postgresMigration } from 'better-newsletter/adapters/postgres'
 import type { Kysely } from 'kysely'
 import type { H3Event } from 'h3'
@@ -355,8 +356,15 @@ declare const db: Kysely<{ hostTable: { id: string } }>
 declare const event: H3Event
 declare const config: BetterNewsletterServerConfig
 declare const transaction: NewsletterStorageTransaction
-const input: CreateConfirmationTokenInput = { subscription: { id: 'subscription' }, eventMetadata: { actorId: 'admin' } }
-const service = await useBetterNewsletter(event, config)
+const replacementStrategy: ConfirmationReplacementStrategy = 'REPLACE_PREVIOUS'
+const input: CreateConfirmationTokenInput = { subscription: { id: 'subscription' }, replacementStrategy, eventMetadata: { actorId: 'admin' } }
+const requestConfiguration: NewsletterServerConfiguration = defineBetterNewsletterConfig(currentEvent => {
+  const sameType: H3Event = currentEvent
+  void sameType
+  return config
+})
+void defineBetterNewsletterConfig(() => config)
+const service = await useBetterNewsletter(event, requestConfiguration)
 await service.createConfirmationToken(input)
 await service.getConfirmationState({ subscription: input.subscription })
 await transaction.getLatestUsableConfirmationExpiry({ subscriptionId: 'subscription', lifecycleGeneration: 1, now: new Date() })

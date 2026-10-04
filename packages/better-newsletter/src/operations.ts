@@ -8,6 +8,7 @@ import type {
   SubscriptionStatus
 } from './domain.js'
 import type { DeliveryFeedback } from './domain.js'
+import type { ConfirmationReplacementStrategy } from './security.js'
 
 export interface SubscribeInput {
   readonly email: string
@@ -118,6 +119,8 @@ export interface ConfirmationSubscriptionInput {
 
 /** Trusted server-side creation; metadata is used only for the audit event. */
 export interface CreateConfirmationTokenInput extends ConfirmationSubscriptionInput {
+  /** Overrides confirmation.replacementStrategy for this trusted call only. */
+  readonly replacementStrategy?: ConfirmationReplacementStrategy
   /** Host-specific JSON audit data; authoritative system metadata takes precedence. */
   readonly eventMetadata?: Readonly<Record<string, JsonValue>>
 }

@@ -177,6 +177,8 @@ export default defineBetterNewsletterConfig(() => ({
 }))
 ```
 
+The server factory receives the current `H3Event`, so it can use host-owned request-scoped Nitro/Worker resources. Parameterless factories remain valid, and the public handler and trusted service share one configuration per request. Better Newsletter does not own or close host resources.
+
 The Nuxt integration supplies the lifecycle API routes. Your application still owns the signup form, confirmation/unsubscribe pages and mail copy.
 
 If you implement a custom public signup endpoint with `useBetterNewsletter(event)`, set `publicApi.routes.subscribe: false` in the server configuration so callers cannot bypass your endpoint's additional validation or abuse checks through the built-in route. Apply the same rule to other public flows you replace. See [custom public routes](packages/better-newsletter/README.md#custom-public-routes).

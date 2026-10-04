@@ -31,6 +31,60 @@ async function fixture(confirmation: ConfirmationOptions = {}) {
 }
 
 describe('trusted confirmation APIs', () => {
+  it.each([
+    ['RETAIN_PREVIOUS_UNTIL_EXPIRY', undefined, true],
+    ['RETAIN_PREVIOUS_UNTIL_EXPIRY', 'REPLACE_PREVIOUS', false],
+    ['REPLACE_PREVIOUS', undefined, false],
+    ['REPLACE_PREVIOUS', 'RETAIN_PREVIOUS_UNTIL_EXPIRY', true]
+  ] as const)('applies global %s and per-call %s without changing configuration', async (global, override, retained) => {
+    const { newsletter, storage, subscription, input, mailer, options } = await fixture({
+      replacementStrategy: global, maxActiveTokens: 4
+    })
+    const first = (await newsletter.createConfirmationToken(input))!
+    const second = (await newsletter.createConfirmationToken({
+      ...input,
+      ...(override === undefined ? {} : { replacementStrategy: override }),
+      eventMetadata: { actorId: 'admin-123', audienceKey: 'forged', lifecycleGeneration: 999 }
+    }))!
+    expect(storage.confirmationTokenSnapshot()[0]!.revokedAt == null).toBe(retained)
+    const audit = (await newsletter.listEvents({ email })).find(event =>
+      event.type === 'CONFIRMATION_TOKEN_CREATED' && event.metadata?.actorId === 'admin-123'
+    )!
+    expect(audit.metadata).toEqual({
+      actorId: 'admin-123', audienceKey: subscription.audienceKey,
+      lifecycleGeneration: subscription.lifecycleGeneration
+    })
+    expect(JSON.stringify(audit)).not.toContain(second.token)
+    expect(JSON.stringify(audit)).not.toContain(await sha256Digest(second.token))
+    expect(options.confirmation.replacementStrategy).toBe(global)
+    expect(mailer.sendConfirmation).not.toHaveBeenCalled()
+    expect(await newsletter.confirm({ token: first.token })).toEqual({ confirmed: retained })
+    if (!retained) expect(await newsletter.confirm({ token: second.token })).toEqual({ confirmed: true })
+  })
+
+  it.each(['RETAIN_PREVIOUS_UNTIL_EXPIRY', 'REPLACE_PREVIOUS'] as const)(
+    'keeps public signup/resend on the global %s strategy after a trusted override', async global => {
+      const { options, input, storage, mailer } = await fixture({ replacementStrategy: global, maxActiveTokens: 4 })
+      const tasks: Promise<void>[] = []
+      const newsletter = betterNewsletter({ ...options, runBackground: task => { tasks.push(task) } })
+      const replace = vi.spyOn(options.capabilities, 'replaceConfirmation')
+      const override = global === 'REPLACE_PREVIOUS' ? 'RETAIN_PREVIOUS_UNTIL_EXPIRY' : 'REPLACE_PREVIOUS'
+      const admin = (await newsletter.createConfirmationToken({ ...input, replacementStrategy: override }))!
+      await newsletter.subscribe({ email: 'signup@example.com', consent: { granted: true, version: 'v1' } })
+      await Promise.all(tasks.splice(0))
+      await newsletter.resendConfirmation({ email })
+      await Promise.all(tasks.splice(0))
+      expect(mailer.sendConfirmation).toHaveBeenCalledTimes(2)
+      const records = storage.confirmationTokenSnapshot()
+      expect(replace.mock.calls.map(([input]) => input.replacementStrategy)).toEqual([override, global, global])
+      expect(records).toHaveLength(3)
+      expect(records[0]!.revokedAt == null).toBe(global === 'RETAIN_PREVIOUS_UNTIL_EXPIRY')
+      expect(records[1]!.revokedAt).toBeNull()
+      expect(records[2]!.revokedAt).toBeNull()
+      expect(await newsletter.confirm({ token: admin.token })).toEqual({ confirmed: global === 'RETAIN_PREVIOUS_UNTIL_EXPIRY' })
+    }
+  )
+
   it('issues a digest-only token with configured expiry, records an event and confirms without mail', async () => {
     const { newsletter, storage, mailer, subscription, input } = await fixture({ expiresInMs: 60_000 })
     expect(await newsletter.getConfirmationState(input)).toEqual({

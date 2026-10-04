@@ -39,7 +39,7 @@ POST /api/newsletter/subscribe
   -> handleNewsletterRequest -> request service -> same lifecycle operation
 ```
 
-H3 stays in the Nuxt adapter. The core, database schema, migration/CLI and host-owned forms, pages, mail templates, metadata validation and authenticated administration remain unchanged. Trusted server operations continue to call `useBetterNewsletter(event)` directly. The handler resolves configuration for routing but does not initialize the service or call metadata/security hooks for unknown actions or honeypot requests. Host configuration factories should construct policy and reuse long-lived adapters without performing request side effects.
+H3 stays in the Nuxt adapter. The core, database schema, migration/CLI and host-owned forms, pages, mail templates, metadata validation and authenticated administration remain unchanged. Trusted server operations continue to call `useBetterNewsletter(event)` directly. The handler resolves configuration for routing but does not initialize the service or call metadata/security hooks for unknown actions or honeypot requests. Host configuration factories receive the current `H3Event` and are evaluated at most once per request. They can use host-owned request-scoped Nitro/Worker resources or reuse long-lived adapters; parameterless factories remain valid. The handler and trusted service share the request-local configuration. Better Newsletter does not own or close host resources, and waitUntil/await behavior is unchanged.
 
 ## Removed and retained infrastructure
 

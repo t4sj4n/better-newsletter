@@ -8,7 +8,8 @@ import { memoryAdapter } from '../packages/better-newsletter/src/adapters/memory
 import { postgresAdapter } from '../packages/better-newsletter/src/adapters/postgres.js'
 import { resendMailer } from '../packages/better-newsletter/src/mailers/resend.js'
 import { getMigrations } from '../packages/better-newsletter/src/db/migration.js'
-import { createNewsletterClient } from '../packages/better-newsletter/src/nuxt/client.js'
+import { createNewsletterClient } from '../packages/better-newsletter/src/client.js'
+import { createNewsletterClient as createNewsletterClientFromNuxt } from '../packages/better-newsletter/src/nuxt/client.js'
 import { createSecureCapabilities } from '../packages/better-newsletter/src/security.js'
 
 describe('public API boundary', () => {
@@ -28,9 +29,11 @@ describe('public API boundary', () => {
       resendMailer,
       getMigrations,
       createNewsletterClient,
+      createNewsletterClientFromNuxt,
       createSecureCapabilities
     ]) {
       expect(factory).toBeTypeOf('function')
     }
+    expect(createNewsletterClientFromNuxt).toBe(createNewsletterClient)
   })
 })

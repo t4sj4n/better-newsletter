@@ -1,7 +1,7 @@
 {
   "name": "better-newsletter",
   "version": "0.1.0-beta.0",
-  "description": "Framework-agnostic newsletter subscription and consent lifecycle infrastructure for TypeScript.",
+  "description": "Framework-agnostic newsletter lifecycle infrastructure for TypeScript, with first-class Nuxt 4 / Nitro integration.",
   "type": "module",
   "license": "MIT",
   "homepage": "https://github.com/t4sj4n/better-newsletter#readme",
@@ -35,6 +35,10 @@
     ".": {
       "types": "./dist/index.d.ts",
       "import": "./dist/index.js"
+    },
+    "./client": {
+      "types": "./dist/client.d.ts",
+      "import": "./dist/client.js"
     },
     "./adapters/memory": {
       "types": "./dist/adapters/memory.d.ts",

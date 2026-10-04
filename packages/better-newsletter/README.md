@@ -1,8 +1,8 @@
 # better-newsletter
 
-Framework-agnostic newsletter subscription and consent lifecycle infrastructure for TypeScript.
+Framework-agnostic newsletter lifecycle infrastructure for TypeScript, with first-class Nuxt 4 / Nitro integration.
 
-> **Status:** early development. The core lifecycle, PostgreSQL persistence, Resend confirmation delivery, and Nuxt/Nitro adapter are available.
+> **Status:** early development. The lifecycle core is framework-independent, and the browser client is framework-neutral. Better Newsletter currently provides its turnkey HTTP and server integration for Nuxt 4 / Nitro. A generic Web-standard HTTP handler is tracked separately in [#52](https://github.com/t4sj4n/better-newsletter/issues/52) and is not required for the current beta roadmap.
 
 ## Scope
 
@@ -120,13 +120,14 @@ const newsletter = betterNewsletter({
 })
 ```
 
-Time, IDs, and confirmation-token generation can be injected for deterministic tests. When no token generator is supplied, the core uses a Web Crypto generator that produces 32 random bytes. The public configuration and service types are `BetterNewsletterOptions` and `BetterNewsletter`. The service exposes lifecycle operations only; storage, mailer, signing capabilities, clocks, and generators are injected dependencies, not properties of the returned service. The browser helper remains `createNewsletterClient()` from `better-newsletter/nuxt/client`.
+Time, IDs, and confirmation-token generation can be injected for deterministic tests. When no token generator is supplied, the core uses a Web Crypto generator that produces 32 random bytes. The public configuration and service types are `BetterNewsletterOptions` and `BetterNewsletter`. The service exposes lifecycle operations only; storage, mailer, signing capabilities, clocks, and generators are injected dependencies, not properties of the returned service. The browser helper is `createNewsletterClient()` from `better-newsletter/client` (`better-newsletter/nuxt/client` remains supported as a thin compatibility alias during the beta).
 
 The runtime and the development CLI are separate packages. The runtime is embedded in your application; the CLI runs only when explicitly invoked:
 
 | Import | Purpose |
 | --- | --- |
 | `better-newsletter` | Service factory, public lifecycle/domain types and errors. |
+| `better-newsletter/client` | Framework-neutral typed browser client and routing contracts. |
 | `better-newsletter/adapters/memory` | In-memory storage and test helpers. |
 | `better-newsletter/adapters/postgres` | PostgreSQL storage, migrations, rate limiting and recipient selection. |
 | `better-newsletter/mailers` | Provider-neutral mailer and delivery contracts. |
@@ -135,7 +136,7 @@ The runtime and the development CLI are separate packages. The runtime is embedd
 | `better-newsletter/security` | Capability and abuse-protection implementation contracts and helpers. |
 | `better-newsletter/storage` | Storage and transaction contracts for custom adapters. |
 | `better-newsletter/db/migration` | Programmatic database migration API. |
-| `better-newsletter/nuxt`, `/nuxt/server`, `/nuxt/client` | Nuxt module, Nitro server helpers and browser client. |
+| `better-newsletter/nuxt`, `/nuxt/server` | Nuxt module and Nitro server helpers (`/nuxt/client` is a compatibility alias). |
 | `@better-newsletter/cli` | Explicit `better-newsletter` migration executable. |
 
 Both packages maintain synchronized versions. The runtime is released before the CLI at the same version; the CLI declares an exact runtime dependency to avoid mismatched migration tooling.
@@ -862,10 +863,10 @@ The handler passes this transient context to the core `abuseGuard` and `rateLimi
 
 For production, replace memory adapters with `postgresAdapter(db)` and `postgresRateLimiter(db)` from `better-newsletter/adapters/postgres`, configure `postgresMigration(db)`, and apply the schema with `better-newsletter migrate` or your host-managed `generate` workflow, `createSecureCapabilities({ secrets: [{ version: 1, value: signingSecret }] })`, `createHmacRateLimitKeyProvider({ secret })`, and `resendMailer({ apiKey, from, renderConfirmation })` from `better-newsletter/mailers/resend`. Configure a verified sender, durable PostgreSQL connection, stable server-side signing/rate-limit secrets, a trusted origin for URLs, and runtime-safe background delivery (`waitUntil`, an awaited fallback or a durable worker). See the adapter sections above for integration details; the example deliberately uses none of these external services.
 
-### Package-owned typed client
+### Framework-neutral typed client
 
 ```ts
-import { createNewsletterClient } from 'better-newsletter/nuxt/client'
+import { createNewsletterClient } from 'better-newsletter/client'
 
 const client = createNewsletterClient({
   basePath: '/api/newsletter',
@@ -875,7 +876,7 @@ await client.subscribe({ email, consent: true, consentVersion: 'privacy-2026-09'
 await client.confirm(token)
 ```
 
-The default client needs no options. Match its mount and relative paths to your server policy; disabled client actions throw before fetching. The helper owns action and input typing and always uses POST through standard `fetch`. It imports no Nuxt types and does not depend on Nitro's generated `InternalApi`. Hosts that need extra signup fields can send their own validated JSON through standard fetch.
+The client is framework-neutral, implemented using only standard Web `fetch` and package-owned routing contracts. `better-newsletter/nuxt/client` remains available as a thin compatibility alias during the beta. The default client needs no options. Match its mount and relative paths to your server policy; disabled client actions throw before fetching. The helper owns action and input typing and always uses POST through standard `fetch`. It imports no Nuxt types and does not depend on Nitro's generated `InternalApi`. Hosts that need extra signup fields can send their own validated JSON through standard fetch.
 
 Nuxt registers one POST-only catch-all handler instead of six individual POST routes. Nitro may generate a catch-all type, but the package no longer promises individual `$fetch` route/method inference. Use the typed client for newsletter calls. This reduces route-union exposure without claiming to fix Nitro's general `TS2589` limits in large applications. See the [architecture comparison](https://github.com/t4sj4n/better-newsletter/blob/main/docs/nuxt-single-handler.md).
 

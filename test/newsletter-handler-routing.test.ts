@@ -1,7 +1,7 @@
 import { describe, expect, it, vi } from 'vitest'
-import { createNewsletterClient } from '../packages/better-newsletter/src/nuxt/client.js'
+import { createNewsletterClient } from '../packages/better-newsletter/src/client.js'
 import { createNewsletterHandler } from '../packages/better-newsletter/src/nuxt/handler.js'
-import { newsletterRoutes } from '../packages/better-newsletter/src/nuxt/routing.js'
+import { newsletterRoutes } from '../packages/better-newsletter/src/routing.js'
 
 describe('package-owned newsletter routing', () => {
   it('uses default paths and POST JSON without Nitro fetch types', async () => {

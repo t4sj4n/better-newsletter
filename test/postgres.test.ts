@@ -177,6 +177,35 @@ describe.skipIf(!databaseUrl)('PostgreSQL integration', () => {
   describe('PostgreSQL-specific behavior', () => {
     beforeEach(reset)
 
+    it('replaces all previous trusted tokens per call while retaining the global PostgreSQL policy', async () => {
+      const newsletter = betterNewsletter({
+        storage: postgresAdapter(db),
+        capabilities: createSecureCapabilities({ hmacSecret: '0123456789abcdef0123456789abcdef' }),
+        mailer: { async sendConfirmation(): Promise<never> { throw new Error('Trusted issuance must not send mail') } },
+        confirmation: { replacementStrategy: 'RETAIN_PREVIOUS_UNTIL_EXPIRY', maxActiveTokens: 4 }
+      })
+      const subscription = await newsletter.importSubscription({
+        email: 'replacement@example.com', status: 'PENDING_CONFIRMATION',
+        consent: { version: 'v1', consentedAt: new Date() }
+      })
+      const input = { subscription: { id: subscription.id } }
+      const first = (await newsletter.createConfirmationToken(input))!
+      const second = (await newsletter.createConfirmationToken(input))!
+      expect((await inspectConfirmationTokens()).filter(token => token.revokedAt == null)).toHaveLength(2)
+      const replacement = (await newsletter.createConfirmationToken({
+        ...input, replacementStrategy: 'REPLACE_PREVIOUS', eventMetadata: { actorId: 'admin-123' }
+      }))!
+      expect(await newsletter.confirm({ token: first.token })).toEqual({ confirmed: false })
+      expect(await newsletter.confirm({ token: second.token })).toEqual({ confirmed: false })
+      const retained = (await newsletter.createConfirmationToken(input))!
+      expect((await inspectConfirmationTokens()).filter(token => token.revokedAt == null)).toHaveLength(2)
+      expect(await newsletter.confirm({ token: replacement.token })).toEqual({ confirmed: true })
+      expect(retained).not.toBeNull()
+      expect((await newsletter.listEvents({ email: 'replacement@example.com' })).find(event =>
+        event.type === 'CONFIRMATION_TOKEN_CREATED' && event.metadata.actorId === 'admin-123'
+      )).toBeDefined()
+    })
+
     it('paginates exact bigint sequences using the existing bounded index query', async () => {
       const storage = postgresAdapter(db)
       const service = betterNewsletter({

@@ -43,7 +43,7 @@ export interface BetterNewsletterServerConfig extends Omit<BetterNewsletterOptio
 }
 
 export const defineBetterNewsletterConfig = (
-  factory: () => BetterNewsletterServerConfig | Promise<BetterNewsletterServerConfig>
+  factory: (event: H3Event) => BetterNewsletterServerConfig | Promise<BetterNewsletterServerConfig>
 ): typeof factory => factory
 
 const requestServices = new WeakMap<H3Event, {
@@ -54,7 +54,7 @@ const requestBatches = new WeakMap<H3Event, ReturnType<typeof createNewsletterWi
 const requestConfigs = new WeakMap<H3Event, Promise<BetterNewsletterServerConfig>>()
 
 export type NewsletterServerConfiguration = BetterNewsletterServerConfig
-  | (() => BetterNewsletterServerConfig | Promise<BetterNewsletterServerConfig>)
+  | ((event: H3Event) => BetterNewsletterServerConfig | Promise<BetterNewsletterServerConfig>)
 
 /** Shares the server-only configuration between HTTP routing and trusted service access. */
 export function newsletterServerConfig(
@@ -64,8 +64,8 @@ export function newsletterServerConfig(
   const existing = requestConfigs.get(event)
   if (existing != null) return existing
   const config = (async () => configuration == null
-    ? (await import('#better-newsletter-config')).default()
-    : typeof configuration === 'function' ? configuration() : configuration)()
+    ? (await import('#better-newsletter-config')).default(event)
+    : typeof configuration === 'function' ? configuration(event) : configuration)()
   requestConfigs.set(event, config)
   return config
 }

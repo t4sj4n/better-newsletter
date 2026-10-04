@@ -1,5 +1,5 @@
 declare module '#better-newsletter-config' {
-  import type { BetterNewsletterServerConfig } from './server.js'
-  const config: () => BetterNewsletterServerConfig | Promise<BetterNewsletterServerConfig>
+  import type { defineBetterNewsletterConfig } from './server.js'
+  const config: ReturnType<typeof defineBetterNewsletterConfig>
   export default config
 }

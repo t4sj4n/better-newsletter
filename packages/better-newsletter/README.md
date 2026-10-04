@@ -85,7 +85,19 @@ if (state?.canCreate) {
 
 Both operations also accept `subscription: { email, audience? }`. These are trusted server-only APIs: the host must authorize access to the subscription and decide where links are displayed. Do not expose them through anonymous routes. In a host-owned authenticated Nuxt server route, obtain the same service with `const newsletter = await useBetterNewsletter(event)` from `better-newsletter/nuxt/server`. The module does not register administrative routes or expose these operations in its browser client.
 
-`createConfirmationToken()` returns `{ token, expiresAt }`, or `null` when the subscription does not exist, is ACTIVE or UNSUBSCRIBED, or its Contact is globally suppressed. It rechecks eligibility transactionally, uses the configured token generator, persists the digest through the configured capabilities, binds the current lifecycle generation, and applies `confirmation.expiresInMs`, `replacementStrategy` and `maxActiveTokens` exactly as mail delivery does. It appends `CONFIRMATION_TOKEN_CREATED` and any replacement/expiry events atomically. The raw token is returned only to the caller. This operation sends no mail and does not complete or cancel queued confirmation delivery; subsequent signup/resend delivery can replace the token according to the same configured strategy.
+`createConfirmationToken()` returns `{ token, expiresAt }`, or `null` when the subscription does not exist, is ACTIVE or UNSUBSCRIBED, or its Contact is globally suppressed. It rechecks eligibility transactionally, uses the configured token generator, persists the digest through the configured capabilities, binds the current lifecycle generation, and applies `confirmation.expiresInMs` and `maxActiveTokens` as mail delivery does. Replacement defaults to `confirmation.replacementStrategy`. It appends `CONFIRMATION_TOKEN_CREATED` and any replacement/expiry events atomically. The raw token is returned only to the caller. This operation sends no mail and does not complete or cancel queued confirmation delivery; subsequent signup/resend delivery can replace the token according to the same configured strategy.
+
+To deliberately invalidate previous confirmation links in a trusted administrative workflow:
+
+```ts
+await newsletter.createConfirmationToken({
+  subscription: { id: subscriptionId },
+  replacementStrategy: 'REPLACE_PREVIOUS',
+  eventMetadata: { actorId: session.user.id }
+})
+```
+
+The optional override applies only to this call. It also accepts `RETAIN_PREVIOUS_UNTIL_EXPIRY`; omitting it preserves the global `confirmation.replacementStrategy`. Public signup, resend and automatic mail delivery continue to use the global strategy, including after a trusted override.
 
 Trusted callers can optionally attach host-specific audit data to the `CONFIRMATION_TOKEN_CREATED` event:
 
@@ -729,7 +741,31 @@ export default defineNuxtConfig({
 })
 ```
 
-The default `server/better-newsletter.config.ts` is a **server-only** configuration factory; `useBetterNewsletter(event)` is a server-only Promise-returning accessor for trusted handlers. The factory returns an application-owned `origin`, storage, mailer and capabilities. Do not import either from browser code. Keep long-lived adapters (database pool or memory storage) outside the factory instead of recreating them on every request. The Nuxt helper automatically uses the platform's `waitUntil` when available; otherwise its `subscribe()` and `resendConfirmation()` Promises await pending delivery work before resolving. Custom handlers do **not** need to call `flushBetterNewsletter()` after awaiting either method; an awaited fallback can increase response time without changing the neutral result.
+The default `server/better-newsletter.config.ts` is a **server-only** configuration factory; `useBetterNewsletter(event)` is a server-only Promise-returning accessor for trusted handlers. The factory returns an application-owned `origin`, storage, mailer and capabilities. Do not import either from browser code. Keep long-lived adapters (database pool or memory storage) outside the factory instead of recreating them on every request. The factory receives the current `H3Event` and is evaluated at most once per request; the public handler and `useBetterNewsletter(event)` share that request-local configuration and service. Parameterless factories remain valid. The Nuxt helper automatically uses the platform's `waitUntil` when available; otherwise its `subscribe()` and `resendConfirmation()` Promises await pending delivery work before resolving. Custom handlers do **not** need to call `flushBetterNewsletter()` after awaiting either method; an awaited fallback can increase response time without changing the neutral result.
+
+For request-scoped Nitro/Worker resources, use the event to obtain the host's database connection:
+
+```ts
+import { postgresAdapter } from 'better-newsletter/adapters/postgres'
+import { defineBetterNewsletterConfig } from 'better-newsletter/nuxt/server'
+import { useMyRequestScopedDatabase } from '~/server/utils/database'
+
+export default defineBetterNewsletterConfig(event => {
+  const db = useMyRequestScopedDatabase(event)
+  return {
+    origin: 'https://example.com',
+    storage: postgresAdapter(db),
+    capabilities,
+    mailer
+  }
+})
+```
+
+Here `useMyRequestScopedDatabase`, `capabilities` and `mailer` are supplied by the host. Better Newsletter does not own or close these resources; the host manages their request lifetime, including background work.
+
+Request-scoped resources must remain valid until background delivery completes. If the host releases them when the HTTP response completes, configure `backgroundMode: 'await'` unless their lifetime is explicitly extended. Platform `waitUntil` extends execution lifetime; it does not automatically manage host-owned resources. With `backgroundMode: 'await'`, the Nuxt service waits for delivery work before `subscribe()` or `resendConfirmation()` resolves; host handlers must await these methods before completing the response.
+
+Explicit configuration factories passed to `createNewsletterHandler` or `useBetterNewsletter` also receive the event. Simple parameterless factories work as before:
 
 ```ts
 // server/better-newsletter.config.ts

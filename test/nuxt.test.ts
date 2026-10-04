@@ -1,6 +1,6 @@
 import { createServer, IncomingMessage, request as httpRequest, ServerResponse, type Server } from 'node:http'
 import { Socket } from 'node:net'
-import { createApp, createEvent, toNodeListener } from 'h3'
+import { createApp, createEvent, defineEventHandler, toNodeListener, type H3Event } from 'h3'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import {
   CONTACT_STATUSES,
@@ -11,7 +11,7 @@ import { createHmacRateLimitKeyProvider } from '../packages/better-newsletter/sr
 import { memoryCapabilities, memoryRateLimiter, memoryAdapter } from '../packages/better-newsletter/src/adapters/memory.js'
 import { createNewsletterHandler } from '../packages/better-newsletter/src/nuxt/handler.js'
 import * as newsletterServer from '../packages/better-newsletter/src/nuxt/server.js'
-import { newsletterUrl, useBetterNewsletter, type BetterNewsletterServerConfig } from '../packages/better-newsletter/src/nuxt/server.js'
+import { defineBetterNewsletterConfig, newsletterServerConfig, newsletterUrl, useBetterNewsletter, type BetterNewsletterServerConfig } from '../packages/better-newsletter/src/nuxt/server.js'
 import type { NewsletterRoute } from '../packages/better-newsletter/src/nuxt/routing.js'
 
 const options = {
@@ -74,6 +74,87 @@ function configuration() {
 }
 
 describe('Nuxt server integration', () => {
+  it('passes the current event and shares one async config/service per request', async () => {
+    const first = configuration()
+    const second = configuration()
+    const events = [0, 1].map(() => {
+      const request = new IncomingMessage(new Socket())
+      return createEvent(request, new ServerResponse(request))
+    })
+    const factory = vi.fn(defineBetterNewsletterConfig(async event => {
+      await Promise.resolve()
+      return event === events[0] ? first.config : second.config
+    }))
+    const [one, same, two] = await Promise.all([
+      useBetterNewsletter(events[0]!, factory),
+      useBetterNewsletter(events[0]!, factory),
+      useBetterNewsletter(events[1]!, factory)
+    ])
+    expect(one).toBe(same)
+    expect(two).not.toBe(one)
+    expect(factory.mock.calls).toEqual([[events[0]], [events[1]]])
+    expect(await newsletterServerConfig(events[0]!, factory)).toBe(first.config)
+    expect(await newsletterServerConfig(events[1]!, factory)).toBe(second.config)
+    expect(factory).toHaveBeenCalledTimes(2)
+    await one.importSubscription({ email: 'first@example.com', status: 'PENDING_CONFIRMATION', consent: { version: 'v1', consentedAt: new Date() } })
+    await two.importSubscription({ email: 'second@example.com', status: 'PENDING_CONFIRMATION', consent: { version: 'v1', consentedAt: new Date() } })
+    expect(await one.getContact({ email: 'second@example.com' })).toBeNull()
+    expect(await two.getContact({ email: 'first@example.com' })).toBeNull()
+    expect(await first.storage.transaction(tx => tx.getContactByEmail('first@example.com'))).not.toBeNull()
+    expect(await second.storage.transaction(tx => tx.getContactByEmail('second@example.com'))).not.toBeNull()
+  })
+
+  it('continues to accept parameterless configuration factories', async () => {
+    const { config } = configuration()
+    const factory = vi.fn(defineBetterNewsletterConfig(() => config))
+    const request = new IncomingMessage(new Socket())
+    const event = createEvent(request, new ServerResponse(request))
+    expect(await newsletterServerConfig(event, factory)).toBe(config)
+    expect(await useBetterNewsletter(event, factory)).toBe(await useBetterNewsletter(event))
+    expect(factory).toHaveBeenCalledTimes(1)
+  })
+
+  it.each(['trusted-first', 'public-first'] as const)(
+    'shares request-local config between public and trusted access (%s)', async order => {
+      const requests: { event: H3Event; config: BetterNewsletterServerConfig; storage: ReturnType<typeof memoryAdapter> }[] = []
+      const factory = vi.fn(defineBetterNewsletterConfig(async event => {
+        const { config, storage } = configuration()
+        const requestConfig = { ...config, publicApi: options }
+        requests.push({ event, config: requestConfig, storage })
+        return requestConfig
+      }))
+      const handler = createNewsletterHandler({ basePath: '/newsletter' }, factory)
+      const app = createApp()
+      app.use(defineEventHandler(async event => {
+        const before = order === 'trusted-first' ? await useBetterNewsletter(event, factory) : undefined
+        const response = await handler(event)
+        const service = await useBetterNewsletter(event, factory)
+        if (before) expect(service).toBe(before)
+        expect(await newsletterServerConfig(event)).toBe(requests.at(-1)!.config)
+        expect(await service.getContact({ email: 'person@example.com' })).not.toBeNull()
+        return response
+      }))
+      server = createServer(toNodeListener(app))
+      await new Promise<void>(resolve => server!.listen(0, '127.0.0.1', resolve))
+      const address = server.address()
+      if (address == null || typeof address === 'string') throw new Error('Missing test address.')
+      for (let index = 0; index < 2; index++) {
+        const response = await fetch(`http://127.0.0.1:${address.port}/newsletter/subscribe`, {
+          method: 'POST', headers: { 'content-type': 'application/json' },
+          body: JSON.stringify({ email: 'person@example.com', consent: true, consentVersion: '2026-01' })
+        })
+        expect(response.status).toBe(200)
+        expect(await response.json()).toEqual({ accepted: true })
+      }
+      expect(factory.mock.calls).toEqual(requests.map(({ event }) => [event]))
+      expect(factory).toHaveBeenCalledTimes(2)
+      expect(requests[0]!.storage).not.toBe(requests[1]!.storage)
+      for (const { storage } of requests) {
+        expect(await storage.transaction(tx => tx.getContactByEmail('person@example.com'))).not.toBeNull()
+      }
+    }
+  )
+
   it('dispatches only enabled exact paths and rejects unknown or moved actions before service access', async () => {
     const { config, storage } = configuration()
     const transaction = vi.spyOn(storage, 'transaction')

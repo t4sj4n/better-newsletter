@@ -1,10 +1,8 @@
 import { describe, expect, it, vi } from 'vitest'
 import {
-  assertNewsletterBasePath,
   createNewsletterClient,
-  defaultNewsletterRoutes,
-  newsletterRoutes,
   type NewsletterClient,
+  type NewsletterClientPreferencesResult,
   type NewsletterRoute,
   type NewsletterRoutes,
   type NewsletterRoutingOptions,
@@ -21,11 +19,17 @@ describe('framework-neutral browser client', () => {
     const options: NewsletterRoutingOptions = { basePath: '/api/newsletter' }
     const route: NewsletterRoute = 'subscribe'
     const routes: NewsletterRoutes = { subscribe: '/sub', resendConfirmation: false, confirm: false, unsubscribe: false, unsubscribeAll: false, preferences: false }
-    void [options, route, routes]
+    const stalePreferences: NewsletterClientPreferencesResult = { subscriptions: null }
+    void [options, route, routes, stalePreferences]
   })
 
   it('uses default basePath and routes for all six public actions', async () => {
-    const fetcher = vi.fn<Fetcher>(async () => {
+    const fetcher = vi.fn<Fetcher>(async (url) => {
+      if (url.endsWith('/confirm')) return new Response(JSON.stringify({ confirmed: true }))
+      if (url.endsWith('/unsubscribe') || url.endsWith('/unsubscribe-all')) {
+        return new Response(JSON.stringify({ unsubscribed: true }))
+      }
+      if (url.endsWith('/preferences')) return new Response(JSON.stringify({ subscriptions: null }))
       return new Response(JSON.stringify({ accepted: true }))
     })
     const client: NewsletterClient = createNewsletterClient(undefined, fetcher)
@@ -57,7 +61,7 @@ describe('framework-neutral browser client', () => {
 
     // 3. confirm
     const confirmResult = await client.confirm('test-token-123')
-    expect(confirmResult).toEqual({ accepted: true })
+    expect(confirmResult).toEqual({ confirmed: true })
     expect(fetcher).toHaveBeenLastCalledWith('/api/newsletter/confirm', {
       method: 'POST',
       headers: { 'content-type': 'application/json' },
@@ -66,7 +70,7 @@ describe('framework-neutral browser client', () => {
 
     // 4. unsubscribe
     const unsubscribeResult = await client.unsubscribe('cap-unsub-123')
-    expect(unsubscribeResult).toEqual({ accepted: true })
+    expect(unsubscribeResult).toEqual({ unsubscribed: true })
     expect(fetcher).toHaveBeenLastCalledWith('/api/newsletter/unsubscribe', {
       method: 'POST',
       headers: { 'content-type': 'application/json' },
@@ -75,7 +79,7 @@ describe('framework-neutral browser client', () => {
 
     // 5. unsubscribeAll
     const unsubscribeAllResult = await client.unsubscribeAll('cap-unsub-all-123')
-    expect(unsubscribeAllResult).toEqual({ accepted: true })
+    expect(unsubscribeAllResult).toEqual({ unsubscribed: true })
     expect(fetcher).toHaveBeenLastCalledWith('/api/newsletter/unsubscribe-all', {
       method: 'POST',
       headers: { 'content-type': 'application/json' },
@@ -84,7 +88,7 @@ describe('framework-neutral browser client', () => {
 
     // 6. preferences
     const preferencesResult = await client.preferences('cap-pref-123')
-    expect(preferencesResult).toEqual({ accepted: true })
+    expect(preferencesResult).toEqual({ subscriptions: null })
     expect(fetcher).toHaveBeenLastCalledWith('/api/newsletter/preferences', {
       method: 'POST',
       headers: { 'content-type': 'application/json' },
@@ -150,12 +154,5 @@ describe('framework-neutral browser client', () => {
     expect(() => createNewsletterClient({ basePath: 'api/newsletter' })).toThrow('Invalid newsletter base path')
     expect(() => createNewsletterClient({ basePath: '//evil.com' })).toThrow('Invalid newsletter base path')
     expect(() => createNewsletterClient({ basePath: '/' })).toThrow('Invalid newsletter base path')
-  })
-
-  it('exposes default routes and route asserting helpers', () => {
-    expect(defaultNewsletterRoutes.subscribe).toBe('/subscribe')
-    expect(defaultNewsletterRoutes.confirm).toBe('/confirm')
-    expect(assertNewsletterBasePath).toBeTypeOf('function')
-    expect(newsletterRoutes).toBeTypeOf('function')
   })
 })

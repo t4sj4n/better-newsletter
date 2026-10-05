@@ -6,6 +6,7 @@ import process from 'node:process'
 import { fileURLToPath } from 'node:url'
 import { versionBump } from 'bumpp'
 import { generateMarkDown, getGitDiff, getLastGitTag, loadChangelogConfig, parseGitCommit } from 'changelogen'
+import semver from 'semver'
 
 /** Preserve Gitmoji and plain squash titles alongside Conventional Commits. */
 export function releaseCommits(commits, config) {
@@ -59,7 +60,9 @@ export async function prepareRelease(cwd, release = 'prompt') {
       files: paths.slice(0, 2), confirm: release === 'prompt',
       commit: false, tag: false, push: false, noGitCheck: true, printCommits: false
     })
-    if (result.newVersion === runtime.version) throw new Error('Select a different release version.')
+    if (semver.compare(result.newVersion, runtime.version) <= 0) {
+      throw new Error('Select a release version newer than the current version.')
+    }
     const updatedCli = JSON.parse(readFileSync(join(cwd, paths[1]), 'utf8'))
     updatedCli.dependencies['better-newsletter'] = `workspace:${result.newVersion}`
     writeFileSync(join(cwd, paths[1]), `${JSON.stringify(updatedCli, null, 2)}\n`)

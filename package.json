@@ -33,6 +33,7 @@
     "pg": "^8.23.0",
     "publint": "^0.3.24",
     "resend": "^6.30.0",
+    "semver": "^7.8.5",
     "typescript": "^5.9.2",
     "typescript-eslint": "^8.42.0",
     "vitest": "^3.2.4"

@@ -113,6 +113,17 @@ describe('release preparation', () => {
     expect(read('pnpm-lock.yaml')).toBe('original lockfile\n')
   })
 
+  it.each(['0.1.0-rc.0', '0.1.0-beta.9'])(
+    'rejects release version %s without leaving a partial bump',
+    async version => {
+      const { cwd, read } = fixture()
+      await expect(prepareRelease(cwd, version)).rejects.toThrow('newer than the current version')
+      expect(JSON.parse(read('packages/better-newsletter/package.json')).version).toBe('0.1.0-rc.0')
+      expect(JSON.parse(read('packages/cli/package.json')).version).toBe('0.1.0-rc.0')
+      expect(read('pnpm-lock.yaml')).toBe('original lockfile\n')
+    }
+  )
+
   it('preserves Conventional Commits, Gitmoji, breaking changes and plain titles while skipping release commits', async () => {
     const config = await loadChangelogConfig('.', { types: { change: { title: 'Other changes' } } })
     const raw = ['feat: Conventional feature', '🐛 Fix a bug', '💥 Change the API', 'Plain PR title', '🔖 Release 0.1.0-rc.0']

@@ -124,7 +124,8 @@ The canonical packaged SQL snapshot contains dialect and schema revision, withou
 
 #### 4. Commit, PR, and Merge to `main`
 ```bash
-git commit -am "🔖 Release 0.1.0-rc.1"
+git add packages/better-newsletter/package.json packages/cli/package.json pnpm-lock.yaml CHANGELOG.md
+git commit -m "🔖 Release 0.1.0-rc.1"
 git push -u origin release/0.1.0-rc.1
 gh pr create --title "🔖 Release 0.1.0-rc.1"
 ```

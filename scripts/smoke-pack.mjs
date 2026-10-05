@@ -467,8 +467,8 @@ try {
   assert.equal([
     '-- Better Newsletter canonical schema', '-- Dialect: ' + initial.dialect,
     '-- Target schema revision: ' + initial.targetRevision, '-- Plan: initial', '',
-    initial.statements.map(statement => statement + ';').join('\\n\\n') + '\\n'
-  ].join('\\n'), readFileSync('canonical.sql', 'utf8'))
+    initial.statements.map(statement => statement + ';').join('\n\n') + '\n'
+  ].join('\n'), readFileSync('canonical.sql', 'utf8'))
   assert.ok(!generated.includes(process.env.DATABASE_URL))
   const tables = await pool.query('SELECT tablename FROM pg_tables WHERE schemaname = $1', [schema])
   assert.equal(tables.rowCount, 0, 'generation must not mutate the database')

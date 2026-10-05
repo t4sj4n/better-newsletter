@@ -95,38 +95,39 @@ Follow this structured workflow for every release:
 #### 1. Prepare Release on a Branch
 Create a release branch from `main`:
 ```bash
-git checkout -b release/0.1.0-alpha.4
+git checkout -b release/0.1.0-rc.1
 ```
 
-#### 2. Bump Version Numbers
-Update the version in **two** files (three locations total):
-1. **`packages/better-newsletter/package.json`**:
-   ```json
-   "version": "0.1.0-alpha.4"
-   ```
-2. **`packages/cli/package.json`**:
-   ```json
-   "version": "0.1.0-alpha.4",
-   "dependencies": {
-     "better-newsletter": "workspace:0.1.0-alpha.4"
-   }
-   ```
-*(Note: `examples/basic/package.json` specifies `"latest"` and never needs manual version changes).*
-
-#### 3. Update Lockfile and Verify
-Run `pnpm install` to update `pnpm-lock.yaml`, refresh the canonical SQL provenance for the new runtime version, then run the full test and packaging verification suite:
+#### 2. Prepare Versions and Changelog
+Start with a clean tracked working tree on the release branch. Choose the next version interactively:
 ```bash
-pnpm install
-pnpm migration:snapshot:write
+pnpm release:prepare
+```
+
+Or supply an explicit version:
+```bash
+pnpm release:prepare 0.1.0-rc.1
+```
+
+The command uses `bumpp` for version selection and updates both publishable package versions, the exact CLI runtime dependency and the lockfile. It uses `changelogen` to prepend release notes to `CHANGELOG.md` from commits since the latest reachable Git tag. Conventional Commits, Gitmoji subjects and plain squash-merge titles are included; release commits are omitted. Review the generated notes before committing.
+
+Preparation checks the canonical SQL snapshot and the independent PostgreSQL revision/DDL-hash guard before changing versions. It never regenerates SQL or accepts schema changes. Cancelling the version prompt leaves files unchanged; errors during preparation restore package manifests, lockfile and changelog. The private workspace version and examples are not bumped. No commit, Git tag, push, merge or publication is performed by this command.
+
+#### 3. Verify
+Review the prepared diff and run the full test and packaging verification suite:
+```bash
 pnpm check
 node scripts/smoke-pack.mjs
 ```
 
+The canonical packaged SQL snapshot contains dialect and schema revision, without a runtime package version. A package-only release therefore requires no snapshot refresh. CLI-generated host migrations retain the generating runtime's version in their provenance header.
+
 #### 4. Commit, PR, and Merge to `main`
 ```bash
-git commit -am "🔖 Release 0.1.0-alpha.4"
-git push -u origin release/0.1.0-alpha.4
-gh pr create --title "🔖 Release 0.1.0-alpha.4"
+git add packages/better-newsletter/package.json packages/cli/package.json pnpm-lock.yaml CHANGELOG.md
+git commit -m "🔖 Release 0.1.0-rc.1"
+git push -u origin release/0.1.0-rc.1
+gh pr create --title "🔖 Release 0.1.0-rc.1"
 ```
 Wait for GitHub Actions CI checks to pass, then squash-merge the PR into `main`.
 
@@ -153,8 +154,8 @@ pnpm --filter "./packages/*" publish --tag next --no-git-checks
 
 #### 6. Tag the Release in Git
 ```bash
-git tag v0.1.0-alpha.4
-git push origin v0.1.0-alpha.4
+git tag v0.1.0-rc.1
+git push origin v0.1.0-rc.1
 ```
 
 ## Schema revisions and releases
@@ -166,8 +167,8 @@ PostgreSQL's canonical target uses `POSTGRES_NEWSLETTER_SCHEMA.revision`, curren
 
 `test/fixtures/postgres-schema-revision.json` checks the approved PostgreSQL revision and SHA-256 of the canonical DDL. Its regression fails with a maintenance message when either changes. Decide the revision policy first, then deliberately update this independent contract and document the required upgrade. Do not automatically refresh it when generating SQL or enlarge it into an automatic semantic DDL classifier.
 
-The provider and canonical snapshot share one runtime-owned version constant derived from that runtime artifact’s own package metadata; the CLI never resolves a provenance version independently.
+The migration provider records a runtime-owned version derived from its package metadata; CLI-generated host SQL preserves this provenance, and the CLI never resolves a version independently. The canonical packaged snapshot identifies the dialect and schema revision and has no package-version header.
 
-After changing the model or runtime package version, run `pnpm migration:snapshot:write` to refresh the packaged canonical SQL and deterministic provenance comments. This command intentionally does not update the independent revision/hash contract. Package-only provenance changes do not change the DDL hash. `pnpm check` verifies both contracts, and the packed smoke tests verify public metadata, initial/delta provenance and direct migration without a ledger.
+After intentionally changing the schema model, run `pnpm migration:snapshot:write` to refresh the packaged canonical SQL. Package-version changes do not require a snapshot update. This command intentionally does not update the independent revision/hash contract. Package-only provenance changes do not change the DDL hash. `pnpm check` verifies both contracts, and the packed smoke tests verify public metadata, initial/delta provenance and direct migration without a ledger.
 
 Generated host migrations remain immutable. A package upgrade creates a new reviewed host migration against the previous applied schema; it never rewrites old host migration files. No database revision table is introduced by target metadata.

@@ -1,4 +1,5 @@
 import { execFileSync } from 'node:child_process'
+import { URLSearchParams } from 'node:url'
 import semver from 'semver'
 
 export const registry = 'https://registry.npmjs.org'
@@ -88,6 +89,42 @@ export function requireGitHub(run, repository) {
   const match = /^(?:https:\/\/github\.com\/|git@github\.com:|ssh:\/\/git@github\.com\/)([^/]+\/[^/]+?)(?:\.git)?$/u.exec(url)
   if (match?.[1] !== repository) throw new Error(`origin must push to github.com/${repository}.`)
   checked(run, 'gh', ['auth', 'status'])
+}
+
+export function requireSuccessfulCi(run, repository, commit, { workflow, event, branch }) {
+  const metadata = JSON.parse(checked(run, 'gh', ['api', `repos/${repository}/actions/workflows/${workflow}`]))
+  if (!Number.isSafeInteger(metadata.id) || metadata.id <= 0
+      || metadata.path !== `.github/workflows/${workflow}` || metadata.state !== 'active') {
+    throw new Error(`Required CI workflow ${workflow} is missing, inactive or has unexpected metadata.`)
+  }
+  const query = new URLSearchParams({ head_sha: commit, event, branch, per_page: '100' })
+  const pages = JSON.parse(checked(run, 'gh', ['api', '--paginate', '--slurp',
+    `repos/${repository}/actions/workflows/${metadata.id}/runs?${query}`]))
+  if (!Array.isArray(pages) || !pages.length
+      || pages.some(page => !Array.isArray(page.workflow_runs) || !Number.isSafeInteger(page.total_count))) {
+    throw new Error('Unexpected GitHub CI run response.')
+  }
+  const runs = pages.flatMap(page => page.workflow_runs)
+  if (runs.length !== pages[0].total_count || pages.some(page => page.total_count !== pages[0].total_count)) {
+    throw new Error('GitHub CI run listing is incomplete or changed during pagination. Retry.')
+  }
+  const relevant = runs.filter(candidate => candidate.head_sha === commit
+    && candidate.workflow_id === metadata.id && candidate.event === event && candidate.head_branch === branch)
+  if (!relevant.length) throw new Error(`No required CI run for exact commit ${commit}. Wait for ${workflow} on ${branch}.`)
+  if (relevant.some(candidate => ![candidate.id, candidate.run_number, candidate.run_attempt]
+    .every(value => Number.isSafeInteger(value) && value > 0))) {
+    throw new Error('Unexpected GitHub CI run identity.')
+  }
+  // A newer run (including a pending rerun) supersedes older successes; never fall back.
+  relevant.sort((a, b) => b.run_number - a.run_number || b.id - a.id || b.run_attempt - a.run_attempt)
+  const latest = relevant[0]
+  if (latest.status !== 'completed' || latest.conclusion !== 'success') {
+    throw new Error(`Required CI run ${latest.id} for ${commit} is ${latest.status}/${latest.conclusion ?? 'pending'}, not completed/success. Wait for successful CI before publishing.`)
+  }
+  return {
+    workflowId: metadata.id, id: latest.id, runNumber: latest.run_number,
+    attempt: latest.run_attempt, status: latest.status, conclusion: latest.conclusion
+  }
 }
 
 export function createReleaseBranch(run, branch) {

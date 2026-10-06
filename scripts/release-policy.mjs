@@ -6,6 +6,7 @@ import semver from 'semver'
 import { checked, distTag, validVersion } from './release-core.mjs'
 
 export const repository = 't4sj4n/better-newsletter'
+export const requiredCi = { workflow: 'ci.yml', event: 'push', branch: 'main' }
 export const releasePaths = [
   'packages/better-newsletter/package.json', 'packages/cli/package.json', 'pnpm-lock.yaml', 'CHANGELOG.md'
 ]
@@ -69,12 +70,19 @@ export function requirePreparedCommit(run, packages) {
   }
 }
 
-export function validateRelease(run, packDestination) {
-  if (!process.env.DATABASE_URL) {
-    throw new Error('Set DATABASE_URL to a disposable PostgreSQL database so release validation cannot skip database checks.')
-  }
-  checked(run, 'pnpm', ['check'])
-  checked(run, 'node', ['scripts/smoke-pack.mjs', ...(packDestination ? ['--pack-destination', packDestination] : [])])
+export function validatePreparation(run) {
+  checked(run, 'pnpm', ['lint'])
+  checked(run, 'pnpm', ['typecheck'])
+  checked(run, 'pnpm', ['build'])
+  checked(run, 'pnpm', ['migration:snapshot:check'])
+  checked(run, 'pnpm', ['exec', 'vitest', 'run',
+    '--exclude', 'test/postgres.test.ts', '--exclude', 'test/postgres-migration.test.ts'],
+  { env: { ...process.env, DATABASE_URL: '' } })
+}
+
+export function validateArtifacts(run, packDestination) {
+  checked(run, 'node', ['scripts/smoke-pack.mjs', ...(packDestination ? ['--pack-destination', packDestination] : [])],
+    { env: { ...process.env, DATABASE_URL: '' } })
 }
 
 export function releaseArtifacts(cwd, packages) {

@@ -4,8 +4,8 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import process from 'node:process'
 import { fileURLToPath } from 'node:url'
-import { checked, commandRunner, distTag, githubRelease, npmVersion, publishPlan, registry, requireCleanTree, requireCurrentMain, requireGitHub, tagState } from './release-core.mjs'
-import { releaseArtifacts, releaseNotes, releasePackages, repository, requirePreparedCommit, validateRelease } from './release-policy.mjs'
+import { checked, commandRunner, distTag, githubRelease, npmVersion, publishPlan, registry, requireCleanTree, requireCurrentMain, requireGitHub, requireSuccessfulCi, tagState } from './release-core.mjs'
+import { releaseArtifacts, releaseNotes, releasePackages, repository, requiredCi, requirePreparedCommit, validateArtifacts, validatePreparation } from './release-policy.mjs'
 
 function verifyTagManifest(run, tag, manifest) {
   if (checked(run, 'git', ['cat-file', '-t', `refs/tags/${tag}`]) !== 'tag') {
@@ -27,6 +27,7 @@ export function publishRelease(cwd, { resume = false, run = commandRunner(cwd) }
   const notes = releaseNotes(cwd, version)
   requirePreparedCommit(run, packages)
   requireGitHub(run, repository)
+  const ci = requireSuccessfulCi(run, repository, commit, requiredCi)
   checked(run, 'npm', ['whoami', '--registry', registry])
   let state = tagState(run, tag)
   const published = packages.map(pkg => npmVersion(run, pkg.name, version))
@@ -46,7 +47,8 @@ export function publishRelease(cwd, { resume = false, run = commandRunner(cwd) }
   const scratch = mkdtempSync(join(tmpdir(), 'better-newsletter-release-'))
   try {
     console.log(`Validating ${tag} on ${commit} (npm dist-tag: ${channel})...`)
-    validateRelease(run, scratch)
+    validatePreparation(run)
+    validateArtifacts(run, scratch)
     const artifacts = releaseArtifacts(scratch, packages)
     const manifest = { commit, packages: artifacts.map(({ name, integrity }) => ({ name, integrity })) }
     for (const [index, existing] of published.entries()) {
@@ -64,6 +66,10 @@ export function publishRelease(cwd, { resume = false, run = commandRunner(cwd) }
     if (JSON.stringify({ tag: freshTag, published: freshPublished, release: freshRelease })
         !== JSON.stringify({ tag: state, published, release })) {
       throw new Error('External release state changed during validation. Inspect it and retry.')
+    }
+    const freshCi = requireSuccessfulCi(run, repository, commit, requiredCi)
+    if (JSON.stringify(freshCi) !== JSON.stringify(ci)) {
+      throw new Error('Required CI run changed during validation. Inspect it and retry.')
     }
     try {
       if (plan.createTag) {

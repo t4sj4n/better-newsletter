@@ -3,21 +3,32 @@ import { createHash } from 'node:crypto'
 import { mkdtempSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
+import process from 'node:process'
+import { URLSearchParams } from 'node:url'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { loadChangelogConfig } from 'changelogen'
-import { commandRunner, distTag, githubRelease, nextVersion, npmVersion, publishPlan } from '../scripts/release-core.mjs'
+import { commandRunner, distTag, githubRelease, nextVersion, npmVersion, publishPlan, requireSuccessfulCi } from '../scripts/release-core.mjs'
 import { prepareRelease, releaseCommits } from '../scripts/release-prepare.mjs'
 import { publishRelease } from '../scripts/release-publish.mjs'
-import { releaseNotes, releasePackages, releasePaths, validateRelease } from '../scripts/release-policy.mjs'
+import { releaseNotes, releasePackages, releasePaths, repository, requiredCi, validateArtifacts, validatePreparation } from '../scripts/release-policy.mjs'
 
 const directories = []
 beforeEach(() => {
-  vi.stubEnv('DATABASE_URL', 'postgresql://release-test.invalid/disposable')
+  vi.stubEnv('DATABASE_URL', undefined)
 })
 afterEach(() => {
   for (const path of directories.splice(0)) rmSync(path, { recursive: true, force: true })
   vi.unstubAllEnvs()
 })
+
+const ciWorkflow = { id: 246, path: '.github/workflows/ci.yml', state: 'active' }
+function ciRun(commit, overrides = {}) {
+  return {
+    id: 1000, run_number: 1, run_attempt: 1, workflow_id: ciWorkflow.id,
+    head_sha: commit, head_branch: 'main', event: 'push',
+    status: 'completed', conclusion: 'success', ...overrides
+  }
+}
 
 function fixture() {
   const directory = mkdtempSync(join(tmpdir(), 'newsletter-release-'))
@@ -51,7 +62,7 @@ function fixture() {
   git(['push', '-u', 'origin', 'main'])
   const read = path => readFileSync(join(cwd, path), 'utf8')
   const state = {
-    calls: [], fail: '', published: new Map(), release: null, npmMetadataFormat: 'object',
+    calls: [], fail: '', published: new Map(), release: null, npmMetadataFormat: 'object', ciRuns: null,
     missingVersionResponse: { status: 1, stdout: '{"error":{"code":"E404"}}', stderr: 'npm error code E404\n' }
   }
   const real = commandRunner(cwd)
@@ -101,6 +112,11 @@ function fixture() {
       if (args[0] === 'auth') return ok()
       if (args[0] === 'pr') return ok('https://github.com/t4sj4n/better-newsletter/pull/100')
       if (args[0] === 'api') {
+        if (args[1] === `repos/${repository}/actions/workflows/ci.yml`) return ok(JSON.stringify(ciWorkflow))
+        if (args.at(-1).includes(`/actions/workflows/${ciWorkflow.id}/runs?`)) {
+          const runs = state.ciRuns ?? [ciRun(git(['rev-parse', 'HEAD']))]
+          return ok(JSON.stringify([{ total_count: runs.length, workflow_runs: runs }]))
+        }
         return state.release ? ok(`HTTP/2 200 OK\n\n${JSON.stringify(state.release)}`)
           : { status: 1, stdout: 'HTTP/2 404 Not Found\n\n{"message":"Not Found"}', stderr: '' }
       }
@@ -164,11 +180,12 @@ describe('release version selection', () => {
 })
 
 describe('release preparation', () => {
-  it('prepares, validates, commits, pushes and opens a draft PR without tagging or publishing', async () => {
+  it('prepares without DATABASE_URL, validates, commits, pushes and opens a draft PR without tagging or publishing', async () => {
     const { cwd, git, read, run, state } = fixture()
     const base = git(['rev-parse', 'HEAD'])
     const sql = read('schema.sql')
     const tags = git(['tag'])
+    expect(process.env.DATABASE_URL).toBeUndefined()
     await prepareRelease(cwd, 'prerelease', { run })
     expect(releasePackages(cwd).map(pkg => pkg.version)).toEqual(['0.1.0-rc.1', '0.1.0-rc.1'])
     expect(JSON.parse(read('package.json')).version).toBe('0.0.0')
@@ -187,10 +204,13 @@ describe('release preparation', () => {
     expect(state.calls.filter(([command]) => command === 'pnpm').map(([, args]) => args)).toEqual([
       ['--filter', 'better-newsletter', 'build'], ['migration:snapshot:check'],
       ['exec', 'vitest', 'run', 'test/postgres-schema-revision.test.ts'],
-      ['install', '--lockfile-only', '--ignore-scripts'], ['check']
+      ['install', '--lockfile-only', '--ignore-scripts'], ['lint'], ['typecheck'], ['build'],
+      ['migration:snapshot:check'],
+      ['exec', 'vitest', 'run', '--exclude', 'test/postgres.test.ts', '--exclude', 'test/postgres-migration.test.ts']
     ])
     expect(state.calls.some(([command, args]) => command === 'node' && args[0] === 'scripts/smoke-pack.mjs')).toBe(true)
     expect(state.calls.find(([command, args]) => command === 'gh' && args[0] === 'pr')[1]).toContain('--draft')
+    expect(state.calls.some(([command, args]) => command === 'gh' && args.at(-1).includes('/actions/workflows/'))).toBe(false)
     expect(mutations(state).map(([command, args]) => [command, args[0]])).toEqual([['git', 'push']])
   })
 
@@ -237,7 +257,7 @@ describe('release preparation', () => {
     expect(mutations(state)).toEqual([])
   })
 
-  it.each(['migration:snapshot:check', 'test/postgres-schema-revision.test.ts', 'install', 'check', 'scripts/smoke-pack.mjs'])(
+  it.each(['migration:snapshot:check', 'test/postgres-schema-revision.test.ts', 'install', 'lint', 'typecheck', 'build', 'scripts/smoke-pack.mjs'])(
     'restores release files and permits the same-version retry when %s fails', async failure => {
       const { cwd, git, read, run, state } = fixture()
       const originals = releasePaths.map(read)
@@ -259,9 +279,9 @@ describe('release preparation', () => {
       const { cwd, git, read, run, state } = fixture()
       const base = git(['rev-parse', 'HEAD'])
       const originals = releasePaths.map(read)
-      state.fail = 'check'
+      state.fail = 'lint'
       const changed = (command, args, options) => {
-        if (command === 'pnpm' && args[0] === 'check') {
+        if (command === 'pnpm' && args[0] === 'lint') {
           if (condition === 'tracked changes') writeFileSync(join(cwd, 'schema.sql'), 'Foreign tracked change\n')
           if (condition === 'untracked files') writeFileSync(join(cwd, 'foreign.txt'), 'Foreign untracked change\n')
           if (condition === 'new commits') git(['commit', '--allow-empty', '-m', 'Foreign commit during validation'])
@@ -288,7 +308,7 @@ describe('release preparation', () => {
 
   it('surfaces preparation and cleanup failures without force-deleting a branch', async () => {
     const { cwd, git, run, state } = fixture()
-    state.fail = 'check'
+    state.fail = 'lint'
     const failedCleanup = (command, args, options) => {
       if (command === 'git' && args[0] === 'branch' && args[1] === '-d') {
         return { status: 1, stdout: '', stderr: 'Simulated cleanup failure' }
@@ -298,7 +318,7 @@ describe('release preparation', () => {
     await expect(prepareRelease(cwd, 'prerelease', { run: failedCleanup })).rejects.toMatchObject({
       message: expect.stringContaining('branch cleanup failed'),
       errors: [
-        expect.objectContaining({ message: expect.stringContaining('Simulated failure: check') }),
+        expect.objectContaining({ message: expect.stringContaining('Simulated failure: lint') }),
         expect.objectContaining({ message: expect.stringContaining('Simulated cleanup failure') })
       ]
     })
@@ -358,13 +378,115 @@ describe('release preparation', () => {
   })
 })
 
+describe('exact-commit GitHub CI gate', () => {
+  const commit = 'a'.repeat(40)
+  function gate(runs, { metadata = ciWorkflow, pages = [{ total_count: runs.length, workflow_runs: runs }] } = {}) {
+    const run = vi.fn((command, args) => ({
+      status: 0, stderr: '',
+      stdout: JSON.stringify(args.at(-1).includes('/runs?') ? pages : metadata)
+    }))
+    return { check: () => requireSuccessfulCi(run, repository, commit, requiredCi), run }
+  }
+
+  it('requires the configured workflow file and successful main push for exactly the requested SHA', () => {
+    const { check, run } = gate([ciRun(commit)])
+    expect(check()).toEqual({
+      workflowId: 246, id: 1000, runNumber: 1, attempt: 1, status: 'completed', conclusion: 'success'
+    })
+    expect(run.mock.calls[0]).toEqual(['gh', ['api', `repos/${repository}/actions/workflows/ci.yml`], undefined])
+    const args = run.mock.calls[1][1]
+    expect(args.slice(0, 3)).toEqual(['api', '--paginate', '--slurp'])
+    const [endpoint, query] = args[3].split('?')
+    expect(endpoint).toBe(`repos/${repository}/actions/workflows/246/runs`)
+    expect(Object.fromEntries(new URLSearchParams(query))).toEqual({
+      head_sha: commit, event: 'push', branch: 'main', per_page: '100'
+    })
+  })
+
+  it.each([
+    ['missing run', []],
+    ['other SHA', [ciRun('b'.repeat(40))]],
+    ['other workflow', [ciRun(commit, { workflow_id: 999 })]],
+    ['PR run', [ciRun(commit, { event: 'pull_request' })]],
+    ['other branch', [ciRun(commit, { head_branch: 'release/v1.0.0' })]]
+  ])('blocks %s even if returned by GitHub', (_, runs) => {
+    expect(gate(runs).check).toThrow('No required CI run for exact commit')
+  })
+
+  it.each([
+    ['queued', null], ['in_progress', null], ['waiting', null],
+    ['completed', 'failure'], ['completed', 'cancelled'], ['completed', 'timed_out'],
+    ['completed', 'neutral'], ['completed', 'skipped'], ['completed', 'action_required'],
+    ['completed', 'stale'], ['completed', null], ['in_progress', 'success']
+  ])('blocks status %s / conclusion %s', (status, conclusion) => {
+    expect(gate([ciRun(commit, { status, conclusion })]).check).toThrow('not completed/success')
+  })
+
+  it.each(['queued', 'in_progress', 'failure', 'success'])(
+    'selects the newest run across pages without falling back to old success: %s', state => {
+      const latest = ciRun(commit, {
+        id: 1001, run_number: 2,
+        status: ['queued', 'in_progress'].includes(state) ? state : 'completed',
+        conclusion: ['queued', 'in_progress'].includes(state) ? null : state
+      })
+      const { check } = gate([], {
+        pages: [
+          { total_count: 3, workflow_runs: [ciRun(commit)] },
+          { total_count: 3, workflow_runs: [ciRun('b'.repeat(40), { id: 2000, run_number: 3 }), latest] }
+        ]
+      })
+      if (state === 'success') expect(check().id).toBe(1001)
+      else expect(check).toThrow('not completed/success')
+    }
+  )
+
+  it('uses run ID then attempt as deterministic tie-breakers', () => {
+    expect(gate([
+      ciRun(commit, { id: 1001, run_attempt: 1 }),
+      ciRun(commit, { id: 1000, run_attempt: 3 }),
+      ciRun(commit, { id: 1001, run_attempt: 2 })
+    ]).check().attempt).toBe(2)
+  })
+
+  it.each([
+    { ...ciWorkflow, path: '.github/workflows/not-ci.yml' },
+    { ...ciWorkflow, state: 'disabled_manually' },
+    { ...ciWorkflow, id: null }
+  ])('blocks unexpected or inactive workflow metadata: %j', metadata => {
+    expect(gate([ciRun(commit)], { metadata }).check).toThrow('unexpected metadata')
+  })
+
+  it.each([
+    { pages: [] }, { pages: {} }, { pages: [{ total_count: 0, workflow_runs: null }] },
+    { pages: [{ total_count: 2, workflow_runs: [ciRun(commit)] }] },
+    { pages: [{ total_count: 1, workflow_runs: [] }, { total_count: 0, workflow_runs: [] }] }
+  ])('blocks malformed, incomplete or changing pagination: %j', ({ pages }) => {
+    expect(gate([], { pages }).check).toThrow()
+  })
+
+  it.each(['id', 'run_number', 'run_attempt'])('blocks invalid run identity %s', field => {
+    expect(gate([ciRun(commit, { [field]: null })]).check).toThrow('Unexpected GitHub CI run identity')
+  })
+
+  it.each(['Bad credentials', 'API rate limit exceeded', 'network timeout'])('blocks GitHub errors: %s', stderr => {
+    const run = () => ({ status: 1, stdout: '', stderr })
+    expect(() => requireSuccessfulCi(run, repository, commit, requiredCi)).toThrow(stderr)
+  })
+
+  it('blocks malformed GitHub JSON', () => {
+    expect(() => requireSuccessfulCi(() => ({ status: 0, stdout: 'not JSON', stderr: '' }),
+      repository, commit, requiredCi)).toThrow()
+  })
+})
+
 describe('release publication', () => {
   it.each(['0.1.0-rc.1', '0.1.0'].flatMap(version => ['object', 'array'].map(format => [version, format])))(
-    'validates before mutations and publishes %s runtime before CLI with %s npm metadata', (version, format) => {
+    'publishes %s without DATABASE_URL after CI/artifact validation, runtime before CLI with %s npm metadata', (version, format) => {
       const { cwd, git, run, state, prepareCommit } = fixture()
       state.npmMetadataFormat = format
       prepareCommit(version)
       const head = git(['rev-parse', 'HEAD'])
+      expect(process.env.DATABASE_URL).toBeUndefined()
       publishRelease(cwd, { run })
       const actions = mutations(state)
       expect(actions.map(([command, args]) => [command, args[0]])).toEqual([
@@ -375,6 +497,20 @@ describe('release publication', () => {
       expect(actions[2][1]).toContain(version.includes('-') ? 'rc' : 'latest')
       expect(state.calls.findIndex(([command, args]) => command === 'node' && args[0] === 'scripts/smoke-pack.mjs'))
         .toBeLessThan(state.calls.indexOf(actions[0]))
+      const ciChecks = state.calls.filter(([command, args]) => command === 'gh'
+        && args.at(-1).includes(`/actions/workflows/${ciWorkflow.id}/runs?`))
+      expect(ciChecks).toHaveLength(2)
+      for (const [, args] of ciChecks) {
+        expect(new URLSearchParams(args.at(-1).split('?')[1]).get('head_sha')).toBe(head)
+      }
+      expect(state.calls.indexOf(ciChecks[0]))
+        .toBeLessThan(state.calls.findIndex(([command]) => command === 'pnpm'))
+      expect(state.calls.indexOf(ciChecks[1]))
+        .toBeGreaterThan(state.calls.findIndex(([command, args]) => command === 'node' && args[0] === 'scripts/smoke-pack.mjs'))
+      expect(state.calls[state.calls.indexOf(actions[0]) - 1]).toBe(ciChecks[1])
+      const packed = state.calls.find(([command, args]) => command === 'node' && args[1] === '--pack-destination')
+      expect(actions.slice(2, 4).map(([, args]) => args[1]))
+        .toEqual(releasePackages(cwd).map(pkg => join(packed[1][2], tarball(pkg))))
       expect(git(['rev-parse', `v${version}^{}`])).toBe(head)
       expect(git(['cat-file', '-p', `v${version}`])).toContain('Release-Manifest:')
       expect(actions[4][2].input).toContain('Release notes.')
@@ -383,6 +519,83 @@ describe('release publication', () => {
       expect(() => publishRelease(cwd, { run })).toThrow('already exists')
       state.calls = []
       publishRelease(cwd, { run, resume: true })
+      expect(mutations(state)).toEqual([])
+    }
+  )
+
+  it.each([
+    'no run', 'other SHA', 'queued', 'in_progress', 'failure', 'cancelled', 'timed_out',
+    'neutral', 'skipped', 'action_required', 'newer queued run', 'auth error', 'API error'
+  ])('blocks publication and resume before artifact checks or mutations for CI %s', condition => {
+    const { cwd, git, run, state, prepareCommit } = fixture()
+    prepareCommit()
+    const commit = git(['rev-parse', 'HEAD'])
+    state.ciRuns = condition === 'no run' ? []
+      : condition === 'other SHA' ? [ciRun('b'.repeat(40))]
+        : condition === 'newer queued run'
+          ? [ciRun(commit), ciRun(commit, { id: 1001, run_number: 2, status: 'queued', conclusion: null })]
+          : [ciRun(commit, {
+              status: ['queued', 'in_progress'].includes(condition) ? condition : 'completed',
+              conclusion: ['queued', 'in_progress'].includes(condition) ? null : condition
+            })]
+    if (condition === 'auth error') state.fail = 'auth'
+    if (condition === 'API error') state.fail = 'api'
+    expect(() => publishRelease(cwd, { run })).toThrow()
+    expect(() => publishRelease(cwd, { run, resume: true })).toThrow()
+    expect(state.calls.some(([command]) => command === 'pnpm' || command === 'node')).toBe(false)
+    expect(mutations(state)).toEqual([])
+  })
+
+  it.each(['queued rerun', 'failed rerun', 'new successful run', 'new successful attempt', 'missing run', 'API error', 'workflow disabled'])(
+    'blocks all mutations when CI changes during artifact validation: %s', condition => {
+      const { cwd, git, run, state, prepareCommit } = fixture()
+      prepareCommit()
+      const commit = git(['rev-parse', 'HEAD'])
+      const raced = (command, args, options) => {
+        if (condition === 'workflow disabled' && state.ciRuns
+            && command === 'gh' && args[1] === `repos/${repository}/actions/workflows/ci.yml`) {
+          return { status: 0, stderr: '', stdout: JSON.stringify({ ...ciWorkflow, state: 'disabled_manually' }) }
+        }
+        const result = run(command, args, options)
+        if (command === 'node' && args[1] === '--pack-destination') {
+          state.ciRuns = condition === 'missing run' ? [] : [ciRun(commit, {
+            ...(condition === 'queued rerun' ? { run_attempt: 2, status: 'queued', conclusion: null } : {}),
+            ...(condition === 'failed rerun' ? { run_attempt: 2, conclusion: 'failure' } : {}),
+            ...(condition === 'new successful run' ? { id: 1001, run_number: 2 } : {}),
+            ...(condition === 'new successful attempt' ? { run_attempt: 2 } : {})
+          })]
+          if (condition === 'API error') state.fail = 'api'
+        }
+        return result
+      }
+      expect(() => publishRelease(cwd, { run: raced })).toThrow()
+      expect(mutations(state)).toEqual([])
+      expect(git(['tag', '--list', 'v0.1.0-rc.1'])).toBe('')
+      expect(state.published.size).toBe(0)
+      expect(state.release).toBeNull()
+    }
+  )
+
+  it.each(['HEAD', 'origin/main', 'working tree', 'branch'])(
+    'blocks mutations when %s changes during artifact validation', condition => {
+      const { cwd, git, run, state, prepareCommit } = fixture()
+      prepareCommit()
+      const raced = (command, args, options) => {
+        const result = run(command, args, options)
+        if (command === 'node' && args[1] === '--pack-destination') {
+          if (condition === 'working tree') writeFileSync(join(cwd, 'new-file'), 'untracked')
+          else if (condition === 'branch') git(['switch', '-c', 'foreign/branch'])
+          else if (condition === 'origin/main') {
+            const commit = git(['commit-tree', 'HEAD^{tree}', '-p', 'HEAD', '-m', 'Remote main moved during validation'])
+            git(['push', 'origin', `${commit}:refs/heads/main`])
+          } else {
+            git(['commit', '--allow-empty', '-m', 'Main moved during validation'])
+            git(['push', 'origin', 'main'])
+          }
+        }
+        return result
+      }
+      expect(() => publishRelease(cwd, { run: raced })).toThrow()
       expect(mutations(state)).toEqual([])
     }
   )
@@ -490,7 +703,7 @@ describe('release publication', () => {
     }
   )
 
-  it.each(['local tag', 'remote tag', 'npm version', 'check', 'scripts/smoke-pack.mjs'])(
+  it.each(['local tag', 'remote tag', 'npm version', 'lint', 'typecheck', 'build', 'migration:snapshot:check', 'scripts/smoke-pack.mjs'])(
     'rejects %s before mutations', condition => {
       const { cwd, git, run, state, prepareCommit } = fixture()
       prepareCommit()
@@ -576,15 +789,18 @@ describe('release publication', () => {
     expect(state.release).toBeNull()
   })
 
-  it('rechecks external state after validation and before creating a tag', () => {
-    const { cwd, run, state, prepareCommit } = fixture()
+  it.each(['npm', 'tag', 'GitHub Release'])('rechecks external %s state after validation and before creating a tag', condition => {
+    const { cwd, git, run, state, prepareCommit } = fixture()
     prepareCommit()
     const raced = (command, args, options) => {
       const result = run(command, args, options)
       if (command === 'node' && args[1] === '--pack-destination') {
-        state.published.set('better-newsletter@0.1.0-rc.1', {
-          name: 'better-newsletter', version: '0.1.0-rc.1', dist: { integrity: 'sha512-concurrent-release' }
-        })
+        if (condition === 'npm') {
+          state.published.set('better-newsletter@0.1.0-rc.1', {
+            name: 'better-newsletter', version: '0.1.0-rc.1', dist: { integrity: 'sha512-concurrent-release' }
+          })
+        } else if (condition === 'tag') git(['tag', 'v0.1.0-rc.1'])
+        else state.release = { tag_name: 'v0.1.0-rc.1', prerelease: true, draft: false }
       }
       return result
     }
@@ -634,11 +850,19 @@ describe('external-state safety', () => {
     expect(releaseNotes(cwd, '0.1.0-rc.1')).toBe('## v0.1.0-rc.1\n\nManually reviewed release notes.\n')
   })
 
-  it('requires a database for complete release validation instead of skipping database checks', () => {
-    vi.stubEnv('DATABASE_URL', '')
-    const run = vi.fn()
-    expect(() => validateRelease(run)).toThrow('Set DATABASE_URL')
-    expect(run).not.toHaveBeenCalled()
+  it('runs local validation and all artifact checks independently of an inherited database URL', () => {
+    vi.stubEnv('DATABASE_URL', 'postgresql://release-test.invalid/disposable')
+    const run = vi.fn(() => ({ status: 0, stdout: '', stderr: '' }))
+    validatePreparation(run)
+    validateArtifacts(run, '/validated-tarballs')
+    expect(run.mock.calls.map(([command, args]) => [command, args])).toEqual([
+      ['pnpm', ['lint']], ['pnpm', ['typecheck']], ['pnpm', ['build']], ['pnpm', ['migration:snapshot:check']],
+      ['pnpm', ['exec', 'vitest', 'run', '--exclude', 'test/postgres.test.ts', '--exclude', 'test/postgres-migration.test.ts']],
+      ['node', ['scripts/smoke-pack.mjs', '--pack-destination', '/validated-tarballs']]
+    ])
+    for (const [, , options] of run.mock.calls.slice(-2)) {
+      expect(options.env.DATABASE_URL).toBe('')
+    }
   })
   it.each([
     ['{"error":{"code":"E404"}}', ''],

@@ -6,7 +6,7 @@ import { fileURLToPath } from 'node:url'
 import { versionBump, versionBumpInfo } from 'bumpp'
 import { generateMarkDown, getGitDiff, getLastGitTag, loadChangelogConfig, parseGitCommit } from 'changelogen'
 import { checked, commandRunner, createReleaseBranch, distTag, nextVersion, npmVersion, removeUncommittedReleaseBranch, requireCleanTree, requireCurrentMain, requireGitHub, requireRemoteMain, tagState } from './release-core.mjs'
-import { releaseNotes, releasePackages, releasePaths, repository, validateRelease } from './release-policy.mjs'
+import { releaseNotes, releasePackages, releasePaths, repository, validateArtifacts, validatePreparation } from './release-policy.mjs'
 
 /** Preserve Gitmoji and plain squash titles alongside Conventional Commits. */
 export function releaseCommits(commits, config) {
@@ -79,7 +79,8 @@ export async function prepareRelease(cwd, release = 'prompt', { run = commandRun
     writeFileSync(join(cwd, 'CHANGELOG.md'), `# Changelog\n\n${preparedEntry}\n${previous ? `\n${previous}` : ''}`)
     releaseNotes(cwd, version)
     releasePackages(cwd)
-    validateRelease(run)
+    validatePreparation(run)
+    validateArtifacts(run)
     requireRemoteMain(run, base)
     const changes = checked(run, 'git', ['status', '--porcelain']).split('\n').filter(Boolean)
     if (changes.some(line => !paths.includes(line.slice(3)))) {
@@ -111,7 +112,7 @@ export async function prepareRelease(cwd, release = 'prompt', { run = commandRun
     throw new Error(`Release files remain on ${branch}. Inspect git status, finish the release commit, then run git push -u origin ${branch}.`, { cause: error })
   }
   const prArgs = ['pr', 'create', '--repo', repository, '--draft', '--base', 'main', '--head', branch,
-    '--title', title, '--body', `Prepare synchronized v${version} packages and changelog.\n\nReview and squash-merge this PR, then run \`pnpm release:publish\` from current main. No tag or publication occurs during preparation.`]
+    '--title', title, '--body', `Prepare synchronized v${version} packages and changelog.\n\nWait for PR CI (including PostgreSQL tests), review and squash-merge this PR, then wait for CI on the exact merged main commit before running \`pnpm release:publish\` locally. No tag or publication occurs during preparation.`]
   try {
     checked(run, 'git', ['push', '-u', 'origin', branch])
   } catch (error) {

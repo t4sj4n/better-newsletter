@@ -93,10 +93,13 @@ Better Newsletter uses **synchronized versioning** across packages:
 The maintainer explicitly decides **when** to release and **which version** to select:
 
 ```text
-prepare → draft release PR → review/squash-merge → publish
+prepare → draft release PR → CI with PostgreSQL → review/squash-merge
+        → CI on merged main commit → local publish
 ```
 
-Run commands from the repository root, with dependencies installed using `pnpm install --frozen-lockfile`. Set `DATABASE_URL` to a disposable PostgreSQL database for both commands; release validation refuses to skip database checks. Git must be able to fetch/push `origin`, which must point to this GitHub repository. Install and authenticate GitHub CLI (`gh auth login`) with permission to create PRs and Releases. Publishing additionally requires `npm login --registry https://registry.npmjs.org` and permission to publish both packages. npm publication runs interactively: complete npm's browser authentication or 2FA/OTP challenge when requested. An appropriately authorized npm token must satisfy the registry's current 2FA policy; authentication failures stop publication, not the safety checks. Never commit tokens.
+Run commands from the repository root, with dependencies installed using `pnpm install --frozen-lockfile`. **Neither release command requires a local PostgreSQL database or `DATABASE_URL`.** The existing GitHub CI provides PostgreSQL and runs the complete database/integration suite, including packed CLI SQL generation and migration checks. Local release validation does not use an inherited `DATABASE_URL`; CI replaces local database validation, **not** the local package/tarball/artifact checks.
+
+Git must be able to fetch/push `origin`, which must point to this GitHub repository. Install and authenticate GitHub CLI (`gh auth login`) with permission to read Actions workflows/runs and create PRs and Releases. Publishing additionally requires `npm login --registry https://registry.npmjs.org` and permission to publish both packages. npm publication runs interactively: complete npm's browser authentication or 2FA/OTP challenge when requested. An appropriately authorized npm token must satisfy the registry's current 2FA policy; authentication failures stop publication, not the safety checks. Never commit tokens.
 
 #### 1. Prepare from clean, current `main`
 
@@ -110,7 +113,7 @@ Supported selectors are `prerelease`, `patch`, `minor`, `major`, or an explicit 
 
 Preparation rejects tracked **and untracked** changes and a local `main` that differs from freshly fetched `origin/main`. It creates `release/v<version>`, uses the existing `bumpp` version update and `changelogen` release-note generation, synchronizes the exact CLI runtime dependency and updates `pnpm-lock.yaml`. Notes include Conventional Commits, Gitmoji and plain squash subjects since the last reachable tag; release commits are omitted. Each prepared entry records the exact preparation commit in a hidden `<!-- release-base: <SHA> -->` comment. Keep this marker intact when reviewing/editing the notes; it is omitted from the GitHub Release body.
 
-The command checks the canonical SQL snapshot and independent revision/DDL-hash guard before changing versions, then runs `pnpm check` and the full packed-artifact/clean-consumer smoke. It never regenerates or approves schema changes. It commits the four release files, pushes the branch and opens a **draft** release PR. No tag or npm publication occurs. Review/edit the generated notes on the release branch, mark the PR ready, wait for CI, and squash-merge it.
+The command checks the canonical SQL snapshot and independent revision/DDL-hash guard before changing versions, then runs lint, typecheck, build, migration snapshot verification and all DB-independent tests (excluding `test/postgres.test.ts` and `test/postgres-migration.test.ts`). It also runs the complete DB-independent packed-artifact/clean-consumer smoke. It never regenerates or approves schema changes. It commits the four release files, pushes the branch and opens a **draft** release PR. No tag or npm publication occurs. Review/edit the generated notes on the release branch, mark the PR ready, wait for PR CI including PostgreSQL, and squash-merge it. Then wait for CI to finish successfully on the new, merged `main` commit; green PR CI is not sufficient for publication.
 
 If version updates or validation fail, the four release files are restored. When the working tree is clean and both the current release branch and `main` still point to the original preparation base, the command returns to `main` and removes its uncommitted local release branch with `git branch -d`. Fix the reported failure and retry the same selector. If other changes, commits or branch movements are detected, the branch/work are preserved and a manual recovery instruction is shown. Inspect `git status` and `git log main..release/v<version>`, preserve any work, then switch to `main` and remove the obsolete branch with `git branch -d release/v<version>`; never force-delete additional commits just to retry. Existing local release branches are rejected with this explicit recovery guidance. If commit/push/PR creation fails, the prepared state is preserved with the next recovery command. Check `gh pr list --head release/v<version>` before retrying PR creation to avoid duplicates.
 
@@ -126,7 +129,13 @@ Publish immediately from the merged release commit, before another change lands 
 
 If `main` advances before merging the release PR, abandon the stale preparation and prepare again from updated `main` (choose a newer unused version if the original release branch still exists). Merely rebasing the old branch or editing its base marker is not sufficient. If a stale release was already merged, publication stops before tagging/publishing: prepare and merge a corrective release with a newer unused version from current `main`. This regenerates the complete unreleased changelog while leaving any reviewed historical entries intact. Never retarget the marker to bypass the guard.
 
-Before any irreversible step, publication reruns `pnpm check` (including database tests and migration/schema guards) and the complete packed-artifact smoke (file/export checks, `publint`, `attw`, isolated runtime/CLI consumers, packed CLI SQL generation and Nuxt handler). The exact two validated tarballs are retained temporarily and published, rather than rebuilding different artifacts.
+Before local validation or any release mutation, publication requires successful GitHub CI for **exactly `HEAD`**. The repository policy identifies `.github/workflows/ci.yml` by filename, verifies its API identity/path and active state, and queries only `push` runs on `main` with `head_sha` equal to the checked commit. A successful run for another commit, workflow, branch or PR does not qualify.
+
+When multiple relevant runs exist, the highest workflow `run_number` wins, with run ID and attempt as descending deterministic tie-breakers. GitHub reports the current attempt of a rerun, so a queued or failed rerun supersedes an older success. The selected run must be `status=completed` and `conclusion=success`. No run, queued/in-progress/waiting runs, failure, cancellation, timeout, neutral/skipped/action-required conclusions and GitHub/authentication/API errors all block publication. Paginated results must be complete and consistent; incomplete or changing listings block rather than guess.
+
+Publication reruns the same DB-independent preparation checks (including migration/schema guards) and the complete local artifact smoke (build/pack, file/export checks, `publint`, `attw`, isolated runtime/CLI consumers and Nuxt handler). The exact two validated tarballs are retained temporarily and published, rather than rebuilding different artifacts.
+
+After artifact validation and immediately before the first release mutation, publication rechecks clean/current `main`, unchanged `HEAD` and `origin/main`, and unchanged external tag/npm/GitHub Release state. It queries CI again for the original commit and requires the same successful workflow/run/attempt. A changed CI selection or attempt blocks even if the replacement is green; inspect it and retry so validation starts against the new CI evidence. Any failed race check prevents tag creation, npm publication and GitHub Release creation.
 
 The script creates an annotated `v<version>` tag on the checked commit, recording both tarball SHA-512 integrities, and pushes the tag **before** npm publication. It publishes `better-newsletter` first and only publishes the CLI once the matching runtime/integrity is visible on npm. It then creates a GitHub Release using that version's changelog entry. Prereleases are marked as prereleases on GitHub.
 
@@ -137,7 +146,7 @@ The script creates an annotated `v<version>` tag on the checked commit, recordin
 | `*-rc.*` | `rc` |
 | Stable | `latest` |
 
-Prereleases never use npm's implicit `latest`; the previous `next` convention is not used. GitHub's independent "Latest release" marker is left unchanged. Publishing is local only: GitHub Actions continues to validate PRs but never publishes.
+Prereleases never use npm's implicit `latest`; the previous `next` convention is not used. GitHub's independent "Latest release" marker is left unchanged. Publishing is local only: GitHub Actions validates PRs and `main` with PostgreSQL, but never tags, publishes npm packages or creates GitHub Releases. There is no OIDC/trusted publishing or automatic release after merge.
 
 #### Recovery after partial publication
 
@@ -147,7 +156,7 @@ Inspect the tag, npm versions and GitHub Release, then rerun on the **same exact
 pnpm release:publish --resume
 ```
 
-Recovery reruns validation and checks the tag's commit/artifact manifest and any published package integrities. It only performs missing steps; immutable npm versions are never overwritten or republished. Do not delete a valid pushed tag because a subsequent service failed.
+Recovery requires the same exact-HEAD successful CI gate and final race checks, reruns DB-independent local validation, and checks the tag's commit/artifact manifest and any published package integrities. No local database is required. All existing integrity and ordering guarantees remain: it only performs missing steps; immutable npm versions are never overwritten or republished. Do not delete a valid pushed tag because a subsequent service failed.
 
 | Failure | Recovery |
 | --- | --- |
@@ -158,7 +167,7 @@ Recovery reruns validation and checks the tag's commit/artifact manifest and any
 
 An interrupted successful external request is detected on retry even if the original command returned an error. A wrong tag commit, different tarball integrity, CLI published without runtime, or premature GitHub Release is refused for manual investigation. If `main` has advanced, normal recovery is deliberately blocked: do not move tags or force-push `main`; resolve the remaining external step manually from the tagged, validated artifacts after reviewing the failure.
 
-Generic Git/SemVer/npm/GitHub mechanics live in `scripts/release-core.mjs`; synchronized-package policy, release-commit evidence and validation live in `scripts/release-policy.mjs`. No shared npm release package is introduced.
+Generic Git/SemVer/npm/GitHub mechanics, including `requireSuccessfulCi`, live in `scripts/release-core.mjs`; the required CI workflow identity, synchronized-package policy, release-commit evidence, `validatePreparation` and `validateArtifacts` live in `scripts/release-policy.mjs`. No shared npm release package is introduced.
 
 ## Schema revisions and releases
 

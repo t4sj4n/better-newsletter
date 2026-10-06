@@ -8,6 +8,7 @@ import type {
   PreferenceSubscription,
   UnsubscribeResult
 } from './operations.js'
+import type { JsonValue } from './domain.js'
 
 export type {
   NewsletterRoute,
@@ -23,6 +24,8 @@ export interface NewsletterClientSubscribeInput {
   readonly audiences?: readonly string[]
   readonly consent: true
   readonly consentVersion: string
+  /** Untrusted public input; only host-selected values from publicSubscribeMetadata may be persisted. */
+  readonly metadata?: Readonly<Record<string, JsonValue>>
 }
 
 export interface NewsletterClientResendConfirmationInput {

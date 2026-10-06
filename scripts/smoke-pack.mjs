@@ -1,8 +1,8 @@
 import { execFileSync } from 'node:child_process'
 import console from 'node:console'
 import { randomUUID } from 'node:crypto'
-import { existsSync, mkdirSync, readFileSync, readdirSync, rmSync, writeFileSync } from 'node:fs'
-import { dirname, join } from 'node:path'
+import { copyFileSync, existsSync, mkdirSync, readFileSync, readdirSync, rmSync, writeFileSync } from 'node:fs'
+import { basename, dirname, join, resolve } from 'node:path'
 import process from 'node:process'
 import { fileURLToPath } from 'node:url'
 import { checkNuxtHandler } from './smoke-nuxt-handler.mjs'
@@ -11,6 +11,14 @@ const root = dirname(dirname(fileURLToPath(import.meta.url)))
 const runtimeManifest = JSON.parse(readFileSync(join(root, 'packages/better-newsletter/package.json'), 'utf8'))
 const cliManifest = JSON.parse(readFileSync(join(root, 'packages/cli/package.json'), 'utf8'))
 const rootManifest = JSON.parse(readFileSync(join(root, 'package.json'), 'utf8'))
+const args = process.argv.slice(2)
+if (args.length && (args.length !== 2 || args[0] !== '--pack-destination')) {
+  throw new Error('Usage: node scripts/smoke-pack.mjs [--pack-destination directory]')
+}
+const packDestination = args.length ? resolve(args[1]) : null
+if (packDestination && (!existsSync(packDestination) || readdirSync(packDestination).length)) {
+  throw new Error('Pack destination must be an existing empty directory.')
+}
 const scratch = join(root, `.smoke-pack-${randomUUID()}`)
 mkdirSync(scratch)
 
@@ -512,6 +520,11 @@ try {
     console.log('DATABASE_URL is unset; skipping packed CLI PostgreSQL generate smoke')
   }
   checkNuxtHandler({ scratch, runtimeTarball, run })
+  if (packDestination) {
+    for (const tarball of [runtimeTarball, cliTarball]) {
+      copyFileSync(tarball, join(packDestination, basename(tarball)))
+    }
+  }
   console.log('\nBoth packed-artifact smoke tests passed')
 } finally {
   rmSync(scratch, { recursive: true, force: true })

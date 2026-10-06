@@ -88,75 +88,75 @@ Better Newsletter uses **synchronized versioning** across packages:
 - `better-newsletter`: Published as an unscoped package on npm.
 - `@better-newsletter/cli`: Published under the `@better-newsletter` npm organization. Maintainers must be authenticated with an npm account that has publishing rights in the `better-newsletter` organization on npmjs.com.
 
-### Publishing to npm (Step-by-Step)
+### Local Release Flow
 
-Follow this structured workflow for every release:
+The maintainer explicitly decides **when** to release and **which version** to select:
 
-#### 1. Prepare Release on a Branch
-Create a release branch from `main`:
-```bash
-git checkout -b release/0.1.0-rc.1
+```text
+prepare → draft release PR → review/squash-merge → publish
 ```
 
-#### 2. Prepare Versions and Changelog
-Start with a clean tracked working tree on the release branch. Choose the next version interactively:
+Run commands from the repository root, with dependencies installed using `pnpm install --frozen-lockfile`. Set `DATABASE_URL` to a disposable PostgreSQL database for both commands; release validation refuses to skip database checks. Git must be able to fetch/push `origin`, which must point to this GitHub repository. Install and authenticate GitHub CLI (`gh auth login`) with permission to create PRs and Releases. Publishing additionally requires `npm login --registry https://registry.npmjs.org` and permission to publish both packages. npm publication runs interactively: complete npm's browser authentication or 2FA/OTP challenge when requested. An appropriately authorized npm token must satisfy the registry's current 2FA policy; authentication failures stop publication, not the safety checks. Never commit tokens.
+
+#### 1. Prepare from clean, current `main`
+
 ```bash
-pnpm release:prepare
+git switch main
+git pull --ff-only origin main
+pnpm release:prepare prerelease
 ```
 
-Or supply an explicit version:
+Supported selectors are `prerelease`, `patch`, `minor`, `major`, or an explicit canonical SemVer such as `pnpm release:prepare 0.2.0-beta.1`. `prerelease` advances the current channel (`0.1.0-beta.1` becomes `0.1.0-beta.2`); entering prerelease from stable requires an explicit channel version. Other increments follow SemVer, including promoting `0.1.0-beta.1` to `0.1.0` with `patch`. Equal/older versions, build metadata and unsupported prerelease channels are rejected. Calling `pnpm release:prepare` without a selector retains the existing interactive `bumpp` prompt; cancelling it leaves files and the branch unchanged.
+
+Preparation rejects tracked **and untracked** changes and a local `main` that differs from freshly fetched `origin/main`. It creates `release/v<version>`, uses the existing `bumpp` version update and `changelogen` release-note generation, synchronizes the exact CLI runtime dependency and updates `pnpm-lock.yaml`. Notes include Conventional Commits, Gitmoji and plain squash subjects since the last reachable tag; release commits are omitted.
+
+The command checks the canonical SQL snapshot and independent revision/DDL-hash guard before changing versions, then runs `pnpm check` and the full packed-artifact/clean-consumer smoke. It never regenerates or approves schema changes. It commits the four release files, pushes the branch and opens a **draft** release PR. No tag or npm publication occurs. Review/edit the generated notes on the release branch, mark the PR ready, wait for CI, and squash-merge it.
+
+If version updates or validation fail, the four release files are restored; inspect the tree and switch back to `main` before retrying. If commit/push/PR creation fails, the prepared state is preserved with the next recovery command. Check `gh pr list --head release/v<version>` before retrying PR creation to avoid duplicates.
+
+#### 2. Publish the merged release commit
+
 ```bash
-pnpm release:prepare 0.1.0-rc.1
+git switch main
+git pull --ff-only origin main
+pnpm release:publish
 ```
 
-The command uses `bumpp` for version selection and updates both publishable package versions, the exact CLI runtime dependency and the lockfile. It uses `changelogen` to prepend release notes to `CHANGELOG.md` from commits since the latest reachable Git tag. Conventional Commits, Gitmoji subjects and plain squash-merge titles are included; release commits are omitted. Review the generated notes before committing.
+Publish immediately from the merged release commit, before another change lands on `main`. Publication requires a clean, current `main`, a version-bumping HEAD commit containing both manifests, lockfile and changelog, synchronized versions/dependency, and matching prepared release notes. Existing local/remote tags, npm versions or GitHub Releases are rejected by default.
 
-Preparation checks the canonical SQL snapshot and the independent PostgreSQL revision/DDL-hash guard before changing versions. It never regenerates SQL or accepts schema changes. Cancelling the version prompt leaves files unchanged; errors during preparation restore package manifests, lockfile and changelog. The private workspace version and examples are not bumped. No commit, Git tag, push, merge or publication is performed by this command.
+Before any irreversible step, publication reruns `pnpm check` (including database tests and migration/schema guards) and the complete packed-artifact smoke (file/export checks, `publint`, `attw`, isolated runtime/CLI consumers, packed CLI SQL generation and Nuxt handler). The exact two validated tarballs are retained temporarily and published, rather than rebuilding different artifacts.
 
-#### 3. Verify
-Review the prepared diff and run the full test and packaging verification suite:
+The script creates an annotated `v<version>` tag on the checked commit, recording both tarball SHA-512 integrities, and pushes the tag **before** npm publication. It publishes `better-newsletter` first and only publishes the CLI once the matching runtime/integrity is visible on npm. It then creates a GitHub Release using that version's changelog entry. Prereleases are marked as prereleases on GitHub.
+
+| Version | Explicit npm dist-tag |
+| --- | --- |
+| `*-alpha.*` | `alpha` |
+| `*-beta.*` | `beta` |
+| `*-rc.*` | `rc` |
+| Stable | `latest` |
+
+Prereleases never use npm's implicit `latest`; the previous `next` convention is not used. GitHub's independent "Latest release" marker is left unchanged. Publishing is local only: GitHub Actions continues to validate PRs but never publishes.
+
+#### Recovery after partial publication
+
+Inspect the tag, npm versions and GitHub Release, then rerun on the **same exact clean/current main commit**:
+
 ```bash
-pnpm check
-node scripts/smoke-pack.mjs
+pnpm release:publish --resume
 ```
 
-The canonical packaged SQL snapshot contains dialect and schema revision, without a runtime package version. A package-only release therefore requires no snapshot refresh. CLI-generated host migrations retain the generating runtime's version in their provenance header.
+Recovery reruns validation and checks the tag's commit/artifact manifest and any published package integrities. It only performs missing steps; immutable npm versions are never overwritten or republished. Do not delete a valid pushed tag because a subsequent service failed.
 
-#### 4. Commit, PR, and Merge to `main`
-```bash
-git add packages/better-newsletter/package.json packages/cli/package.json pnpm-lock.yaml CHANGELOG.md
-git commit -m "🔖 Release 0.1.0-rc.1"
-git push -u origin release/0.1.0-rc.1
-gh pr create --title "🔖 Release 0.1.0-rc.1"
-```
-Wait for GitHub Actions CI checks to pass, then squash-merge the PR into `main`.
+| Failure | Recovery |
+| --- | --- |
+| Local tag exists but push failed | Fix Git authentication/connectivity; resume pushes the existing verified tag. |
+| Tag push succeeded, npm publication failed | Fix npm authentication/2FA/connectivity; resume publishes the missing packages. |
+| Runtime published, CLI failed | Wait for npm visibility or fix CLI permissions/2FA; resume skips the verified runtime and publishes only the CLI. |
+| Both packages published, GitHub Release failed | Fix `gh` authentication/connectivity; resume skips both verified npm versions and creates only the Release. |
 
-#### 5. Publish from `main`
-Switch to `main` locally and pull the merged commit:
-```bash
-git checkout main
-git pull origin main
-```
-Publish all distributable packages from the monorepo root in a single command:
-```bash
-# Standard release (updates the official 'latest' version on npm):
-pnpm --filter "./packages/*" publish --no-git-checks
+An interrupted successful external request is detected on retry even if the original command returned an error. A wrong tag commit, different tarball integrity, CLI published without runtime, or premature GitHub Release is refused for manual investigation. If `main` has advanced, normal recovery is deliberately blocked: do not move tags or force-push `main`; resolve the remaining external step manually from the tagged, validated artifacts after reviewing the failure.
 
-# Or for preview-only releases:
-pnpm --filter "./packages/*" publish --tag next --no-git-checks
-```
-
-**What this command does automatically:**
-- Resolves package dependencies topologically (`better-newsletter` runtime is published first, `@better-newsletter/cli` second).
-- Executes `prepack` (`pnpm build`) to compile fresh distribution artifacts prior to packaging.
-- Replaces `workspace:` protocol dependencies with exact published version numbers in the distributed tarball.
-- Skips private workspace packages (`playground/`, `examples/basic/`).
-
-#### 6. Tag the Release in Git
-```bash
-git tag v0.1.0-rc.1
-git push origin v0.1.0-rc.1
-```
+Generic Git/SemVer/npm/GitHub mechanics live in `scripts/release-core.mjs`; synchronized-package policy, release-commit evidence and validation live in `scripts/release-policy.mjs`. No shared npm release package is introduced.
 
 ## Schema revisions and releases
 

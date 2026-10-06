@@ -3,6 +3,7 @@ import {
   createNewsletterClient,
   type NewsletterClient,
   type NewsletterClientPreferencesResult,
+  type NewsletterClientSubscribeInput,
   type NewsletterRoute,
   type NewsletterRoutes,
   type NewsletterRoutingOptions,
@@ -127,6 +128,32 @@ describe('framework-neutral browser client', () => {
       body: JSON.stringify({ capability: 'cap-xyz' })
     }))
   })
+
+  it.each([createNewsletterClient, createNewsletterClientFromNuxtAlias])(
+    'serializes typed subscribe metadata through the existing request path (%#)', async createClient => {
+      const fetcher = vi.fn<Fetcher>(async () => new Response(JSON.stringify({ accepted: true })))
+      const client = createClient(undefined, fetcher)
+      const input: NewsletterClientSubscribeInput = {
+        email: 'user@example.com',
+        consent: true,
+        consentVersion: 'v1',
+        metadata: {
+          signupSource: 'LANDING_PAGE',
+          campaign: 'launch',
+          context: { placements: ['hero', 'footer'], variant: null },
+          experiment: 2,
+          returning: false
+        }
+      }
+
+      expect(await client.subscribe(input)).toEqual({ accepted: true })
+      expect(fetcher).toHaveBeenCalledExactlyOnceWith('/api/newsletter/subscribe', {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify(input)
+      })
+    }
+  )
 
   it('prevents disabled routes from sending HTTP requests', async () => {
     const fetcher = vi.fn(async () => new Response('{}'))

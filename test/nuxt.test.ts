@@ -8,6 +8,7 @@ import {
   SUBSCRIPTION_STATUSES
 } from '../packages/better-newsletter/src/index.js'
 import { createHmacRateLimitKeyProvider } from '../packages/better-newsletter/src/security.js'
+import { createNewsletterClient } from '../packages/better-newsletter/src/client.js'
 import { memoryCapabilities, memoryRateLimiter, memoryAdapter } from '../packages/better-newsletter/src/adapters/memory.js'
 import { createNewsletterHandler } from '../packages/better-newsletter/src/nuxt/handler.js'
 import * as newsletterServer from '../packages/better-newsletter/src/nuxt/server.js'
@@ -42,6 +43,8 @@ async function fixture(config: BetterNewsletterServerConfig) {
   if (address == null || typeof address === 'string') throw new Error('Missing test address.')
   const base = `http://127.0.0.1:${address.port}/newsletter`
   return {
+    client: createNewsletterClient({ basePath: '/newsletter', routes },
+      (url, init) => fetch(new URL(url, base), init)),
     request: async (action: string, body: object, method = 'POST', headers: Record<string, string> = {}) => {
       const response = await fetch(`${base}/${action}`, {
         method,
@@ -220,10 +223,10 @@ describe('Nuxt server integration', () => {
       ...config,
       ...(mode === 'undefined' ? { publicSubscribeMetadata: () => undefined } : {})
     })
-    expect(await http.request('subscribe', {
+    expect(await http.client.subscribe({
       email: 'person@example.com', consent: true, consentVersion: '2026-01',
       metadata: { admin: true, anything: 'forged' }
-    })).toEqual({ status: 200, body: { accepted: true } })
+    })).toEqual({ accepted: true })
     const contact = await storage.transaction(tx => tx.getContactByEmail('person@example.com'))
     expect(contact).not.toBeNull()
     expect(contact).not.toHaveProperty('metadata')
@@ -238,7 +241,12 @@ describe('Nuxt server integration', () => {
     const calls: string[] = []
     const select: NonNullable<BetterNewsletterServerConfig['publicSubscribeMetadata']> = (_event, body) => {
       calls.push('metadata')
-      return { trusted: true, signupSource: body.source === 'pricing' ? 'pricing' : 'other' }
+      const metadata = body.metadata
+      if (metadata == null || typeof metadata !== 'object' || Array.isArray(metadata)
+        || !('signupSource' in metadata) || typeof metadata.signupSource !== 'string') {
+        return undefined
+      }
+      return { trusted: true, signupSource: metadata.signupSource === 'PRICING' ? 'pricing' : 'other' }
     }
     const mapper = vi.fn(asynchronous
       ? async (...args: Parameters<typeof select>) => select(...args)
@@ -248,11 +256,16 @@ describe('Nuxt server integration', () => {
       publicSubscribeMetadata: mapper,
       securityContext: () => { calls.push('security'); return { captcha: 'transient' } }
     })
-    expect(await http.request('subscribe', {
+    const input = {
       email: 'person@example.com', consent: true, consentVersion: '2026-01',
-      source: 'pricing', metadata: { admin: true, anything: 'forged' }
-    })).toEqual({ status: 200, body: { accepted: true } })
+      metadata: {
+        signupSource: 'PRICING', admin: true, anything: 'forged',
+        audienceKey: 'private', consentVersion: 'old', source: 'forged'
+      }
+    } as const
+    expect(await http.client.subscribe(input)).toEqual({ accepted: true })
     expect(mapper).toHaveBeenCalledTimes(1)
+    expect(mapper.mock.calls[0]?.[1]).toEqual(input)
     expect(calls).toEqual(['metadata', 'security'])
     const contact = await storage.transaction(tx => tx.getContactByEmail('person@example.com'))
     expect(contact?.metadata).toBeUndefined()
@@ -264,8 +277,16 @@ describe('Nuxt server integration', () => {
       trusted: true, signupSource: 'pricing', audienceKey: 'default',
       consentVersion: '2026-01', source: 'test-form'
     }])
+    expect(await http.client.subscribe({
+      ...input, metadata: { signupSource: 'OTHER' }
+    })).toEqual({ accepted: true })
+    expect(mapper).toHaveBeenCalledTimes(2)
+    const lifecycleEvents = (await storage.transaction(tx => tx.listEvents(contact!.id)))
+      .filter(event => event.type === NEWSLETTER_EVENT_TYPES.SIGNED_UP
+        || event.type === NEWSLETTER_EVENT_TYPES.RESUBSCRIBED)
+    expect(lifecycleEvents).toEqual(signupEvents)
     await http.request('resendConfirmation', { email: 'person@example.com' })
-    expect(mapper).toHaveBeenCalledTimes(1)
+    expect(mapper).toHaveBeenCalledTimes(2)
   })
 
   it('skips host hooks and all storage writes for honeypot requests', async () => {

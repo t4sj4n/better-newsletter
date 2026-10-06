@@ -192,10 +192,22 @@ export async function resolve(specifier, context, nextResolve) {
   checkConsumer('core', runtimeDependency, {}, `
 import { betterNewsletter, type BetterNewsletterOptions, type BetterNewsletter } from 'better-newsletter'
 import { memoryAdapter } from 'better-newsletter/adapters/memory'
-import { createNewsletterClient, type NewsletterClient } from 'better-newsletter/client'
-import { createNewsletterClient as createLegacyNewsletterClient } from 'better-newsletter/nuxt/client'
+import { createNewsletterClient, type NewsletterClient, type NewsletterClientSubscribeInput } from 'better-newsletter/client'
+import { createNewsletterClient as createLegacyNewsletterClient, type NewsletterClientSubscribeInput as LegacyNewsletterClientSubscribeInput } from 'better-newsletter/nuxt/client'
 const browserClient: NewsletterClient = createNewsletterClient()
 const legacyClient = createLegacyNewsletterClient()
+const subscribeInput: NewsletterClientSubscribeInput = {
+  email: 'packed@example.com', consent: true, consentVersion: 'v1',
+  metadata: { signupSource: 'LANDING_PAGE', context: { nested: ['value', null] }, experiment: 2, returning: false }
+}
+const legacySubscribeInput: LegacyNewsletterClientSubscribeInput = subscribeInput
+void browserClient.subscribe(subscribeInput)
+void legacyClient.subscribe(legacySubscribeInput)
+void browserClient.subscribe({ email: 'packed@example.com', consent: true, consentVersion: 'v1' })
+// @ts-expect-error public metadata must contain JSON values
+void browserClient.subscribe({ ...subscribeInput, metadata: { invalid: new Date() } })
+// @ts-expect-error nested metadata must also contain JSON values
+void legacyClient.subscribe({ ...legacySubscribeInput, metadata: { context: { invalid: undefined } } })
 void browserClient.confirm
 void legacyClient.confirm
 import { MAIL_DELIVERY_REASONS, type NewsletterMailer, type ConfirmationMailInput } from 'better-newsletter/mailers'

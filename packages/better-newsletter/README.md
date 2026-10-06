@@ -822,7 +822,7 @@ The built-in lifecycle actions and authorized preferences read are **POST only**
 
 | Route | Request body |
 | --- | --- |
-| `/api/newsletter/subscribe` | `{ email, audience?, audiences?, consent: true, consentVersion: string, website?: string }` (`website` is a honeypot) |
+| `/api/newsletter/subscribe` | `{ email, audience?, audiences?, consent: true, consentVersion: string, metadata?: Record<string, JsonValue>, website?: string }` (`website` is a honeypot; `metadata` is untrusted input) |
 | `/api/newsletter/resend-confirmation` | `{ email, audience? }` |
 | `/api/newsletter/confirm` | `{ token }` |
 | `/api/newsletter/unsubscribe` | `{ capability }` |
@@ -833,26 +833,55 @@ For example, `publicApi: { routes: { resendConfirmation: '/resend', preferences:
 
 #### Public subscribe metadata
 
-Hosts may send additional fields in the public subscribe body and select their values through `publicSubscribeMetadata` in the server-only config, never in serialized module options:
+The typed browser client accepts optional `metadata: Readonly<Record<string, JsonValue>>` for host-defined signup context. It serializes these values through the existing request path:
 
 ```ts
+import { createNewsletterClient } from 'better-newsletter/client'
+
+const client = createNewsletterClient()
+await client.subscribe({
+  email: 'person@example.com',
+  consent: true,
+  consentVersion: 'v1',
+  metadata: { signupSource: 'LANDING_PAGE', campaign: 'launch' }
+})
+```
+
+Browser metadata is untrusted. Select, validate and transform the values to persist through `publicSubscribeMetadata` in the server-only config, never in serialized module options:
+
+```ts
+import { defineBetterNewsletterConfig } from 'better-newsletter/nuxt/server'
+
 export default defineBetterNewsletterConfig(async () => ({
   // origin, storage, capabilities, mailer, ...
   publicSubscribeMetadata(_event, body) {
-    return {
-      placement: body.placement === 'pricing' ? 'pricing' : 'other'
+    const metadata = body.metadata
+    if (
+      metadata == null
+      || typeof metadata !== 'object'
+      || Array.isArray(metadata)
+      || !('signupSource' in metadata)
+      || typeof metadata.signupSource !== 'string'
+    ) {
+      return undefined
     }
+
+    return metadata.signupSource === 'LANDING_PAGE'
+      ? { signupSource: metadata.signupSource }
+      : undefined
   }
 }))
 ```
 
-Public request data is never persisted as newsletter metadata automatically. The server-side metadata hook must explicitly select and validate every value that should be stored.
+Public request data is never persisted as newsletter metadata automatically. Without a hook, browser metadata is ignored; only the hook's result is forwarded as `SubscribeInput.metadata`. The server-side metadata hook must explicitly select and validate every value that should be stored. In this example, `campaign` is deliberately not selected.
 
-The hook returns the existing general JSON `metadata` object, or `undefined` to omit it. Keys such as `placement` belong entirely to the host; Better Newsletter does not interpret them or merge client `metadata`. Synchronous and asynchronous hooks are supported. The hook runs after validation and the honeypot check, once per subscribe request, before `securityContext`; all requested audiences receive the same result. It does not run for resend requests.
+Allowlisting makes a browser value acceptable input, not proof of its origin. `signupSource` remains client-manipulable: use it for attribution or presentation context, not authorization, security decisions or authoritative consent evidence. `publicApi.consent.source` remains server-controlled policy and is not taken from browser metadata.
+
+The hook returns the existing general JSON `metadata` object, or `undefined` to omit it. Keys such as `signupSource` belong entirely to the host; Better Newsletter does not interpret them or merge client `metadata`. Hosts may still select other fields from the parsed request body. Synchronous and asynchronous hooks are supported. The hook runs after validation and the honeypot check, once per subscribe request, before `securityContext`; all requested audiences receive the same result. It does not run for resend requests. JSON parsing and the existing 8 KiB limit for the entire request body are unchanged; there is no new metadata-specific runtime validation in the handler.
 
 `SubscribeInput.metadata` describes host-defined context for the concrete subscribe operation and is preserved in the corresponding `SIGNED_UP` or `RESUBSCRIBED` lifecycle event. For example, `metadata: { signupSource: 'pricing', campaign: 'launch' }`. Each audience gets its own event metadata object; earlier events remain unchanged. Host metadata is merged into lifecycle event metadata, but Better Newsletter system metadata takes precedence on key collisions.
 
-Subscribe metadata does not implicitly set or modify `Contact.metadata`. `securityContext` remains separate, transient security/abuse context for guards and is not persisted.
+Subscribe metadata does not implicitly set or modify `Contact.metadata`. Repeated subscribe calls are not a generic metadata update API: when no new `SIGNED_UP` or `RESUBSCRIBED` event is created, metadata is not refreshed or overwritten. `securityContext` remains separate, transient security/abuse context for guards and is not persisted.
 
 #### Custom public routes
 
@@ -912,7 +941,7 @@ await client.subscribe({ email, consent: true, consentVersion: 'privacy-2026-09'
 await client.confirm(token)
 ```
 
-The client is framework-neutral, implemented using only standard Web `fetch` and package-owned routing contracts. `better-newsletter/nuxt/client` remains available as a thin compatibility alias during the beta. The default client needs no options. Match its mount and relative paths to your server policy; disabled client actions throw before fetching. The helper owns action and input typing and always uses POST through standard `fetch`. It imports no Nuxt types and does not depend on Nitro's generated `InternalApi`. Hosts that need extra signup fields can send their own validated JSON through standard fetch.
+The client is framework-neutral, implemented using only standard Web `fetch` and package-owned routing contracts. `better-newsletter/nuxt/client` remains available as a thin compatibility alias during the beta. The default client needs no options. Match its mount and relative paths to your server policy; disabled client actions throw before fetching. The helper owns action and input typing and always uses POST through standard `fetch`. It imports no Nuxt types and does not depend on Nitro's generated `InternalApi`. For host-defined signup context, use the optional typed `metadata` field and a server-side `publicSubscribeMetadata` hook as described in [public subscribe metadata](#public-subscribe-metadata). Other custom body fields can still be sent through standard fetch.
 
 Nuxt registers one POST-only catch-all handler instead of six individual POST routes. Nitro may generate a catch-all type, but the package no longer promises individual `$fetch` route/method inference. Use the typed client for newsletter calls. This reduces route-union exposure without claiming to fix Nitro's general `TS2589` limits in large applications. See the [architecture comparison](https://github.com/t4sj4n/better-newsletter/blob/main/docs/nuxt-single-handler.md).
 

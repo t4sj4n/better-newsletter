@@ -181,6 +181,8 @@ The server factory receives the current `H3Event`, so it can use host-owned requ
 
 The Nuxt integration supplies the lifecycle API routes. Your application still owns the signup form, confirmation/unsubscribe pages and mail copy.
 
+The browser client from `better-newsletter/client` accepts optional typed subscribe `metadata` for host-defined signup context. Browser values remain untrusted and are ignored unless the server's `publicSubscribeMetadata` hook explicitly selects and validates them. Selected values are stored only on `SIGNED_UP` / `RESUBSCRIBED` events, not `Contact.metadata`; repeated signup is not a metadata update API. See [public subscribe metadata](packages/better-newsletter/README.md#public-subscribe-metadata) for the client/server example and trust boundary.
+
 If you implement a custom public signup endpoint with `useBetterNewsletter(event)`, set `publicApi.routes.subscribe: false` in the server configuration so callers cannot bypass your endpoint's additional validation or abuse checks through the built-in route. Apply the same rule to other public flows you replace. See [custom public routes](packages/better-newsletter/README.md#custom-public-routes).
 
 See [examples/basic](examples/basic/README.md) for a minimal Nuxt example ([try directly on StackBlitz](https://stackblitz.com/github/t4sj4n/better-newsletter/tree/main/examples/basic)) and the [runtime package documentation](packages/better-newsletter/README.md) for security, migrations, adapters and the full API.

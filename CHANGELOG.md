@@ -1,5 +1,20 @@
 # Changelog
 
+## v0.1.0-beta.2
+
+<!-- release-base: debb1eaf0227fcc212df2870aded01e93cf08e18 -->
+
+[compare changes](https://github.com/t4sj4n/better-newsletter/compare/v0.1.0-beta.1...v0.1.0-beta.2)
+
+### 🚀 Enhancements
+
+- Add typed public subscribe metadata #59 ([#60](https://github.com/t4sj4n/better-newsletter/pull/60), [#59](https://github.com/t4sj4n/better-newsletter/issues/59))
+- Automate local release preparation and publishing #17 ([#61](https://github.com/t4sj4n/better-newsletter/pull/61), [#17](https://github.com/t4sj4n/better-newsletter/issues/17))
+
+### 🩹 Fixes
+
+- Gate local releases on exact-commit CI ([#62](https://github.com/t4sj4n/better-newsletter/pull/62))
+
 ## v0.1.0-beta.1
 
 [compare changes](https://github.com/t4sj4n/better-newsletter/compare/v0.1.0-beta.0...v0.1.0-beta.1)

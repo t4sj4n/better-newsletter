@@ -5,7 +5,7 @@ import process from 'node:process'
 import { fileURLToPath } from 'node:url'
 import { versionBump, versionBumpInfo } from 'bumpp'
 import { generateMarkDown, getGitDiff, getLastGitTag, loadChangelogConfig, parseGitCommit } from 'changelogen'
-import { checked, commandRunner, createReleaseBranch, distTag, nextVersion, npmVersion, requireCleanTree, requireCurrentMain, requireGitHub, requireRemoteMain, tagState } from './release-core.mjs'
+import { checked, commandRunner, createReleaseBranch, distTag, nextVersion, npmVersion, removeUncommittedReleaseBranch, requireCleanTree, requireCurrentMain, requireGitHub, requireRemoteMain, tagState } from './release-core.mjs'
 import { releaseNotes, releasePackages, releasePaths, repository, validateRelease } from './release-policy.mjs'
 
 /** Preserve Gitmoji and plain squash titles alongside Conventional Commits. */
@@ -90,7 +90,16 @@ export async function prepareRelease(cwd, release = 'prompt', { run = commandRun
       if (contents === null) rmSync(join(cwd, path), { force: true })
       else writeFileSync(join(cwd, path), contents)
     }
-    throw new Error(`Preparation failed; release files restored on ${branch}. Inspect the tree, then run git switch main before retrying.`, { cause: error })
+    let removed
+    try {
+      removed = removeUncommittedReleaseBranch(run, branch, base)
+    } catch (cleanupError) {
+      throw new AggregateError([error, cleanupError], `Preparation failed; release files restored, but branch cleanup failed. Inspect git status and git branch --list ${branch}; preserve any work, then run git switch main and git branch -d ${branch} before retrying.`)
+    }
+    if (removed) {
+      throw new Error(`Preparation failed; release files restored, returned to main and removed ${branch}. Fix the validation error, update main if needed, then retry: pnpm release:prepare ${version}`, { cause: error })
+    }
+    throw new Error(`Preparation failed; release files restored and ${branch} preserved because the branch, commit or working tree changed. Inspect git status and git log main..${branch}; preserve any work, then run git switch main and git branch -d ${branch} before retrying.`, { cause: error })
   }
 
   const title = `🔖 Release v${version}`

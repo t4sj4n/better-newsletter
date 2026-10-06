@@ -51,7 +51,7 @@ function fixture() {
   git(['push', '-u', 'origin', 'main'])
   const read = path => readFileSync(join(cwd, path), 'utf8')
   const state = {
-    calls: [], fail: '', published: new Map(), release: null,
+    calls: [], fail: '', published: new Map(), release: null, npmMetadataFormat: 'object',
     missingVersionResponse: { status: 1, stdout: '{"error":{"code":"E404"}}', stderr: 'npm error code E404\n' }
   }
   const real = commandRunner(cwd)
@@ -84,7 +84,9 @@ function fixture() {
       if (args[0] === 'whoami') return ok('release-test')
       if (args[0] === 'view') {
         const existing = state.published.get(args[1])
-        return existing ? ok(JSON.stringify(existing)) : state.missingVersionResponse
+        return existing
+          ? ok(JSON.stringify(state.npmMetadataFormat === 'array' ? [existing] : existing))
+          : state.missingVersionResponse
       }
       if (args[0] === 'publish') {
         const pkg = releasePackages(cwd).find(pkg => args[1].endsWith(tarball(pkg)))
@@ -225,16 +227,85 @@ describe('release preparation', () => {
     expect(mutations(state)).toEqual([])
   })
 
+  it('rejects an existing local release branch with safe recovery instructions', async () => {
+    const { cwd, git, read, run, state } = fixture()
+    const originals = releasePaths.map(read)
+    git(['branch', 'release/v0.1.0-rc.1'])
+    await expect(prepareRelease(cwd, 'prerelease', { run })).rejects.toThrow('git branch -d release/v0.1.0-rc.1')
+    expect(releasePaths.map(read)).toEqual(originals)
+    expect(git(['branch', '--show-current'])).toBe('main')
+    expect(mutations(state)).toEqual([])
+  })
+
   it.each(['migration:snapshot:check', 'test/postgres-schema-revision.test.ts', 'install', 'check', 'scripts/smoke-pack.mjs'])(
-    'keeps original release files when %s fails', async failure => {
-      const { cwd, read, run, state } = fixture()
+    'restores release files and permits the same-version retry when %s fails', async failure => {
+      const { cwd, git, read, run, state } = fixture()
       const originals = releasePaths.map(read)
       state.fail = failure
       await expect(prepareRelease(cwd, '0.1.0-rc.1', { run })).rejects.toThrow()
       expect(releasePaths.map(read)).toEqual(originals)
       expect(mutations(state)).toEqual([])
+      expect(git(['branch', '--show-current'])).toBe('main')
+      expect(git(['branch', '--list', 'release/v0.1.0-rc.1'])).toBe('')
+      state.fail = ''
+      await prepareRelease(cwd, '0.1.0-rc.1', { run })
+      expect(git(['branch', '--show-current'])).toBe('release/v0.1.0-rc.1')
+      expect(releasePackages(cwd)[0].version).toBe('0.1.0-rc.1')
     }
   )
+
+  it.each(['tracked changes', 'untracked files', 'new commits', 'moved main', 'switched branches'])(
+    'preserves the failed preparation branch when validation introduces %s', async condition => {
+      const { cwd, git, read, run, state } = fixture()
+      const base = git(['rev-parse', 'HEAD'])
+      const originals = releasePaths.map(read)
+      state.fail = 'check'
+      const changed = (command, args, options) => {
+        if (command === 'pnpm' && args[0] === 'check') {
+          if (condition === 'tracked changes') writeFileSync(join(cwd, 'schema.sql'), 'Foreign tracked change\n')
+          if (condition === 'untracked files') writeFileSync(join(cwd, 'foreign.txt'), 'Foreign untracked change\n')
+          if (condition === 'new commits') git(['commit', '--allow-empty', '-m', 'Foreign commit during validation'])
+          if (condition === 'moved main') {
+            const commit = git(['commit-tree', `${base}^{tree}`, '-p', base, '-m', 'Foreign main commit'])
+            git(['update-ref', 'refs/heads/main', commit])
+          }
+          if (condition === 'switched branches') git(['switch', '-c', 'foreign/branch'])
+        }
+        return run(command, args, options)
+      }
+      await expect(prepareRelease(cwd, 'prerelease', { run: changed })).rejects.toThrow('preserved because')
+      expect(releasePaths.map(read)).toEqual(originals)
+      expect(git(['branch', '--show-current'])).toBe(condition === 'switched branches' ? 'foreign/branch' : 'release/v0.1.0-rc.1')
+      expect(git(['branch', '--list', 'release/v0.1.0-rc.1'])).toContain('release/v0.1.0-rc.1')
+      expect(state.calls.some(([command, args]) => command === 'git' && args[0] === 'branch' && args[1] === '-d')).toBe(false)
+      if (condition === 'tracked changes') expect(read('schema.sql')).toBe('Foreign tracked change\n')
+      if (condition === 'untracked files') expect(read('foreign.txt')).toBe('Foreign untracked change\n')
+      if (condition === 'new commits') expect(git(['rev-parse', 'HEAD'])).not.toBe(base)
+      if (condition === 'moved main') expect(git(['rev-parse', 'refs/heads/main'])).not.toBe(base)
+      expect(mutations(state)).toEqual([])
+    }
+  )
+
+  it('surfaces preparation and cleanup failures without force-deleting a branch', async () => {
+    const { cwd, git, run, state } = fixture()
+    state.fail = 'check'
+    const failedCleanup = (command, args, options) => {
+      if (command === 'git' && args[0] === 'branch' && args[1] === '-d') {
+        return { status: 1, stdout: '', stderr: 'Simulated cleanup failure' }
+      }
+      return run(command, args, options)
+    }
+    await expect(prepareRelease(cwd, 'prerelease', { run: failedCleanup })).rejects.toMatchObject({
+      message: expect.stringContaining('branch cleanup failed'),
+      errors: [
+        expect.objectContaining({ message: expect.stringContaining('Simulated failure: check') }),
+        expect.objectContaining({ message: expect.stringContaining('Simulated cleanup failure') })
+      ]
+    })
+    expect(git(['branch', '--show-current'])).toBe('main')
+    expect(git(['branch', '--list', 'release/v0.1.0-rc.1'])).toContain('release/v0.1.0-rc.1')
+    expect(git(['status', '--porcelain'])).toBe('')
+  })
 
   it.each(['wrong branch', 'dirty tracked', 'dirty untracked', 'stale main'])(
     'rejects %s before preparation', async condition => {
@@ -288,30 +359,33 @@ describe('release preparation', () => {
 })
 
 describe('release publication', () => {
-  it.each(['0.1.0-rc.1', '0.1.0'])('validates before mutations and publishes %s runtime before CLI', version => {
-    const { cwd, git, run, state, prepareCommit } = fixture()
-    prepareCommit(version)
-    const head = git(['rev-parse', 'HEAD'])
-    publishRelease(cwd, { run })
-    const actions = mutations(state)
-    expect(actions.map(([command, args]) => [command, args[0]])).toEqual([
-      ['git', 'tag'], ['git', 'push'], ['npm', 'publish'], ['npm', 'publish'], ['gh', 'release']
-    ])
-    expect(actions[2][1][1]).toContain(`/better-newsletter-${version}.tgz`)
-    expect(actions[3][1][1]).toContain(`/better-newsletter-cli-${version}.tgz`)
-    expect(actions[2][1]).toContain(version.includes('-') ? 'rc' : 'latest')
-    expect(state.calls.findIndex(([command, args]) => command === 'node' && args[0] === 'scripts/smoke-pack.mjs'))
-      .toBeLessThan(state.calls.indexOf(actions[0]))
-    expect(git(['rev-parse', `v${version}^{}`])).toBe(head)
-    expect(git(['cat-file', '-p', `v${version}`])).toContain('Release-Manifest:')
-    expect(actions[4][2].input).toContain('Release notes.')
-    expect(actions[4][2].input).not.toContain('release-base:')
-    expect(state.release.prerelease).toBe(version.includes('-'))
-    expect(() => publishRelease(cwd, { run })).toThrow('already exists')
-    state.calls = []
-    publishRelease(cwd, { run, resume: true })
-    expect(mutations(state)).toEqual([])
-  })
+  it.each(['0.1.0-rc.1', '0.1.0'].flatMap(version => ['object', 'array'].map(format => [version, format])))(
+    'validates before mutations and publishes %s runtime before CLI with %s npm metadata', (version, format) => {
+      const { cwd, git, run, state, prepareCommit } = fixture()
+      state.npmMetadataFormat = format
+      prepareCommit(version)
+      const head = git(['rev-parse', 'HEAD'])
+      publishRelease(cwd, { run })
+      const actions = mutations(state)
+      expect(actions.map(([command, args]) => [command, args[0]])).toEqual([
+        ['git', 'tag'], ['git', 'push'], ['npm', 'publish'], ['npm', 'publish'], ['gh', 'release']
+      ])
+      expect(actions[2][1][1]).toContain(`/better-newsletter-${version}.tgz`)
+      expect(actions[3][1][1]).toContain(`/better-newsletter-cli-${version}.tgz`)
+      expect(actions[2][1]).toContain(version.includes('-') ? 'rc' : 'latest')
+      expect(state.calls.findIndex(([command, args]) => command === 'node' && args[0] === 'scripts/smoke-pack.mjs'))
+        .toBeLessThan(state.calls.indexOf(actions[0]))
+      expect(git(['rev-parse', `v${version}^{}`])).toBe(head)
+      expect(git(['cat-file', '-p', `v${version}`])).toContain('Release-Manifest:')
+      expect(actions[4][2].input).toContain('Release notes.')
+      expect(actions[4][2].input).not.toContain('release-base:')
+      expect(state.release.prerelease).toBe(version.includes('-'))
+      expect(() => publishRelease(cwd, { run })).toThrow('already exists')
+      state.calls = []
+      publishRelease(cwd, { run, resume: true })
+      expect(mutations(state)).toEqual([])
+    }
+  )
 
   it.each([
     '{"error":{"code":"E404"}}',
@@ -362,6 +436,46 @@ describe('release publication', () => {
     expect(state.release.tag_name).toBe('v0.1.0-rc.2')
   })
 
+  it.each(['added', 'modified', 'deleted'])('rejects %s non-release files in the release squash', async condition => {
+    const { cwd, git, run, state } = fixture()
+    const base = git(['rev-parse', 'HEAD'])
+    await prepareRelease(cwd, 'prerelease', { run })
+    const path = condition === 'added' ? 'packages/better-newsletter/src/unprepared.ts' : 'schema.sql'
+    if (condition === 'added') {
+      mkdirSync(join(cwd, 'packages/better-newsletter/src'), { recursive: true })
+      writeFileSync(join(cwd, path), 'export const unprepared = true\n')
+    } else if (condition === 'modified') {
+      writeFileSync(join(cwd, path), 'Unprepared schema change\n')
+    } else rmSync(join(cwd, path))
+    git(['add', '--', path])
+    git(['commit', '-m', 'Add unprepared release changes'])
+    git(['switch', 'main'])
+    git(['merge', '--squash', 'release/v0.1.0-rc.1'])
+    git(['commit', '-m', '🔖 Release v0.1.0-rc.1'])
+    git(['push', 'origin', 'main'])
+    expect(git(['rev-parse', 'HEAD^'])).toBe(base)
+    state.calls = []
+    expect(() => publishRelease(cwd, { run })).toThrow(`HEAD contains non-release file changes: ${path}`)
+    expect(() => publishRelease(cwd, { run, resume: true })).toThrow(`HEAD contains non-release file changes: ${path}`)
+    expect(mutations(state)).toEqual([])
+    expect(state.calls.some(([command]) => ['npm', 'gh', 'pnpm', 'node'].includes(command))).toBe(false)
+  })
+
+  it('permits editorial changelog updates in the release squash', async () => {
+    const { cwd, git, read, run, state } = fixture()
+    await prepareRelease(cwd, 'prerelease', { run })
+    writeFileSync(join(cwd, 'CHANGELOG.md'), read('CHANGELOG.md').replace('Add a capability', 'Reviewed capability release note'))
+    git(['add', 'CHANGELOG.md'])
+    git(['commit', '-m', 'Review release notes'])
+    git(['switch', 'main'])
+    git(['merge', '--squash', 'release/v0.1.0-rc.1'])
+    git(['commit', '-m', '🔖 Release v0.1.0-rc.1'])
+    git(['push', 'origin', 'main'])
+    publishRelease(cwd, { run })
+    const release = state.calls.find(([command, args]) => command === 'gh' && args[0] === 'release')
+    expect(release[2].input).toContain('Reviewed capability release note')
+  })
+
   it.each(['wrong branch', 'dirty tracked', 'dirty untracked', 'stale main', 'later commit'])(
     'rejects %s before irreversible publication', condition => {
       const { cwd, git, run, state, prepareCommit } = fixture()
@@ -396,9 +510,11 @@ describe('release publication', () => {
     }
   )
 
-  it.each(['tag push', 'runtime publish', 'CLI publish', 'GitHub Release'])(
-    'safely resumes after failed %s without repeating completed mutations', failure => {
+  it.each(['object', 'array'].flatMap(format =>
+    ['tag push', 'runtime publish', 'CLI publish', 'GitHub Release'].map(failure => [format, failure])))(
+    'safely resumes with %s npm metadata after failed %s without repeating completed mutations', (format, failure) => {
       const { cwd, git, run, state, prepareCommit } = fixture()
+      state.npmMetadataFormat = format
       prepareCommit()
       let failed = false
       const flaky = (command, args, options) => {
@@ -478,6 +594,24 @@ describe('release publication', () => {
 })
 
 describe('external-state safety', () => {
+  const manifest = { name: 'pkg', version: '1.0.0', dist: { integrity: 'sha512-example' } }
+  it.each(['object', 'array'])('normalizes successful npm %s metadata', format => {
+    const stdout = JSON.stringify(format === 'array' ? [manifest] : manifest)
+    expect(npmVersion(() => ({ status: 0, stdout, stderr: '' }), 'pkg', '1.0.0')).toEqual(manifest)
+  })
+
+  it.each([
+    ['empty array', []], ['multiple results', [manifest, manifest]], ['null', null],
+    ['null element', [null]], ['nested array', [[manifest]]], ['scalar', 'pkg'],
+    ['missing metadata', {}], ['wrong package', { ...manifest, name: 'other' }],
+    ['wrong version', [{ ...manifest, version: '2.0.0' }]],
+    ['missing integrity', { ...manifest, dist: {} }],
+    ['non-string integrity', { ...manifest, dist: { integrity: 123 } }]
+  ])('rejects invalid successful npm metadata: %s', (_, response) => {
+    const run = () => ({ status: 0, stdout: JSON.stringify(response), stderr: '' })
+    expect(() => npmVersion(run, 'pkg', '1.0.0')).toThrow('Unexpected npm metadata')
+  })
+
   it.each(['missing', 'invalid', 'duplicate'])('rejects %s release-base metadata', condition => {
     const { cwd, read, prepareCommit } = fixture()
     prepareCommit()

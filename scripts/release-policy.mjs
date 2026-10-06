@@ -51,6 +51,10 @@ export function requirePreparedCommit(run, packages) {
   for (const path of releasePaths) {
     if (!changed.includes(path)) throw new Error(`HEAD is not a prepared release commit: missing change to ${path}.`)
   }
+  const unexpected = changed.filter(path => !releasePaths.includes(path))
+  if (unexpected.length) {
+    throw new Error(`HEAD contains non-release file changes: ${unexpected.join(', ')}. Merge code changes separately and regenerate the release.`)
+  }
   for (const pkg of packages) {
     const committed = JSON.parse(checked(run, 'git', ['show', `HEAD:${pkg.path}`]))
     const previous = JSON.parse(checked(run, 'git', ['show', `HEAD^:${pkg.path}`]))

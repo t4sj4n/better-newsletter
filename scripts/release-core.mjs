@@ -91,10 +91,27 @@ export function requireGitHub(run, repository) {
 }
 
 export function createReleaseBranch(run, branch) {
+  const local = run('git', ['show-ref', '--verify', '--quiet', `refs/heads/${branch}`])
+  if (local.status === 0) {
+    throw new Error(`Local release branch ${branch} already exists. Inspect git log main..${branch}; preserve any work, then run git switch main and git branch -d ${branch} before retrying.`)
+  }
+  if (local.status !== 1) throw new Error(`Cannot inspect local branch ${branch}: ${local.stderr}`)
   if (checked(run, 'git', ['ls-remote', '--heads', 'origin', `refs/heads/${branch}`])) {
     throw new Error(`Release branch ${branch} already exists on origin. Inspect: gh pr list --head ${branch}`)
   }
   checked(run, 'git', ['switch', '-c', branch])
+}
+
+export function removeUncommittedReleaseBranch(run, branch, base) {
+  if (checked(run, 'git', ['branch', '--show-current']) !== branch
+      || checked(run, 'git', ['rev-parse', 'HEAD']) !== base
+      || checked(run, 'git', ['rev-parse', 'refs/heads/main']) !== base
+      || checked(run, 'git', ['status', '--porcelain'])) {
+    return false
+  }
+  checked(run, 'git', ['switch', 'main'])
+  checked(run, 'git', ['branch', '-d', branch])
+  return true
 }
 
 export function tagState(run, tag) {
@@ -134,8 +151,11 @@ export function npmVersion(run, name, version) {
     if (codes.length && codes.every(code => code === 'E404')) return null
     throw new Error(`Cannot query npm for ${name}@${version}: ${[result.stdout, result.stderr].filter(Boolean).join('\n')}`)
   }
-  const manifest = JSON.parse(result.stdout)
-  if (manifest.name !== name || manifest.version !== version || !manifest.dist?.integrity) {
+  const parsed = JSON.parse(result.stdout)
+  const manifest = Array.isArray(parsed) ? (parsed.length === 1 ? parsed[0] : null) : parsed
+  if (!manifest || typeof manifest !== 'object' || Array.isArray(manifest)
+      || manifest.name !== name || manifest.version !== version
+      || typeof manifest.dist?.integrity !== 'string' || !manifest.dist.integrity) {
     throw new Error(`Unexpected npm metadata for ${name}@${version}.`)
   }
   return manifest

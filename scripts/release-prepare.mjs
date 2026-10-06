@@ -6,7 +6,7 @@ import { fileURLToPath } from 'node:url'
 import { versionBump, versionBumpInfo } from 'bumpp'
 import { generateMarkDown, getGitDiff, getLastGitTag, loadChangelogConfig, parseGitCommit } from 'changelogen'
 import { checked, commandRunner, createReleaseBranch, distTag, nextVersion, npmVersion, requireCleanTree, requireCurrentMain, requireGitHub, requireRemoteMain, tagState } from './release-core.mjs'
-import { releasePackages, releasePaths, repository, validateRelease } from './release-policy.mjs'
+import { releaseNotes, releasePackages, releasePaths, repository, validateRelease } from './release-policy.mjs'
 
 /** Preserve Gitmoji and plain squash titles alongside Conventional Commits. */
 export function releaseCommits(commits, config) {
@@ -74,8 +74,10 @@ export async function prepareRelease(cwd, release = 'prompt', { run = commandRun
     checked(run, 'pnpm', ['install', '--lockfile-only', '--ignore-scripts'])
     config.newVersion = result.newVersion
     const entry = await generateMarkDown(commits, config)
+    const preparedEntry = entry.replace('\n', `\n\n<!-- release-base: ${base} -->\n`)
     const previous = originals.get('CHANGELOG.md')?.toString().replace(/^# Changelog\s*/u, '') ?? ''
-    writeFileSync(join(cwd, 'CHANGELOG.md'), `# Changelog\n\n${entry}\n${previous ? `\n${previous}` : ''}`)
+    writeFileSync(join(cwd, 'CHANGELOG.md'), `# Changelog\n\n${preparedEntry}\n${previous ? `\n${previous}` : ''}`)
+    releaseNotes(cwd, version)
     releasePackages(cwd)
     validateRelease(run)
     requireRemoteMain(run, base)

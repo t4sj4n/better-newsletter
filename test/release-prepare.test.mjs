@@ -8,7 +8,7 @@ import { loadChangelogConfig } from 'changelogen'
 import { commandRunner, distTag, githubRelease, nextVersion, npmVersion, publishPlan } from '../scripts/release-core.mjs'
 import { prepareRelease, releaseCommits } from '../scripts/release-prepare.mjs'
 import { publishRelease } from '../scripts/release-publish.mjs'
-import { releasePackages, releasePaths, validateRelease } from '../scripts/release-policy.mjs'
+import { releaseNotes, releasePackages, releasePaths, validateRelease } from '../scripts/release-policy.mjs'
 
 const directories = []
 beforeEach(() => {
@@ -50,7 +50,10 @@ function fixture() {
   git(['commit', '--allow-empty', '-m', 'Preserve request isolation (#2)'])
   git(['push', '-u', 'origin', 'main'])
   const read = path => readFileSync(join(cwd, path), 'utf8')
-  const state = { calls: [], fail: '', published: new Map(), release: null }
+  const state = {
+    calls: [], fail: '', published: new Map(), release: null,
+    missingVersionResponse: { status: 1, stdout: '{"error":{"code":"E404"}}', stderr: 'npm error code E404\n' }
+  }
   const real = commandRunner(cwd)
   const ok = stdout => ({ status: 0, stdout: stdout ?? '', stderr: '' })
   const run = (command, args, options) => {
@@ -81,8 +84,7 @@ function fixture() {
       if (args[0] === 'whoami') return ok('release-test')
       if (args[0] === 'view') {
         const existing = state.published.get(args[1])
-        return existing ? ok(JSON.stringify(existing))
-          : { status: 1, stdout: '{"error":{"code":"E404"}}', stderr: 'not found' }
+        return existing ? ok(JSON.stringify(existing)) : state.missingVersionResponse
       }
       if (args[0] === 'publish') {
         const pkg = releasePackages(cwd).find(pkg => args[1].endsWith(tarball(pkg)))
@@ -107,7 +109,7 @@ function fixture() {
     }
     throw new Error(`Unexpected test command: ${command} ${args.join(' ')}`)
   }
-  function prepareCommit(version = '0.1.0-rc.1') {
+  function prepareCommit(version = '0.1.0-rc.1', base = git(['rev-parse', 'HEAD'])) {
     const packages = releasePackages(cwd)
     for (const pkg of packages) {
       pkg.version = version
@@ -116,7 +118,7 @@ function fixture() {
       writeFileSync(join(cwd, path), JSON.stringify(manifest, null, 2) + '\n')
     }
     writeFileSync(join(cwd, 'pnpm-lock.yaml'), `workspace:${version}`)
-    writeFileSync(join(cwd, 'CHANGELOG.md'), `# Changelog\n\n## v${version}\n\nRelease notes.\n\n## v0.1.0-rc.0\n\nOld notes.\n`)
+    writeFileSync(join(cwd, 'CHANGELOG.md'), `# Changelog\n\n## v${version}\n\n<!-- release-base: ${base} -->\n\nRelease notes.\n\n## v0.1.0-rc.0\n\nOld notes.\n`)
     git(['add', '.'])
     git(['commit', '-m', `🔖 Release v${version}`])
     git(['push', 'origin', 'main'])
@@ -162,6 +164,7 @@ describe('release version selection', () => {
 describe('release preparation', () => {
   it('prepares, validates, commits, pushes and opens a draft PR without tagging or publishing', async () => {
     const { cwd, git, read, run, state } = fixture()
+    const base = git(['rev-parse', 'HEAD'])
     const sql = read('schema.sql')
     const tags = git(['tag'])
     await prepareRelease(cwd, 'prerelease', { run })
@@ -169,6 +172,8 @@ describe('release preparation', () => {
     expect(JSON.parse(read('package.json')).version).toBe('0.0.0')
     expect(read('pnpm-lock.yaml')).toBe('workspace:0.1.0-rc.1')
     expect(read('CHANGELOG.md')).toContain('## v0.1.0-rc.1')
+    expect(read('CHANGELOG.md')).toContain(`<!-- release-base: ${base} -->`)
+    expect(releaseNotes(cwd, '0.1.0-rc.1')).not.toContain('release-base:')
     expect(read('CHANGELOG.md')).toContain('Add a capability')
     expect(read('CHANGELOG.md')).toContain('Preserve request isolation')
     expect(read('CHANGELOG.md')).toContain('Previous notes.')
@@ -300,11 +305,61 @@ describe('release publication', () => {
     expect(git(['rev-parse', `v${version}^{}`])).toBe(head)
     expect(git(['cat-file', '-p', `v${version}`])).toContain('Release-Manifest:')
     expect(actions[4][2].input).toContain('Release notes.')
+    expect(actions[4][2].input).not.toContain('release-base:')
     expect(state.release.prerelease).toBe(version.includes('-'))
     expect(() => publishRelease(cwd, { run })).toThrow('already exists')
     state.calls = []
     publishRelease(cwd, { run, resume: true })
     expect(mutations(state)).toEqual([])
+  })
+
+  it.each([
+    '{"error":{"code":"E404"}}',
+    'npm error code E404\nnpm error 404 No match found for version 0.1.0-rc.1\n'
+  ])('prepares and publishes when npm reports missing versions only on stderr: %s', async stderr => {
+    const { cwd, git, run, state } = fixture()
+    state.missingVersionResponse = { status: 1, stdout: '', stderr }
+    await prepareRelease(cwd, 'prerelease', { run })
+    git(['switch', 'main'])
+    git(['merge', '--squash', 'release/v0.1.0-rc.1'])
+    git(['commit', '-m', '🔖 Release v0.1.0-rc.1'])
+    git(['push', 'origin', 'main'])
+    state.calls = []
+    publishRelease(cwd, { run })
+    expect(state.published.size).toBe(2)
+    expect(state.release.tag_name).toBe('v0.1.0-rc.1')
+  })
+
+  it('rejects an intervening feature and permits a regenerated corrective release', async () => {
+    const { cwd, git, read, run, state } = fixture()
+    const base = git(['rev-parse', 'HEAD'])
+    await prepareRelease(cwd, 'prerelease', { run })
+    git(['switch', 'main'])
+    writeFileSync(join(cwd, 'feature-b.txt'), 'Feature B landed after release preparation.\n')
+    git(['add', 'feature-b.txt'])
+    git(['commit', '-m', '✨ Add feature B'])
+    git(['push', 'origin', 'main'])
+    git(['merge', '--squash', 'release/v0.1.0-rc.1'])
+    git(['commit', '-m', '🔖 Release v0.1.0-rc.1'])
+    git(['push', 'origin', 'main'])
+    expect(git(['rev-parse', 'HEAD^'])).not.toBe(base)
+    expect(read('CHANGELOG.md')).toContain(`<!-- release-base: ${base} -->`)
+    expect(read('CHANGELOG.md')).not.toContain('Add feature B')
+    state.calls = []
+    expect(() => publishRelease(cwd, { run })).toThrow('main advanced before the release merge')
+    expect(() => publishRelease(cwd, { run, resume: true })).toThrow('main advanced before the release merge')
+    expect(mutations(state)).toEqual([])
+    expect(state.calls.some(([command]) => ['npm', 'gh', 'pnpm', 'node'].includes(command))).toBe(false)
+    const correctedBase = git(['rev-parse', 'HEAD'])
+    await prepareRelease(cwd, 'prerelease', { run })
+    expect(releaseNotes(cwd, '0.1.0-rc.2')).toContain('Add feature B')
+    expect(read('CHANGELOG.md')).toContain(`<!-- release-base: ${correctedBase} -->`)
+    git(['switch', 'main'])
+    git(['merge', '--squash', 'release/v0.1.0-rc.2'])
+    git(['commit', '-m', '🔖 Release v0.1.0-rc.2'])
+    git(['push', 'origin', 'main'])
+    publishRelease(cwd, { run })
+    expect(state.release.tag_name).toBe('v0.1.0-rc.2')
   })
 
   it.each(['wrong branch', 'dirty tracked', 'dirty untracked', 'stale main', 'later commit'])(
@@ -423,17 +478,56 @@ describe('release publication', () => {
 })
 
 describe('external-state safety', () => {
+  it.each(['missing', 'invalid', 'duplicate'])('rejects %s release-base metadata', condition => {
+    const { cwd, read, prepareCommit } = fixture()
+    prepareCommit()
+    const marker = /^<!-- release-base: .* -->$/mu
+    const changelog = read('CHANGELOG.md').replace(marker, comment =>
+      condition === 'missing' ? ''
+        : condition === 'invalid' ? '<!-- release-base: invalid-sha -->'
+          : `${comment}\n${comment}`)
+    writeFileSync(join(cwd, 'CHANGELOG.md'), changelog)
+    expect(() => releaseNotes(cwd, '0.1.0-rc.1')).toThrow('exactly one valid release-base SHA')
+  })
+
+  it('preserves reviewed notes and ignores previous releases when reading the current base marker', () => {
+    const { cwd, read, prepareCommit } = fixture()
+    prepareCommit()
+    const changelog = read('CHANGELOG.md')
+      .replace('Release notes.', 'Manually reviewed release notes.')
+      .replace('Old notes.', `<!-- release-base: ${'a'.repeat(40)} -->\n\nOld notes.`)
+    writeFileSync(join(cwd, 'CHANGELOG.md'), changelog)
+    expect(releaseNotes(cwd, '0.1.0-rc.1')).toBe('## v0.1.0-rc.1\n\nManually reviewed release notes.\n')
+  })
+
   it('requires a database for complete release validation instead of skipping database checks', () => {
     vi.stubEnv('DATABASE_URL', '')
     const run = vi.fn()
     expect(() => validateRelease(run)).toThrow('Set DATABASE_URL')
     expect(run).not.toHaveBeenCalled()
   })
-  it('only treats an explicit npm E404 as an unpublished version', () => {
-    const result = (stdout, stderr = '') => () => ({ status: 1, stdout, stderr })
-    expect(npmVersion(result('{"error":{"code":"E404"}}'), 'pkg', '1.0.0')).toBeNull()
-    expect(() => npmVersion(result('{"error":{"code":"E401"}}'), 'pkg', '1.0.0')).toThrow('Cannot query npm')
-    expect(() => npmVersion(result('', 'network timeout'), 'pkg', '1.0.0')).toThrow('network timeout')
+  it.each([
+    ['{"error":{"code":"E404"}}', ''],
+    ['', '{"error":{"code":"E404"}}'],
+    ['', 'npm error code E404\nnpm error 404 No match found for version 1.0.0\n'],
+    ['', 'npm ERR! code E404\nnpm ERR! 404 No match found for version 1.0.0\n'],
+    ['{"error":{"code":"E404"}}', 'npm error code E404\n']
+  ])('recognizes an explicit npm E404 across stdout/stderr', (stdout, stderr) => {
+    expect(npmVersion(() => ({ status: 1, stdout, stderr }), 'pkg', '1.0.0')).toBeNull()
+  })
+
+  it.each([
+    ['{"error":{"code":"E401"}}', ''],
+    ['', '{"error":{"code":"E403"}}'],
+    ['', 'npm error code ECONNRESET\n'],
+    ['', 'network timeout'],
+    ['', 'network failure while requesting /E404'],
+    ['{"error":{"code":"E401"}}', 'npm error code E404\n'],
+    ['{"error":{"code":"E404"}}', 'npm ERR! code E401\n'],
+    ['{}', 'npm error code E404\n'],
+    ['{"error":', 'npm error code E404\n']
+  ])('does not turn authentication/network/conflicting errors into an unpublished version', (stdout, stderr) => {
+    expect(() => npmVersion(() => ({ status: 1, stdout, stderr }), 'pkg', '1.0.0')).toThrow('Cannot query npm')
   })
 
   it('does not treat GitHub authentication failures as an absent release', () => {

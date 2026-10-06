@@ -114,17 +114,25 @@ export function tagState(run, tag) {
   return { localCommit, remoteCommit }
 }
 
+function npmErrorCodes(output) {
+  if (output.trimStart().startsWith('{')) {
+    try {
+      const response = JSON.parse(output)
+      return [typeof response.error?.code === 'string' ? response.error.code : null]
+    } catch (error) {
+      if (!(error instanceof SyntaxError)) throw error
+      return [null]
+    }
+  }
+  return [...output.matchAll(/^npm (?:error|ERR!) code (\S+)\s*$/gmu)].map(([, code]) => code)
+}
+
 export function npmVersion(run, name, version) {
   const result = run('npm', ['view', `${name}@${version}`, '--json', '--registry', registry])
   if (result.status !== 0) {
-    let response
-    try {
-      response = JSON.parse(result.stdout)
-    } catch (error) {
-      throw new Error(`Cannot query npm for ${name}@${version}: ${result.stderr}`, { cause: error })
-    }
-    if (response.error?.code === 'E404') return null
-    throw new Error(`Cannot query npm for ${name}@${version}: ${result.stderr || result.stdout}`)
+    const codes = [result.stdout, result.stderr].flatMap(npmErrorCodes)
+    if (codes.length && codes.every(code => code === 'E404')) return null
+    throw new Error(`Cannot query npm for ${name}@${version}: ${[result.stdout, result.stderr].filter(Boolean).join('\n')}`)
   }
   const manifest = JSON.parse(result.stdout)
   if (manifest.name !== name || manifest.version !== version || !manifest.dist?.integrity) {

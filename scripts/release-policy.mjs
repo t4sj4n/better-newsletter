@@ -28,13 +28,22 @@ export function releasePackages(cwd) {
   return packages
 }
 
-export function releaseNotes(cwd, version) {
-  const changelog = readFileSync(join(cwd, 'CHANGELOG.md'), 'utf8')
+function preparedChangelogEntry(changelog, version) {
   const entries = changelog.split(/^## /mu)
   if (!entries[1]?.startsWith(`v${version}\n`)) {
     throw new Error(`CHANGELOG.md must start with the prepared v${version} release.`)
   }
-  return `## ${entries[1].trim()}\n`
+  const entry = entries[1]
+  const markers = entry.match(/^<!-- release-base:.*$/gmu) ?? []
+  const base = markers.length === 1
+    ? /^<!-- release-base: ([a-f0-9]{40}|[a-f0-9]{64}) -->$/u.exec(markers[0])?.[1]
+    : undefined
+  if (!base) throw new Error(`Prepared v${version} changelog must contain exactly one valid release-base SHA.`)
+  return { base, notes: `## ${entry.replace(/^<!-- release-base: .* -->(?:\n\n|\n|$)/mu, '').trim()}\n` }
+}
+
+export function releaseNotes(cwd, version) {
+  return preparedChangelogEntry(readFileSync(join(cwd, 'CHANGELOG.md'), 'utf8'), version).notes
 }
 
 export function requirePreparedCommit(run, packages) {
@@ -49,6 +58,10 @@ export function requirePreparedCommit(run, packages) {
     if (committed.version !== pkg.version || semver.compare(pkg.version, previous.version) <= 0) {
       throw new Error('HEAD must contain the prepared version bump, not a later main commit.')
     }
+  }
+  const { base } = preparedChangelogEntry(checked(run, 'git', ['show', 'HEAD:CHANGELOG.md']), packages[0].version)
+  if (checked(run, 'git', ['rev-parse', 'HEAD^']) !== base) {
+    throw new Error('Prepared release base differs from HEAD^: main advanced before the release merge. Regenerate the release from current main with a newer unused version; do not retarget the release-base marker.')
   }
 }
 

@@ -34,6 +34,9 @@ describe('Nuxt module installation', () => {
       })
       expect(nuxt.options.runtimeConfig.public).not.toHaveProperty('storage')
       expect(nuxt.options.runtimeConfig.public).not.toHaveProperty('capabilities')
+      expect(nuxt.options.runtimeConfig.public.betterNewsletter).toMatchObject({
+        basePath: '/api/newsletter'
+      })
     } finally {
       await nuxt.close()
     }

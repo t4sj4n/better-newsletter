@@ -88,6 +88,10 @@
     "./nuxt/handler": {
       "types": "./dist/nuxt/handler.d.ts",
       "import": "./dist/nuxt/handler.js"
+    },
+    "./nuxt/runtime": {
+      "types": "./dist/nuxt/runtime/index.d.ts",
+      "import": "./dist/nuxt/runtime/index.js"
     }
   },
   "scripts": {
@@ -100,7 +104,8 @@
     "h3": "^1.15.11",
     "kysely": ">=0.28.17 <0.30.0",
     "nuxt": "^4.5.2",
-    "resend": "^6.30.0"
+    "resend": "^6.30.0",
+    "vue": "^3.5.0"
   },
   "peerDependenciesMeta": {
     "@nuxt/kit": {
@@ -116,6 +121,9 @@
       "optional": true
     },
     "resend": {
+      "optional": true
+    },
+    "vue": {
       "optional": true
     }
   }

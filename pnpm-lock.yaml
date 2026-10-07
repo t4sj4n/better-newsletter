@@ -71,6 +71,9 @@ importers:
       vitest:
         specifier: ^3.2.4
         version: 3.2.7(@types/node@26.6.3)(jiti@2.7.0)(lightningcss@1.33.0)(terser@5.51.2)(yaml@2.9.1)
+      vue:
+        specifier: ^3.5.0
+        version: 3.5.43(typescript@5.9.3)
 
   examples/basic:
     dependencies:
@@ -108,6 +111,9 @@ importers:
       resend:
         specifier: ^6.30.0
         version: 6.30.0
+      vue:
+        specifier: ^3.5.0
+        version: 3.5.43(typescript@5.9.3)
 
   packages/cli:
     dependencies:

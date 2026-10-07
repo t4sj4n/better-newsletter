@@ -1,9 +1,8 @@
 import { createHash } from 'node:crypto'
 import { readFileSync } from 'node:fs'
 import { join } from 'node:path'
-import process from 'node:process'
 import semver from 'semver'
-import { checked, distTag, validVersion } from './release-core.mjs'
+import { checked, prereleaseChannel, validVersion } from './release-core.mjs'
 
 export const repository = 't4sj4n/better-newsletter'
 export const requiredCi = { workflow: 'ci.yml', event: 'push', branch: 'main' }
@@ -18,7 +17,7 @@ export function releasePackages(cwd) {
   }))
   const [runtime, cli] = packages
   validVersion(runtime.version)
-  distTag(runtime.version)
+  prereleaseChannel(runtime.version)
   if (runtime.name !== 'better-newsletter' || cli.name !== '@better-newsletter/cli') {
     throw new Error('Unexpected runtime/CLI package names.')
   }
@@ -29,60 +28,23 @@ export function releasePackages(cwd) {
   return packages
 }
 
-function preparedChangelogEntry(changelog, version) {
-  const entries = changelog.split(/^## /mu)
+export function releaseNotes(cwd, version) {
+  const entries = readFileSync(join(cwd, 'CHANGELOG.md'), 'utf8').split(/^## /mu)
   if (!entries[1]?.startsWith(`v${version}\n`)) {
     throw new Error(`CHANGELOG.md must start with the prepared v${version} release.`)
   }
-  const entry = entries[1]
-  const markers = entry.match(/^<!-- release-base:.*$/gmu) ?? []
-  const base = markers.length === 1
-    ? /^<!-- release-base: ([a-f0-9]{40}|[a-f0-9]{64}) -->$/u.exec(markers[0])?.[1]
-    : undefined
-  if (!base) throw new Error(`Prepared v${version} changelog must contain exactly one valid release-base SHA.`)
-  return { base, notes: `## ${entry.replace(/^<!-- release-base: .* -->(?:\n\n|\n|$)/mu, '').trim()}\n` }
+  // Legacy entries may still have preparation markers; they are not release evidence.
+  return `## ${entries[1].replace(/^<!-- release-base: .* -->(?:\n\n|\n|$)/gmu, '').trim()}\n`
 }
 
-export function releaseNotes(cwd, version) {
-  return preparedChangelogEntry(readFileSync(join(cwd, 'CHANGELOG.md'), 'utf8'), version).notes
-}
-
-export function requirePreparedCommit(run, packages) {
-  const changed = checked(run, 'git', ['diff-tree', '--no-commit-id', '--name-only', '-r', 'HEAD']).split('\n')
-  for (const path of releasePaths) {
-    if (!changed.includes(path)) throw new Error(`HEAD is not a prepared release commit: missing change to ${path}.`)
-  }
-  const unexpected = changed.filter(path => !releasePaths.includes(path))
-  if (unexpected.length) {
-    throw new Error(`HEAD contains non-release file changes: ${unexpected.join(', ')}. Merge code changes separately and regenerate the release.`)
-  }
+export async function requireReleaseCommit(run, packages) {
   for (const pkg of packages) {
-    const committed = JSON.parse(checked(run, 'git', ['show', `HEAD:${pkg.path}`]))
-    const previous = JSON.parse(checked(run, 'git', ['show', `HEAD^:${pkg.path}`]))
+    const previous = JSON.parse(await checked(run, 'git', ['show', `HEAD^:${pkg.path}`]))
     validVersion(previous.version)
-    if (committed.version !== pkg.version || semver.compare(pkg.version, previous.version) <= 0) {
-      throw new Error('HEAD must contain the prepared version bump, not a later main commit.')
+    if (semver.compare(pkg.version, previous.version) <= 0) {
+      throw new Error('Check out the commit that introduced this release version, rather than a later main commit.')
     }
   }
-  const { base } = preparedChangelogEntry(checked(run, 'git', ['show', 'HEAD:CHANGELOG.md']), packages[0].version)
-  if (checked(run, 'git', ['rev-parse', 'HEAD^']) !== base) {
-    throw new Error('Prepared release base differs from HEAD^: main advanced before the release merge. Regenerate the release from current main with a newer unused version; do not retarget the release-base marker.')
-  }
-}
-
-export function validatePreparation(run) {
-  checked(run, 'pnpm', ['lint'])
-  checked(run, 'pnpm', ['typecheck'])
-  checked(run, 'pnpm', ['build'])
-  checked(run, 'pnpm', ['migration:snapshot:check'])
-  checked(run, 'pnpm', ['exec', 'vitest', 'run',
-    '--exclude', 'test/postgres.test.ts', '--exclude', 'test/postgres-migration.test.ts'],
-  { env: { ...process.env, DATABASE_URL: '' } })
-}
-
-export function validateArtifacts(run, packDestination) {
-  checked(run, 'node', ['scripts/smoke-pack.mjs', ...(packDestination ? ['--pack-destination', packDestination] : [])],
-    { env: { ...process.env, DATABASE_URL: '' } })
 }
 
 export function releaseArtifacts(cwd, packages) {

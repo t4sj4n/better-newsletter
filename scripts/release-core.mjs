@@ -1,31 +1,10 @@
-import { execFileSync } from 'node:child_process'
 import { URLSearchParams } from 'node:url'
 import semver from 'semver'
+import { checked, checkedResult } from './script-core.mjs'
+
+export { checked, liveCommandRunner } from './script-core.mjs'
 
 export const registry = 'https://registry.npmjs.org'
-
-export function commandRunner(cwd) {
-  return (command, args, options = {}) => {
-    try {
-      return { status: 0, stdout: execFileSync(command, args, {
-        cwd, encoding: 'utf8', maxBuffer: 16 * 1024 * 1024, stdio: ['pipe', 'pipe', 'pipe'], ...options
-      }) ?? '', stderr: '' }
-    } catch (error) {
-      if (typeof error.status !== 'number') {
-        throw new Error(`Cannot run ${command}. Install/authenticate it before retrying.`, { cause: error })
-      }
-      return { status: error.status, stdout: String(error.stdout ?? ''), stderr: String(error.stderr ?? '') }
-    }
-  }
-}
-
-export function checked(run, command, args, options) {
-  const result = run(command, args, options)
-  if (result.status !== 0) {
-    throw new Error(`${command} ${args.join(' ')} failed:\n${result.stderr || result.stdout}`)
-  }
-  return result.stdout.trimEnd()
-}
 
 export function validVersion(version) {
   if (typeof version !== 'string' || semver.valid(version) !== version || version.includes('+')) {
@@ -34,10 +13,10 @@ export function validVersion(version) {
   return version
 }
 
-export function distTag(version) {
+export function prereleaseChannel(version) {
   validVersion(version)
   const prerelease = semver.prerelease(version)
-  if (!prerelease) return 'latest'
+  if (!prerelease) return null
   const channel = prerelease[0]
   if (!['alpha', 'beta', 'rc'].includes(channel)) {
     throw new Error(`Unsupported prerelease channel: ${channel}. Use alpha, beta or rc.`)
@@ -45,60 +24,61 @@ export function distTag(version) {
   return channel
 }
 
-export function nextVersion(current, release) {
-  validVersion(current)
-  if (release === 'prerelease' && !semver.prerelease(current)) {
-    throw new Error('prerelease requires an existing prerelease; select an explicit alpha, beta or rc version.')
+export function npmDistTag(tag = 'latest') {
+  if (typeof tag !== 'string' || !/^[a-zA-Z][a-zA-Z0-9._-]*$/u.test(tag) || semver.validRange(tag)) {
+    throw new Error(`Invalid npm dist-tag: ${tag}. Use a name such as latest, next or beta, not a version or range.`)
   }
-  const version = ['prerelease', 'patch', 'minor', 'major'].includes(release)
-    ? semver.inc(current, release)
-    : release
-  validVersion(version)
-  if (semver.compare(version, current) <= 0) {
-    throw new Error('Select a release version newer than the current version.')
-  }
-  distTag(version)
-  return version
+  return tag
 }
 
-export function requireCleanTree(run) {
-  if (checked(run, 'git', ['status', '--porcelain']).length) {
+export async function requireCleanTree(run) {
+  if ((await checked(run, 'git', ['status', '--porcelain'])).length) {
     throw new Error('Commit or stash all tracked and untracked changes before releasing.')
   }
 }
 
-export function requireCurrentMain(run) {
-  if (checked(run, 'git', ['branch', '--show-current']) !== 'main') {
+export async function requireCurrentMain(run) {
+  if (await checked(run, 'git', ['branch', '--show-current']) !== 'main') {
     throw new Error('Releases must start on main. Run: git switch main')
   }
-  requireCleanTree(run)
-  const commit = checked(run, 'git', ['rev-parse', 'HEAD'])
-  requireRemoteMain(run, commit)
+  await requireCleanTree(run)
+  const commit = await checked(run, 'git', ['rev-parse', 'HEAD'])
+  await requireRemoteMain(run, commit)
   return commit
 }
 
-export function requireRemoteMain(run, commit) {
-  checked(run, 'git', ['fetch', 'origin', 'refs/heads/main:refs/remotes/origin/main'])
-  if (checked(run, 'git', ['rev-parse', 'origin/main']) !== commit) {
+export async function requireRemoteMain(run, commit) {
+  await checked(run, 'git', ['fetch', 'origin', 'refs/heads/main:refs/remotes/origin/main'])
+  if (await checked(run, 'git', ['rev-parse', 'origin/main']) !== commit) {
     throw new Error('Local release base differs from origin/main. Update main with git pull --ff-only and retry.')
   }
 }
 
-export function requireGitHub(run, repository) {
-  const url = checked(run, 'git', ['remote', 'get-url', '--push', 'origin'])
-  const match = /^(?:https:\/\/github\.com\/|git@github\.com:|ssh:\/\/git@github\.com\/)([^/]+\/[^/]+?)(?:\.git)?$/u.exec(url)
-  if (match?.[1] !== repository) throw new Error(`origin must push to github.com/${repository}.`)
-  checked(run, 'gh', ['auth', 'status'])
+export async function requireMainCommit(run) {
+  await requireCleanTree(run)
+  const commit = await checked(run, 'git', ['rev-parse', 'HEAD'])
+  await checked(run, 'git', ['fetch', 'origin', 'refs/heads/main:refs/remotes/origin/main'])
+  const ancestry = await run('git', ['merge-base', '--is-ancestor', commit, 'origin/main'])
+  if (ancestry.status === 1) throw new Error('Select a release commit merged into origin/main; check it out before publishing.')
+  checkedResult(ancestry, 'git', ['merge-base', '--is-ancestor', commit, 'origin/main'])
+  return commit
 }
 
-export function requireSuccessfulCi(run, repository, commit, { workflow, event, branch }) {
-  const metadata = JSON.parse(checked(run, 'gh', ['api', `repos/${repository}/actions/workflows/${workflow}`]))
+export async function requireGitHub(run, repository) {
+  const url = await checked(run, 'git', ['remote', 'get-url', '--push', 'origin'])
+  const match = /^(?:https:\/\/github\.com\/|git@github\.com:|ssh:\/\/git@github\.com\/)([^/]+\/[^/]+?)(?:\.git)?$/u.exec(url)
+  if (match?.[1] !== repository) throw new Error(`origin must push to github.com/${repository}.`)
+  await checked(run, 'gh', ['auth', 'status'])
+}
+
+export async function requireSuccessfulCi(run, repository, commit, { workflow, event, branch }) {
+  const metadata = JSON.parse(await checked(run, 'gh', ['api', `repos/${repository}/actions/workflows/${workflow}`]))
   if (!Number.isSafeInteger(metadata.id) || metadata.id <= 0
       || metadata.path !== `.github/workflows/${workflow}` || metadata.state !== 'active') {
     throw new Error(`Required CI workflow ${workflow} is missing, inactive or has unexpected metadata.`)
   }
   const query = new URLSearchParams({ head_sha: commit, event, branch, per_page: '100' })
-  const pages = JSON.parse(checked(run, 'gh', ['api', '--paginate', '--slurp',
+  const pages = JSON.parse(await checked(run, 'gh', ['api', '--paginate', '--slurp',
     `repos/${repository}/actions/workflows/${metadata.id}/runs?${query}`]))
   if (!Array.isArray(pages) || !pages.length
       || pages.some(page => !Array.isArray(page.workflow_runs) || !Number.isSafeInteger(page.total_count))) {
@@ -127,40 +107,32 @@ export function requireSuccessfulCi(run, repository, commit, { workflow, event, 
   }
 }
 
-export function createReleaseBranch(run, branch) {
-  const local = run('git', ['show-ref', '--verify', '--quiet', `refs/heads/${branch}`])
+export async function requireAvailableReleaseBranch(run, branch) {
+  const local = await run('git', ['show-ref', '--verify', '--quiet', `refs/heads/${branch}`])
   if (local.status === 0) {
     throw new Error(`Local release branch ${branch} already exists. Inspect git log main..${branch}; preserve any work, then run git switch main and git branch -d ${branch} before retrying.`)
   }
   if (local.status !== 1) throw new Error(`Cannot inspect local branch ${branch}: ${local.stderr}`)
-  if (checked(run, 'git', ['ls-remote', '--heads', 'origin', `refs/heads/${branch}`])) {
+  if (await checked(run, 'git', ['ls-remote', '--heads', 'origin', `refs/heads/${branch}`])) {
     throw new Error(`Release branch ${branch} already exists on origin. Inspect: gh pr list --head ${branch}`)
   }
-  checked(run, 'git', ['switch', '-c', branch])
 }
 
-export function removeUncommittedReleaseBranch(run, branch, base) {
-  if (checked(run, 'git', ['branch', '--show-current']) !== branch
-      || checked(run, 'git', ['rev-parse', 'HEAD']) !== base
-      || checked(run, 'git', ['rev-parse', 'refs/heads/main']) !== base
-      || checked(run, 'git', ['status', '--porcelain'])) {
-    return false
-  }
-  checked(run, 'git', ['switch', 'main'])
-  checked(run, 'git', ['branch', '-d', branch])
-  return true
+export async function createReleaseBranch(run, branch) {
+  await requireAvailableReleaseBranch(run, branch)
+  await checked(run, 'git', ['switch', '-c', branch])
 }
 
-export function tagState(run, tag) {
-  const local = run('git', ['show-ref', '--verify', '--quiet', `refs/tags/${tag}`])
+export async function tagState(run, tag) {
+  const local = await run('git', ['show-ref', '--verify', '--quiet', `refs/tags/${tag}`])
   if (![0, 1].includes(local.status)) throw new Error(`Cannot inspect local tag ${tag}: ${local.stderr}`)
   const localCommit = local.status === 0
-    ? checked(run, 'git', ['rev-parse', `refs/tags/${tag}^{}`])
+    ? await checked(run, 'git', ['rev-parse', `refs/tags/${tag}^{}`])
     : null
-  const remote = checked(run, 'git', ['ls-remote', '--tags', 'origin', `refs/tags/${tag}`, `refs/tags/${tag}^{}`])
+  const remote = (await checked(run, 'git', ['ls-remote', '--tags', 'origin', `refs/tags/${tag}`, `refs/tags/${tag}^{}`]))
     .split('\n').filter(Boolean).map(line => line.split(/\s+/u))
   const remoteCommit = (remote.find(([, ref]) => ref.endsWith('^{}')) ?? remote[0])?.[0] ?? null
-  const localObject = local.status === 0 ? checked(run, 'git', ['rev-parse', `refs/tags/${tag}`]) : null
+  const localObject = local.status === 0 ? await checked(run, 'git', ['rev-parse', `refs/tags/${tag}`]) : null
   const remoteObject = remote.find(([, ref]) => ref === `refs/tags/${tag}`)?.[0] ?? null
   if (localObject && remoteObject && localObject !== remoteObject) {
     throw new Error(`Local and remote ${tag} tags differ; inspect them before retrying.`)
@@ -181,8 +153,8 @@ function npmErrorCodes(output) {
   return [...output.matchAll(/^npm (?:error|ERR!) code (\S+)\s*$/gmu)].map(([, code]) => code)
 }
 
-export function npmVersion(run, name, version) {
-  const result = run('npm', ['view', `${name}@${version}`, '--json', '--registry', registry])
+export async function npmVersion(run, name, version) {
+  const result = await run('npm', ['view', `${name}@${version}`, '--json', '--registry', registry])
   if (result.status !== 0) {
     const codes = [result.stdout, result.stderr].flatMap(npmErrorCodes)
     if (codes.length && codes.every(code => code === 'E404')) return null
@@ -198,8 +170,8 @@ export function npmVersion(run, name, version) {
   return manifest
 }
 
-export function githubRelease(run, repository, tag) {
-  const result = run('gh', ['api', '--include', `repos/${repository}/releases/tags/${tag}`])
+export async function githubRelease(run, repository, tag) {
+  const result = await run('gh', ['api', '--include', `repos/${repository}/releases/tags/${tag}`])
   const status = /^HTTP\/[\d.]+ (\d+)/mu.exec(result.stdout)?.[1]
   if (status === '404') return null
   if (result.status !== 0 || status !== '200') {
@@ -214,7 +186,7 @@ export function publishPlan({ commit, tag, packages, published, release, resume 
     throw new Error('Tag, npm version or GitHub Release already exists. Inspect it, then use pnpm release:publish --resume.')
   }
   if ((tag.localCommit && tag.localCommit !== commit) || (tag.remoteCommit && tag.remoteCommit !== commit)) {
-    throw new Error('Existing release tag does not point to the checked main commit.')
+    throw new Error('Existing release tag does not point to the selected release commit.')
   }
   if ((published.some(Boolean) || release) && !tag.remoteCommit) {
     throw new Error('Published release state has no matching pushed tag; refusing unsafe recovery.')

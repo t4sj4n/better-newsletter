@@ -3,6 +3,10 @@ name: Publish release
 on:
   workflow_dispatch:
     inputs:
+      dry_run:
+        description: Preview only (disable explicitly to publish)
+        default: true
+        type: boolean
       release_commit:
         description: Full SHA of the reviewed release commit on main
         required: true
@@ -92,7 +96,7 @@ jobs:
         run: pnpm install --frozen-lockfile --ignore-scripts
 
       - name: Restore checked artifacts from a previous publish run
-        if: inputs.resume && inputs.artifact_run_id != ''
+        if: ${{ !inputs.dry_run && inputs.resume && inputs.artifact_run_id != '' }}
         uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
         with:
           name: release-artifacts-${{ inputs.release_commit }}
@@ -105,13 +109,15 @@ jobs:
         env:
           DIST_TAG: ${{ inputs.dist_tag }}
           RESUME: ${{ inputs.resume }}
+          DRY_RUN: ${{ inputs.dry_run }}
         run: |
           args=(--ci --tag "$DIST_TAG")
+          if [[ "$DRY_RUN" == 'true' ]]; then args+=(--dry-run); fi
           if [[ "$RESUME" == 'true' ]]; then args+=(--resume); fi
           node "$GITHUB_WORKSPACE/release-tooling/scripts/release-publish.mjs" "${args[@]}"
 
       - name: Preserve artifacts for recovery
-        if: always()
+        if: always() && !inputs.dry_run
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
           name: release-artifacts-${{ inputs.release_commit }}

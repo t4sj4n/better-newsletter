@@ -145,10 +145,10 @@ Preparation failures leave the release branch for inspection; native Git rollbac
 
 #### 2. Publish the reviewed release commit
 
-After merging the release PR and waiting for successful CI, open **Actions → Publish release → Run workflow**. Run the workflow from `main`, enter the full 40-character lowercase SHA of the commit that introduced the release version, select the npm dist-tag (default `latest`), and leave `resume` off for a new publication. You can also dispatch it through GitHub CLI:
+After merging the release PR and waiting for successful CI, open **Actions → Publish release → Run workflow**. Run the workflow from `main`, enter the full 40-character lowercase SHA of the commit that introduced the release version, select the npm dist-tag (default `latest`), disable the default `dry_run` option, and leave `resume` off for a new publication. You can also dispatch it through GitHub CLI:
 
 ```bash
-gh workflow run publish.yml --ref main -f release_commit=<release-commit-sha> -f dist_tag=latest -F resume=false
+gh workflow run publish.yml --ref main -f release_commit=<release-commit-sha> -f dist_tag=latest -F dry_run=false -F resume=false
 ```
 
 The selected commit must introduce the synchronized version bump, contain that version's reviewed changelog entry and be included in `origin/main`. It may change additional reviewed files. The CI gate selects the newest `ci.yml` push run on `main` for this exact SHA and requires it to be completed and successful. Pending or failed reruns for that SHA block publication even if an older run succeeded; a newer successful run for the same SHA is accepted. Runs for other SHAs do not affect this check.
@@ -161,10 +161,10 @@ The npm dist-tag defaults to `latest` for both stable and prerelease versions. S
 
 #### Recovery
 
-Keep the release tag after a partial publication. The workflow preserves remaining checked tarballs and their manifest as an Actions artifact named `release-artifacts-<release-commit-sha>` for 30 days. To recover, dispatch **Publish release** from `main` again with the original `release_commit`, the original `dist_tag`, `resume=true`, and the failed run's numeric ID as `artifact_run_id`:
+Keep the release tag after a partial publication. The workflow preserves remaining checked tarballs and their manifest as an Actions artifact named `release-artifacts-<release-commit-sha>` for 30 days. To recover, dispatch **Publish release** from `main` again with the original `release_commit`, the original `dist_tag`, `dry_run=false`, `resume=true`, and the failed run's numeric ID as `artifact_run_id`:
 
 ```bash
-gh workflow run publish.yml --ref main -f release_commit=<original-release-commit-sha> -f dist_tag=latest -F resume=true -f artifact_run_id=<failed-run-id>
+gh workflow run publish.yml --ref main -f release_commit=<original-release-commit-sha> -f dist_tag=latest -F dry_run=false -F resume=true -f artifact_run_id=<failed-run-id>
 ```
 
 The run ID is the number in the Actions run URL. A rerun of the original job retains the original inputs; use a new dispatch to enable recovery and restore artifacts. If no cached artifacts exist (including a failure from the former local publisher), leave `artifact_run_id` empty. Artifact validation rebuilds the cache; its integrities must still match the annotated tag and any published package. Different results are refused.
@@ -172,6 +172,16 @@ The run ID is the number in the Actions run URL. A rerun of the original job ret
 Recovery verifies tag identity, the recorded artifact manifest, cached files and existing npm integrities. It skips matching published packages and a complete existing GitHub Release; it does not retag already published packages. A CLI published without its runtime, a wrong tag/commit, conflicting integrity or premature/draft GitHub Release requires investigation. Immutable npm versions are never overwritten. The original release SHA must still belong to `main` and have successful exact-SHA CI; neither the latest `main` tip nor an unchanged CI run ID is required.
 
 #### Previewing and developing release scripts
+
+To test the workflow on a GitHub-hosted runner, dispatch **Publish release** from `main` with the selected release commit and leave `dry_run` enabled (the default):
+
+```bash
+gh workflow run publish.yml --ref main -f release_commit=<release-commit-sha> -F dry_run=true
+```
+
+The workflow must first be merged into `main`. This preview exercises input validation, both checkouts, main ancestry verification, installation and `release-it --dry-run`. It skips artifact restoration and upload and creates no release tag, npm publication or GitHub Release. It does not validate npm/OIDC publishing permissions, the exact-SHA CI gate or packed artifacts. Disable `dry_run` explicitly for a real publication or recovery.
+
+Local previews remain available:
 
 ```bash
 pnpm release:prepare prerelease --dry-run

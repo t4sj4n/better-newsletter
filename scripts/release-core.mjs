@@ -1,9 +1,8 @@
 import { URLSearchParams } from 'node:url'
 import semver from 'semver'
-import { checked } from './script-core.mjs'
+import { checked, checkedResult } from './script-core.mjs'
 
-// Keep existing release imports compatible with the shared command runner.
-export { checked, checkedResult, commandRunner, liveCommandRunner } from './script-core.mjs'
+export { checked, liveCommandRunner } from './script-core.mjs'
 
 export const registry = 'https://registry.npmjs.org'
 
@@ -23,22 +22,6 @@ export function distTag(version) {
     throw new Error(`Unsupported prerelease channel: ${channel}. Use alpha, beta or rc.`)
   }
   return channel
-}
-
-export function nextVersion(current, release) {
-  validVersion(current)
-  if (release === 'prerelease' && !semver.prerelease(current)) {
-    throw new Error('prerelease requires an existing prerelease; select an explicit alpha, beta or rc version.')
-  }
-  const version = ['prerelease', 'patch', 'minor', 'major'].includes(release)
-    ? semver.inc(current, release)
-    : release
-  validVersion(version)
-  if (semver.compare(version, current) <= 0) {
-    throw new Error('Select a release version newer than the current version.')
-  }
-  distTag(version)
-  return version
 }
 
 export async function requireCleanTree(run) {
@@ -62,6 +45,16 @@ export async function requireRemoteMain(run, commit) {
   if (await checked(run, 'git', ['rev-parse', 'origin/main']) !== commit) {
     throw new Error('Local release base differs from origin/main. Update main with git pull --ff-only and retry.')
   }
+}
+
+export async function requireMainCommit(run) {
+  await requireCleanTree(run)
+  const commit = await checked(run, 'git', ['rev-parse', 'HEAD'])
+  await checked(run, 'git', ['fetch', 'origin', 'refs/heads/main:refs/remotes/origin/main'])
+  const ancestry = await run('git', ['merge-base', '--is-ancestor', commit, 'origin/main'])
+  if (ancestry.status === 1) throw new Error('Select a release commit merged into origin/main; check it out before publishing.')
+  checkedResult(ancestry, 'git', ['merge-base', '--is-ancestor', commit, 'origin/main'])
+  return commit
 }
 
 export async function requireGitHub(run, repository) {
@@ -121,18 +114,6 @@ export async function requireAvailableReleaseBranch(run, branch) {
 export async function createReleaseBranch(run, branch) {
   await requireAvailableReleaseBranch(run, branch)
   await checked(run, 'git', ['switch', '-c', branch])
-}
-
-export async function removeUncommittedReleaseBranch(run, branch, base) {
-  if (await checked(run, 'git', ['branch', '--show-current']) !== branch
-      || await checked(run, 'git', ['rev-parse', 'HEAD']) !== base
-      || await checked(run, 'git', ['rev-parse', 'refs/heads/main']) !== base
-      || await checked(run, 'git', ['status', '--porcelain'])) {
-    return false
-  }
-  await checked(run, 'git', ['switch', 'main'])
-  await checked(run, 'git', ['branch', '-d', branch])
-  return true
 }
 
 export async function tagState(run, tag) {
@@ -198,7 +179,7 @@ export function publishPlan({ commit, tag, packages, published, release, resume 
     throw new Error('Tag, npm version or GitHub Release already exists. Inspect it, then use pnpm release:publish --resume.')
   }
   if ((tag.localCommit && tag.localCommit !== commit) || (tag.remoteCommit && tag.remoteCommit !== commit)) {
-    throw new Error('Existing release tag does not point to the checked main commit.')
+    throw new Error('Existing release tag does not point to the selected release commit.')
   }
   if ((published.some(Boolean) || release) && !tag.remoteCommit) {
     throw new Error('Published release state has no matching pushed tag; refusing unsafe recovery.')

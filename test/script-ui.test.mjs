@@ -1,16 +1,12 @@
-import { execFileSync, spawnSync } from 'node:child_process'
-import console from 'node:console'
-import { fstatSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
+import { fstatSync, mkdtempSync, readFileSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import process from 'node:process'
-import { PassThrough, Writable } from 'node:stream'
-import { fileURLToPath, URL } from 'node:url'
+import { Writable } from 'node:stream'
 import { stripVTControlCharacters } from 'node:util'
 import { afterEach, describe, expect, it, vi } from 'vitest'
-import { select } from '@clack/prompts'
-import { checked, commandRunner, liveCommandRunner, requireCurrentMain } from '../scripts/release-core.mjs'
-import { conciseMessage, createReleaseUi, formatDuration, parseReleaseArgs, ReleaseCancelled, reportReleaseError, selectReleaseVersion } from '../scripts/release-ui.mjs'
+import { commandRunner, liveCommandRunner } from '../scripts/script-core.mjs'
+import { createScriptUi, formatDuration, reportScriptError, ScriptCancelled } from '../scripts/script-ui.mjs'
 
 const directories = []
 afterEach(() => {
@@ -20,13 +16,9 @@ afterEach(() => {
 })
 
 function temp() {
-  const directory = mkdtempSync(join(tmpdir(), 'newsletter-release-ui-'))
+  const directory = mkdtempSync(join(tmpdir(), 'newsletter-script-ui-'))
   directories.push(directory)
   return directory
-}
-
-function recorder() {
-  return Object.fromEntries(['error', 'warn', 'info', 'finish', 'cancel'].map(name => [name, vi.fn()]))
 }
 
 // Model Clack's cursor/erase sequences so tests catch overwritten guides and stale rows.
@@ -61,159 +53,7 @@ function terminalLines(raw) {
   return rows.map(line => line.join('')).filter(Boolean)
 }
 
-describe('release CLI failures', () => {
-  it.each(['prepare', 'publish'])('%s renders a dirty-tree failure without Node stacks and exits non-zero', kind => {
-    const cwd = temp()
-    execFileSync('git', ['init', '-b', 'main'], { cwd, stdio: 'pipe' })
-    writeFileSync(join(cwd, 'untracked'), 'Preserve this work')
-    const script = fileURLToPath(new URL(`../scripts/release-${kind}.mjs`, import.meta.url))
-    const result = spawnSync(process.execPath, [script, ...(kind === 'prepare' ? ['prerelease'] : [])], { cwd, encoding: 'utf8' })
-    expect(result.status).toBe(1)
-    expect(result.stdout).toContain('Commit or stash all tracked and untracked changes before releasing.')
-    expect(result.stdout).toContain('Release failed.')
-    expect(result.stdout).not.toMatch(/\s+at |file:\/\//u)
-    expect(result.stdout).not.toContain('\u001b[?25')
-    expect(result.stderr).toBe('')
-  })
-
-  it.each(['--verbose', '--debug'])('only prints stack traces with %s', flag => {
-    const script = fileURLToPath(new URL('../scripts/release-prepare.mjs', import.meta.url))
-    const result = spawnSync(process.execPath, [script, '--unknown', flag], { encoding: 'utf8' })
-    expect(result.status).toBe(1)
-    expect(result.stdout).toContain('Usage: pnpm release:prepare')
-    expect(result.stderr).toContain('at parseReleaseArgs')
-  })
-
-  it('keeps the command exit status and shows its cause before recovery and cleanup guidance', async () => {
-    let cause
-    try { await checked(() => ({ status: 7, stdout: '', stderr: 'Registry unavailable' }), 'npm', ['publish']) } catch (error) { cause = error }
-    const error = new AggregateError([
-      new Error('Prepared files were restored; retry preparation.', { cause }),
-      new Error('Branch cleanup failed; inspect git status.')
-    ], 'Preparation and cleanup failed.')
-    const ui = recorder()
-    const debug = vi.spyOn(console, 'error').mockImplementation(() => {})
-    expect(reportReleaseError(error, { ui })).toBe(7)
-    expect(ui.error).toHaveBeenCalledWith('npm publish failed:\nRegistry unavailable')
-    expect(ui.error.mock.invocationCallOrder[0]).toBeLessThan(ui.warn.mock.invocationCallOrder[0])
-    expect(ui.warn).toHaveBeenCalledWith('Prepared files were restored; retry preparation.')
-    expect(ui.warn).toHaveBeenCalledWith('Branch cleanup failed; inspect git status.')
-    expect(debug).not.toHaveBeenCalled()
-    reportReleaseError(error, { ui, verbose: true })
-    expect(debug).toHaveBeenCalledWith(error)
-  })
-
-  it('renders cancellation without an error or stack and uses exit code 130', () => {
-    const ui = recorder()
-    expect(reportReleaseError(new ReleaseCancelled(), { ui })).toBe(130)
-    expect(ui.cancel).toHaveBeenCalled()
-    expect(ui.error).not.toHaveBeenCalled()
-  })
-
-  it('removes subprocess Node stacks and source excerpts while retaining the failure', () => {
-    expect(conciseMessage('file:///tmp/check.mjs:1\nthrow new Error("Invalid artifact")\n      ^\n\nError: Invalid artifact\n    at file:///tmp/check.mjs:1:7\n    at async run (node:internal/modules/run_main:1:2)\n\nNode.js v26.7.0'))
-      .toBe('Error: Invalid artifact')
-    expect(conciseMessage('Error: Invalid artifact\n    ... 8 lines matching cause stack trace ...\n    964| await publishRelease()\n       | ^\n    at run (/tmp/release.mjs:964:5)'))
-      .toBe('Error: Invalid artifact')
-  })
-
-  it.each(['stdout', 'stderr'])('prioritizes actual Vitest failures reported on %s over expected test logs', async stream => {
-    const expectedLogs = [
-      'stderr | test/nuxt.test.ts > Nuxt server integration > fails its guard error check',
-      '[h3] [unhandled] H3Error: Guard unavailable',
-      '    at Object.<anonymous> (/tmp/test/nuxt.test.ts:645:17)',
-      '    ... 8 lines matching cause stack trace ...',
-      '  cause: Error: Guard unavailable', '  statusCode: 500,', '  fatal: false,', '  unhandled: true,'
-    ].join('\n')
-    const failure = [
-      '⎯⎯⎯⎯⎯⎯⎯ Failed Tests 1 ⎯⎯⎯⎯⎯⎯⎯',
-      ' FAIL  test/release-prepare.test.mjs > release publication > rejects modified non-release files',
-      'Error: Test timed out in 5000ms.',
-      'If this is a long-running test, pass a timeout value as the last argument or configure it globally with "testTimeout".',
-      ' ❯ test/release-prepare.test.mjs:964:5',
-      '    964| await expect(publishRelease(cwd, { run, resume: true })).rejects.toThrow()',
-      '       | ^',
-      '    965| expect(mutations(state)).toEqual([])',
-      '⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯ [1/1] ⎯',
-      ' Test Files  1 failed | 22 passed (23)', '      Tests  1 failed | 538 passed (539)'
-    ].join('\n')
-    const result = { status: 1, stdout: '', stderr: expectedLogs }
-    result[stream] += `\n${failure}`
-    let error
-    try { await checked(() => result, 'pnpm', ['exec', 'vitest', 'run']) } catch (cause) { error = cause }
-    const ui = recorder()
-    const debug = vi.spyOn(console, 'error').mockImplementation(() => {})
-    expect(reportReleaseError(error, { ui })).toBe(1)
-    const message = ui.error.mock.calls[0][0]
-    expect(message).toContain('Vitest failed (exit 1):')
-    expect(message).toContain('FAIL test/release-prepare.test.mjs > release publication > rejects modified non-release files')
-    expect(message).toContain('Error: Test timed out in 5000ms.')
-    expect(message).not.toMatch(/Guard unavailable|matching cause stack|964\||❯/u)
-    expect(debug).not.toHaveBeenCalled()
-    reportReleaseError(error, { ui, verbose: true })
-    expect(debug).toHaveBeenCalledWith(error)
-    if (stream === 'stdout') expect(debug).toHaveBeenCalledWith(`Command stdout:\n${result.stdout}`)
-  })
-
-  it('reports multiple Vitest failures without losing the first reason or assertion details', async () => {
-    const stdout = Array.from({ length: 5 }, (_, index) => [
-      ` FAIL  test/example.test.ts > case ${index}`,
-      'AssertionError: expected false to be true', '', '- Expected', '+ Received', '', '- true', '+ false',
-      ' ❯ test/example.test.ts:10:5', '     10| expect(false).toBe(true)', '       | ^'
-    ].join('\n')).join('\n\n')
-    let error
-    try { await checked(() => ({ status: 7, stdout, stderr: 'Expected warning' }), 'pnpm', ['exec', 'vitest', 'run']) } catch (cause) { error = cause }
-    const ui = recorder()
-    expect(reportReleaseError(error, { ui })).toBe(7)
-    const message = ui.error.mock.calls[0][0]
-    expect(message).toContain('case 0\nAssertionError: expected false to be true')
-    expect(message).toContain('- true\n+ false')
-    expect(message).toContain('case 2')
-    expect(message).toContain('2 more failed tests/suites')
-    expect(message).not.toMatch(/Expected warning|case 3|10\||❯/u)
-  })
-
-  it('accepts debug flags alongside selectors and resume, while rejecting unexpected arguments', () => {
-    expect(parseReleaseArgs(['--debug', 'prerelease'], 'prepare')).toMatchObject({ verbose: true, release: 'prerelease' })
-    expect(parseReleaseArgs(['--resume', '--verbose'], 'publish')).toMatchObject({ verbose: true, resume: true })
-    expect(parseReleaseArgs(['--dry-run', 'prerelease', '--debug'], 'prepare')).toMatchObject({ dryRun: true, release: 'prerelease', verbose: true })
-    expect(parseReleaseArgs(['--dry-run', '--resume'], 'publish')).toMatchObject({ dryRun: true, resume: true })
-    expect(() => parseReleaseArgs(['--dry-run', '--resume'], 'prepare')).toThrow('Usage:')
-    expect(() => parseReleaseArgs(['patch', 'minor'], 'prepare')).toThrow('Usage:')
-    expect(() => parseReleaseArgs(['--force'], 'publish')).toThrow('Usage:')
-    expect(parseReleaseArgs(['prerelease', '--dry-run', '--skip-validation', '--debug'], 'prepare'))
-      .toMatchObject({ dryRun: true, skipValidation: true, verbose: true, release: 'prerelease' })
-    expect(parseReleaseArgs(['--resume', '--skip-validation', '--dry-run'], 'publish'))
-      .toMatchObject({ dryRun: true, skipValidation: true, resume: true })
-    for (const kind of ['prepare', 'publish']) {
-      expect(() => parseReleaseArgs(['--skip-validation'], kind)).toThrow('--skip-validation requires --dry-run')
-      expect(() => parseReleaseArgs(['--skip-git-checks'], kind)).toThrow('--skip-git-checks requires --dry-run')
-      expect(parseReleaseArgs(['--dry-run', '--skip-git-checks', '--skip-validation'], kind))
-        .toMatchObject({ dryRun: true, skipGitChecks: true, skipValidation: true })
-    }
-  })
-
-  it.each(['prepare', 'publish'])('%s rejects skipping validation without dry-run at the CLI boundary', kind => {
-    const cwd = temp()
-    const script = fileURLToPath(new URL(`../scripts/release-${kind}.mjs`, import.meta.url))
-    const result = spawnSync(process.execPath, [script, '--skip-validation'], { cwd, encoding: 'utf8' })
-    expect(result.status).toBe(1)
-    expect(result.stdout).toContain('--skip-validation requires --dry-run')
-    expect(result.stdout).not.toContain('Checking clean main')
-    expect(result.stderr).toBe('')
-  })
-
-  it.each(['prepare', 'publish'])('%s rejects skipping Git checks without dry-run before accessing the repository', kind => {
-    const script = fileURLToPath(new URL(`../scripts/release-${kind}.mjs`, import.meta.url))
-    const result = spawnSync(process.execPath, [script, '--skip-git-checks'], { cwd: temp(), encoding: 'utf8' })
-    expect(result.status).toBe(1)
-    expect(result.stdout).toContain('--skip-git-checks requires --dry-run')
-    expect(result.stdout).not.toContain('Checking clean main')
-    expect(result.stderr).toBe('')
-  })
-})
-
-describe('live release commands', () => {
+describe('shared command presentation', () => {
   it.each([false, true])('animates commands and keeps wrapped logs inside the guide (verbose: %s)', async verbose => {
     vi.stubEnv('CI', 'false')
     vi.stubEnv('NO_COLOR', undefined)
@@ -230,7 +70,7 @@ describe('live release commands', () => {
       return new Promise(resolve => { finish = resolve })
     }
     const label = 'pnpm exec vitest run test/a-long-release-validation-test-file.mjs'
-    const ui = createReleaseUi({ output: stream, verbose, now: () => clock })
+    const ui = createScriptUi({ output: stream, verbose, now: () => clock })
     const pending = ui.command(run, 'pnpm', label.split(' ').slice(1),
       { label: 'Running release tests', completed: 'Release tests passed' })
     try {
@@ -279,7 +119,7 @@ describe('live release commands', () => {
     stream.isTTY = true
     const run = vi.fn(async () => ({ status: 0, stdout: '', stderr: '' }))
     const options = { label: 'Building packages', completed: 'Packages built', env: { RELEASE_UI_TEST: 'custom' }, input: 'data' }
-    await createReleaseUi({ output: stream }).command(run, 'pnpm', ['build'], options)
+    await createScriptUi({ output: stream }).command(run, 'pnpm', ['build'], options)
     expect(stripVTControlCharacters(output)).toContain('◇  Building packages\n│  $ pnpm build')
     expect(output).toContain('\u001b[2m$ pnpm build\u001b[22m')
     expect(stripVTControlCharacters(output)).toContain('◆  Packages built')
@@ -295,7 +135,7 @@ describe('live release commands', () => {
     const stream = new Writable({ write(chunk, encoding, callback) { output += chunk; callback() } })
     stream.isTTY = true
     stream.columns = 24
-    const ui = createReleaseUi({ output: stream })
+    const ui = createScriptUi({ output: stream })
     const run = async (command, args, { onOutput }) => {
       onOutput('A diagnostic message that wraps inside the guide')
       if (outcome === 'cancellation') process.emit('SIGINT')
@@ -320,7 +160,7 @@ describe('live release commands', () => {
     let output = ''
     const stream = new Writable({ write(chunk, encoding, callback) { output += chunk; callback() } })
     stream.columns = 24
-    const ui = createReleaseUi({ output: stream })
+    const ui = createScriptUi({ output: stream })
     await ui.step('A long short-running validation step', async () => {})
     ui.warn('A warning that must stay inside the guide')
     await ui.command(async (command, args, { onOutput }) => {
@@ -341,7 +181,7 @@ describe('live release commands', () => {
     let output = ''
     const stream = new Writable({ write(chunk, encoding, callback) { output += chunk; callback() } })
     stream.isTTY = true
-    const ui = createReleaseUi({ output: stream })
+    const ui = createScriptUi({ output: stream })
     await ui.command(async () => ({ status: 0, stdout: '', stderr: '' }), 'npm', ['publish'],
       { label: 'Publishing package', completed: 'Package published', interactive: true })
     expect(stripVTControlCharacters(output)).toContain('Package published')
@@ -354,7 +194,7 @@ describe('live release commands', () => {
     const stream = new Writable({ write(chunk, encoding, callback) { output += chunk; callback() } })
     stream.isTTY = true
     stream.columns = 24
-    const ui = createReleaseUi({ output: stream })
+    const ui = createScriptUi({ output: stream })
     await ui.step('A long short-running validation step', () => new Promise(resolve => globalThis.setTimeout(resolve, 350)))
     const lines = terminalLines(output)
     expect(lines[1]).toMatch(/^◆ {2}/u)
@@ -417,7 +257,7 @@ describe('live release commands', () => {
       let output = ''
       const stream = new Writable({ write(chunk, encoding, callback) { output += chunk; callback() } })
       stream.isTTY = true
-      const ui = createReleaseUi({ output: stream, verbose })
+      const ui = createScriptUi({ output: stream, verbose })
       await expect(ui.command(liveCommandRunner(process.cwd()), process.execPath, ['-e', 'throw new Error("Invalid artifact")']))
         .rejects.toMatchObject({ exitCode: 1 })
       const rendered = stripVTControlCharacters(output)
@@ -429,33 +269,17 @@ describe('live release commands', () => {
   it('stops the release workflow when an active spinner is cancelled', async () => {
     const stream = new Writable({ write(chunk, encoding, callback) { callback() } })
     stream.isTTY = true
-    const ui = createReleaseUi({ output: stream })
+    const ui = createScriptUi({ output: stream })
     await expect(ui.step('Short release step', () => {
       process.emit('SIGINT')
       return 'completed action'
-    })).rejects.toMatchObject({ exitCode: 130, message: 'Release cancelled during the current step.' })
+    })).rejects.toMatchObject({ exitCode: 130, message: 'Script cancelled during the current step.' })
   })
 
-  it('animates while the repository check waits for a subprocess', async () => {
-    let output = ''
-    const stream = new Writable({ write(chunk, encoding, callback) { output += chunk; callback() } })
-    stream.isTTY = true
-    const ui = createReleaseUi({ output: stream })
-    const live = liveCommandRunner(process.cwd())
-    const commit = 'a'.repeat(40)
-    const run = async (command, args) => {
-      if (args[0] === 'fetch') return live(process.execPath, ['-e', 'setTimeout(() => {}, 250)'])
-      return { status: 0, stderr: '', stdout: args[0] === 'branch' ? 'main' : args[0] === 'rev-parse' ? commit : '' }
-    }
-    let completed = false
-    const check = ui.step('Checking repository', () => requireCurrentMain(run)).then(value => { completed = true; return value })
-    await vi.waitFor(() => expect(stripVTControlCharacters(output)).toContain('Checking repository'), { timeout: 1000 })
-    expect(completed).toBe(false)
-    expect(await check).toBe(commit)
-  })
+
 })
 
-describe('release timings and previews', () => {
+describe('shared timings and previews', () => {
   it.each([24, 80])('renders the run summary in a box without terminal overflow (%s columns)', async columns => {
     vi.stubEnv('CI', 'true')
     let clock = 0
@@ -463,7 +287,7 @@ describe('release timings and previews', () => {
     const stream = new Writable({ write(chunk, encoding, callback) { output += chunk; callback() } })
     stream.isTTY = true
     stream.columns = columns
-    const ui = createReleaseUi({ output: stream, now: () => clock })
+    const ui = createScriptUi({ output: stream, now: () => clock })
     ui.start('timing preview')
     await ui.step('Checking repository', () => { clock += 1234 })
     ui.finish('Done')
@@ -484,7 +308,7 @@ describe('release timings and previews', () => {
     let clock = 100
     let output = ''
     const stream = new Writable({ write(chunk, encoding, callback) { output += chunk; callback() } })
-    const ui = createReleaseUi({ output: stream, now: () => clock })
+    const ui = createScriptUi({ output: stream, now: () => clock })
     ui.start('timing preview')
     await ui.step('Checking repository', () => { clock += 1250 })
     await ui.input(async () => {
@@ -512,17 +336,17 @@ describe('release timings and previews', () => {
     let clock = 0
     let output = ''
     const stream = new Writable({ write(chunk, encoding, callback) { output += chunk; callback() } })
-    const ui = createReleaseUi({ output: stream, now: () => clock })
+    const ui = createScriptUi({ output: stream, now: () => clock })
     ui.start('timing preview')
     await ui.step('Checking repository', () => { clock += 1000 })
-    const error = outcome === 'failure' ? new Error('Registry unavailable') : new ReleaseCancelled()
+    const error = outcome === 'failure' ? new Error('Registry unavailable') : new ScriptCancelled()
     await expect(ui.step('Checking registry', async () => {
       await ui.input(() => { clock += 500 })
       clock += 1500
       throw error
     })).rejects.toBe(error)
     clock += 1000
-    expect(reportReleaseError(error, { ui })).toBe(outcome === 'failure' ? 1 : 130)
+    expect(reportScriptError(error, { ui })).toBe(outcome === 'failure' ? 1 : 130)
     const rendered = stripVTControlCharacters(output)
     expect(rendered).toContain('Total          4.0s')
     expect(rendered).toContain('Execution      3.5s (excluding prompts)')
@@ -542,7 +366,7 @@ describe('release timings and previews', () => {
     const notes = ['## v1.0.0', '', '### 🚀 Enhancements', '',
       ...Array.from({ length: 40 }, (_, index) => `- Entry-${index}: Improved release previews 界📦 (https://example.com/pull/${index})`),
       '', '### Fixes', '', '- Final-entry: Preserve the complete preview.'].join('\n')
-    createReleaseUi({ output: stream }).preview(notes, 'Release notes preview')
+    createScriptUi({ output: stream }).preview(notes, 'Release notes preview')
     const lines = stripVTControlCharacters(output).split('\n').filter(Boolean)
     const rendered = lines.map(line => line.slice(3)).join('\n')
     expect(rendered).toContain('Release notes preview')
@@ -554,78 +378,5 @@ describe('release timings and previews', () => {
     expect(lines.slice(2).every(line => /^│(?: {2}|$)/u.test(line))).toBe(true)
     expect(output).not.toContain('\u001b[?25')
     expect(rendered).not.toContain('use --verbose')
-  })
-})
-
-describe('Clack version selection', () => {
-  const options = { currentVersion: '0.1.0-rc.0', preid: 'rc', commit: false, tag: false, push: false, noGitCheck: true }
-  it('keeps the existing prerelease channel and bumpp version calculations', async () => {
-    const choose = vi.fn(async () => 'next')
-    const result = await selectReleaseVersion(options, { interactive: true, choose })
-    expect(result.results.newVersion).toBe('0.1.0-rc.1')
-    expect(choose.mock.calls[0][0].options).toContainEqual({ value: 'next', label: 'next → 0.1.0-rc.1' })
-  })
-
-  it('supports explicit custom versions', async () => {
-    const result = await selectReleaseVersion(options, { interactive: true, choose: async () => 'custom', enter: async () => '0.2.0-beta.1' })
-    expect(result.results.newVersion).toBe('0.2.0-beta.1')
-  })
-
-  it('measures only input waits for version selection and custom entry', async () => {
-    let clock = 0
-    let output = ''
-    const stream = new Writable({ write(chunk, encoding, callback) { output += chunk; callback() } })
-    const ui = createReleaseUi({ output: stream, now: () => clock })
-    ui.start('version selection')
-    const result = await selectReleaseVersion({ ...options, waitForInput: action => ui.input(action) }, {
-      interactive: true,
-      choose: async () => { clock += 1000; return 'custom' },
-      enter: async () => { clock += 1500; return '0.2.0-beta.1' }
-    })
-    expect(result.results.newVersion).toBe('0.2.0-beta.1')
-    clock += 1000
-    ui.finish('Done')
-    const rendered = stripVTControlCharacters(output)
-    expect(rendered).toContain('Total          3.5s')
-    expect(rendered).toContain('Execution      1.0s (excluding prompts)')
-    expect(rendered).toContain('Prompt wait    2.5s (2 prompts)')
-  })
-
-  it('keeps prompt timing when selection is cancelled', async () => {
-    let clock = 0
-    let output = ''
-    const stream = new Writable({ write(chunk, encoding, callback) { output += chunk; callback() } })
-    const ui = createReleaseUi({ output: stream, now: () => clock })
-    const error = new ReleaseCancelled()
-    await expect(selectReleaseVersion({ ...options, waitForInput: action => ui.input(action) }, {
-      interactive: true,
-      choose: async () => { clock += 750; throw error }
-    })).rejects.toBe(error)
-    expect(reportReleaseError(error, { ui })).toBe(130)
-    const rendered = stripVTControlCharacters(output)
-    expect(rendered).toContain('Total          750ms')
-    expect(rendered).toContain('Execution      0ms (excluding prompts)')
-    expect(rendered).toContain('Prompt wait    750ms (1 prompt)')
-    expect(rendered).toContain('0 completed · 0 failed · 0 cancelled')
-  })
-
-  it.each(['select', 'custom'])('handles cancellation of the %s prompt', async stage => {
-    const controller = new globalThis.AbortController()
-    const cancellation = select({
-      message: 'Cancel selection', options: [{ value: 'next' }],
-      input: new PassThrough(), output: new Writable({ write(chunk, encoding, callback) { callback() } }),
-      signal: controller.signal
-    })
-    controller.abort()
-    const cancelled = await cancellation
-    await expect(selectReleaseVersion(options, {
-      interactive: true, choose: async () => stage === 'custom' ? 'custom' : cancelled, enter: async () => cancelled
-    })).rejects.toBeInstanceOf(ReleaseCancelled)
-  })
-
-  it('does not open a prompt in non-interactive environments', async () => {
-    const choose = vi.fn()
-    await expect(selectReleaseVersion(options, { interactive: false, choose })).rejects.toThrow('interactive terminal')
-    expect(choose).not.toHaveBeenCalled()
   })
 })

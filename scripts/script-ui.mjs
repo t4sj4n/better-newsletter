@@ -5,7 +5,10 @@ import { Writable } from 'node:stream'
 import { stripVTControlCharacters } from 'node:util'
 import { cancel, intro, isCancel, isCI, log, note, outro, S_BAR, spinner, taskLog } from '@clack/prompts'
 import picocolors from 'picocolors'
+import { conciseMessage } from './script-errors.mjs'
 import { checkedResult, liveCommandRunner } from './script-core.mjs'
+
+export { conciseMessage } from './script-errors.mjs'
 
 const graphemes = new Intl.Segmenter(undefined, { granularity: 'grapheme' })
 
@@ -115,22 +118,6 @@ export class ScriptCancelled extends Error {
   }
 }
 
-// Remove Node stack frames and source pointers from subprocess failures too.
-// Full output remains available through --verbose/--debug.
-export function conciseMessage(message) {
-  const cleaned = stripVTControlCharacters(String(message))
-    .replace(/^(?:file:\/\/[^\n]+|\/[^\n]+:\d+(?::\d+)?)\n[\s\S]*?\n(?=\w*Error:)/gmu, '')
-  const lines = cleaned.split('\n').filter(line =>
-    !/^\s*at\s/u.test(line)
-    && !/^(?:file:\/\/|Node\.js v|\s*\^+\s*$)/u.test(line)
-    && !/^\s*\[cause\]:/u.test(line)
-    && !/^\s*\.\.\. \d+ lines matching (?:cause )?stack trace/u.test(line)
-    && !/^\s*(?:[❯>]\s*)?\d+\|/u.test(line)
-    && !/^\s*\|\s*\^+/u.test(line)
-  )
-  return (lines.length > 16 ? [...lines.slice(0, 8), '… (use --verbose for full output)', ...lines.slice(-8)] : lines).join('\n').trim()
-}
-
 function commandFailureMessage(error) {
   const result = error?.commandResult
   if (!result || !(result.command === 'vitest' || result.args.includes('vitest'))) {
@@ -164,7 +151,7 @@ export function reportScriptError(error, { verbose = false, ui = createScriptUi(
     return error.exitCode
   }
   const errors = errorTree(error)
-  // AggregateError's first member is the release failure; later members are cleanup failures.
+  // AggregateError's first member is the operation failure; later members are cleanup failures.
   let root = error
   const seen = new Set()
   while (!seen.has(root)) {

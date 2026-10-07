@@ -7,7 +7,7 @@ import { PassThrough, Writable } from 'node:stream'
 import { fileURLToPath, URL } from 'node:url'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { select } from '@clack/prompts'
-import { dryRunFlags, parseScriptArgs, runScriptCli, validateScriptOptions } from '../scripts/script-cli.mjs'
+import { parseScriptArgs, runScriptCli } from '../scripts/script-cli.mjs'
 import { checked, runScriptChecks } from '../scripts/script-core.mjs'
 import { createScriptUi, ScriptCancelled } from '../scripts/script-ui.mjs'
 
@@ -28,8 +28,7 @@ describe('shared script CLI', () => {
     expect(parseScriptArgs(['--write', '--debug', 'snapshot'], { flags: { '--write': 'write' }, maxPositionals: 1 }))
       .toEqual({ options: { verbose: true, write: true }, positionals: ['snapshot'] })
     expect(() => parseScriptArgs(['--dry-run'])).toThrow('Unexpected script arguments')
-    expect(() => parseScriptArgs(['--skip-git-checks'], { flags: dryRunFlags, validate: validateScriptOptions }))
-      .toThrow('--skip-git-checks requires --dry-run')
+
   })
 
   it('renders another script with the same summary and measures cancelled prompt waits', async () => {

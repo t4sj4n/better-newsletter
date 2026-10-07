@@ -2,14 +2,6 @@ import process from 'node:process'
 import { createScriptUi, reportScriptError } from './script-ui.mjs'
 
 export const diagnosticFlags = Object.freeze({ '--verbose': 'verbose', '--debug': 'verbose' })
-export const dryRunFlags = Object.freeze({ '--dry-run': 'dryRun', '--skip-validation': 'skipValidation', '--skip-git-checks': 'skipGitChecks' })
-
-/** Dry-run flags are opt-in; scripts must implement isolation before accepting them. */
-export function validateScriptOptions({ dryRun = false, skipValidation = false, skipGitChecks = false } = {}, { subject = 'Real runs' } = {}) {
-  if (skipValidation && !dryRun) throw new Error(`--skip-validation requires --dry-run. ${subject} must run all validation checks.`)
-  if (skipGitChecks && !dryRun) throw new Error(`--skip-git-checks requires --dry-run. ${subject} must run all Git and CI checks.`)
-}
-
 /** Parse boolean flags and positionals without imposing a release-specific interface. */
 export function parseScriptArgs(args, { flags = {}, maxPositionals = 0, usage = 'Unexpected script arguments.', validate = () => {} } = {}) {
   const definitions = { ...diagnosticFlags, ...flags }

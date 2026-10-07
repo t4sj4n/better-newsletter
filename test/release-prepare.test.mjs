@@ -1,15 +1,18 @@
 import { execFileSync } from 'node:child_process'
 import { createHash } from 'node:crypto'
-import { mkdtempSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
+import { existsSync, mkdtempSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import process from 'node:process'
+import { Writable } from 'node:stream'
 import { URLSearchParams } from 'node:url'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { loadChangelogConfig } from 'changelogen'
 import { commandRunner, distTag, githubRelease, nextVersion, npmVersion, publishPlan, requireSuccessfulCi } from '../scripts/release-core.mjs'
 import { prepareRelease, releaseCommits } from '../scripts/release-prepare.mjs'
 import { publishRelease } from '../scripts/release-publish.mjs'
+import { dryRunCommandRunner } from '../scripts/release-dry-run.mjs'
+import { createReleaseUi, ReleaseCancelled } from '../scripts/release-ui.mjs'
 import { releaseNotes, releasePackages, releasePaths, repository, requiredCi, validateArtifacts, validatePreparation } from '../scripts/release-policy.mjs'
 
 const directories = []
@@ -65,68 +68,74 @@ function fixture() {
     calls: [], fail: '', published: new Map(), release: null, npmMetadataFormat: 'object', ciRuns: null,
     missingVersionResponse: { status: 1, stdout: '{"error":{"code":"E404"}}', stderr: 'npm error code E404\n' }
   }
-  const real = commandRunner(cwd)
   const ok = stdout => ({ status: 0, stdout: stdout ?? '', stderr: '' })
-  const run = (command, args, options) => {
-    state.calls.push([command, args, options])
-    if (state.fail && [command, ...args].includes(state.fail)) {
-      return { status: 1, stdout: '', stderr: `Simulated failure: ${state.fail}` }
-    }
-    if (command === 'git') {
-      if (args[0] === 'remote' && args[1] === 'get-url') return ok('https://github.com/t4sj4n/better-newsletter.git')
-      return real(command, args, options)
-    }
-    if (command === 'pnpm') {
-      if (args[0] === 'install') {
-        const cli = JSON.parse(read('packages/cli/package.json'))
-        writeFileSync(join(cwd, 'pnpm-lock.yaml'), cli.dependencies['better-newsletter'])
+  const runForDirectory = directory => {
+    const cwd = directory
+    const real = commandRunner(cwd)
+    const read = path => readFileSync(join(cwd, path), 'utf8')
+    const git = args => execFileSync('git', args, { cwd, encoding: 'utf8', stdio: 'pipe' }).trimEnd()
+    return (command, args, options) => {
+      state.calls.push([command, args, options])
+      if (state.fail && [command, ...args].includes(state.fail)) {
+        return { status: 1, stdout: '', stderr: `Simulated failure: ${state.fail}` }
       }
-      return ok()
-    }
-    if (command === 'node' && args[0] === 'scripts/smoke-pack.mjs') {
-      if (args[1] === '--pack-destination') {
-        for (const pkg of releasePackages(cwd)) {
-          writeFileSync(join(args[2], tarball(pkg)), `packed ${pkg.name}@${pkg.version}`)
+      if (command === 'git') {
+        if (args[0] === 'remote' && args[1] === 'get-url') return ok('https://github.com/t4sj4n/better-newsletter.git')
+        return real(command, args, options)
+      }
+      if (command === 'pnpm') {
+        if (args[0] === 'install' && args.includes('--lockfile-only')) {
+          const cli = JSON.parse(read('packages/cli/package.json'))
+          writeFileSync(join(cwd, 'pnpm-lock.yaml'), cli.dependencies['better-newsletter'])
         }
-      }
-      return ok()
-    }
-    if (command === 'npm') {
-      if (args[0] === 'whoami') return ok('release-test')
-      if (args[0] === 'view') {
-        const existing = state.published.get(args[1])
-        return existing
-          ? ok(JSON.stringify(state.npmMetadataFormat === 'array' ? [existing] : existing))
-          : state.missingVersionResponse
-      }
-      if (args[0] === 'publish') {
-        const pkg = releasePackages(cwd).find(pkg => args[1].endsWith(tarball(pkg)))
-        state.published.set(`${pkg.name}@${pkg.version}`, {
-          name: pkg.name, version: pkg.version,
-          dist: { integrity: `sha512-${createHash('sha512').update(readFileSync(args[1])).digest('base64')}` }
-        })
         return ok()
       }
-    }
-    if (command === 'gh') {
-      if (args[0] === 'auth') return ok()
-      if (args[0] === 'pr') return ok('https://github.com/t4sj4n/better-newsletter/pull/100')
-      if (args[0] === 'api') {
-        if (args[1] === `repos/${repository}/actions/workflows/ci.yml`) return ok(JSON.stringify(ciWorkflow))
-        if (args.at(-1).includes(`/actions/workflows/${ciWorkflow.id}/runs?`)) {
-          const runs = state.ciRuns ?? [ciRun(git(['rev-parse', 'HEAD']))]
-          return ok(JSON.stringify([{ total_count: runs.length, workflow_runs: runs }]))
+      if (command === 'node' && args[0] === 'scripts/smoke-pack.mjs') {
+        if (args[1] === '--pack-destination') {
+          for (const pkg of releasePackages(cwd)) {
+            writeFileSync(join(args[2], tarball(pkg)), `packed ${pkg.name}@${pkg.version}`)
+          }
         }
-        return state.release ? ok(`HTTP/2 200 OK\n\n${JSON.stringify(state.release)}`)
-          : { status: 1, stdout: 'HTTP/2 404 Not Found\n\n{"message":"Not Found"}', stderr: '' }
-      }
-      if (args[0] === 'release' && args[1] === 'create') {
-        state.release = { tag_name: args[2], prerelease: args.includes('--prerelease'), draft: false }
         return ok()
       }
+      if (command === 'npm') {
+        if (args[0] === 'whoami') return ok('release-test')
+        if (args[0] === 'view') {
+          const existing = state.published.get(args[1])
+          return existing
+            ? ok(JSON.stringify(state.npmMetadataFormat === 'array' ? [existing] : existing))
+            : state.missingVersionResponse
+        }
+        if (args[0] === 'publish') {
+          const pkg = releasePackages(cwd).find(pkg => args[1].endsWith(tarball(pkg)))
+          state.published.set(`${pkg.name}@${pkg.version}`, {
+            name: pkg.name, version: pkg.version,
+            dist: { integrity: `sha512-${createHash('sha512').update(readFileSync(args[1])).digest('base64')}` }
+          })
+          return ok()
+        }
+      }
+      if (command === 'gh') {
+        if (args[0] === 'auth') return ok()
+        if (args[0] === 'pr') return ok('https://github.com/t4sj4n/better-newsletter/pull/100')
+        if (args[0] === 'api') {
+          if (args[1] === `repos/${repository}/actions/workflows/ci.yml`) return ok(JSON.stringify(ciWorkflow))
+          if (args.at(-1).includes(`/actions/workflows/${ciWorkflow.id}/runs?`)) {
+            const runs = state.ciRuns ?? [ciRun(git(['rev-parse', 'HEAD']))]
+            return ok(JSON.stringify([{ total_count: runs.length, workflow_runs: runs }]))
+          }
+          return state.release ? ok(`HTTP/2 200 OK\n\n${JSON.stringify(state.release)}`)
+            : { status: 1, stdout: 'HTTP/2 404 Not Found\n\n{"message":"Not Found"}', stderr: '' }
+        }
+        if (args[0] === 'release' && args[1] === 'create') {
+          state.release = { tag_name: args[2], prerelease: args.includes('--prerelease'), draft: false }
+          return ok()
+        }
+      }
+      throw new Error(`Unexpected test command: ${command} ${args.join(' ')}`)
     }
-    throw new Error(`Unexpected test command: ${command} ${args.join(' ')}`)
   }
+  const run = runForDirectory(cwd)
   function prepareCommit(version = '0.1.0-rc.1', base = git(['rev-parse', 'HEAD'])) {
     const packages = releasePackages(cwd)
     for (const pkg of packages) {
@@ -141,7 +150,7 @@ function fixture() {
     git(['commit', '-m', `🔖 Release v${version}`])
     git(['push', 'origin', 'main'])
   }
-  return { cwd, git, read, run, state, prepareCommit }
+  return { cwd, git, read, run, runForDirectory, state, prepareCommit }
 }
 
 function tarball(pkg) {
@@ -154,6 +163,455 @@ function mutations(state) {
     || (command === 'npm' && args[0] === 'publish')
     || (command === 'gh' && args[0] === 'release' && args[1] === 'create'))
 }
+
+describe('release dry-run', () => {
+  function snapshot({ git, read }) {
+    return {
+      refs: git(['show-ref']), head: git(['rev-parse', 'HEAD']),
+      branch: git(['branch', '--show-current']), status: git(['status', '--porcelain']),
+      staged: git(['diff', '--cached', '--binary']),
+      files: [...releasePaths, 'package.json', 'schema.sql'].map(read),
+      remoteRefs: git(['ls-remote', 'origin'])
+    }
+  }
+
+  function isolatedRunner(f) {
+    const copies = []
+    return {
+      copies,
+      runForDirectory: directory => {
+        copies.push(directory)
+        return f.runForDirectory(directory)
+      }
+    }
+  }
+
+  function expectNoReleaseMutations(state, published = 0) {
+    expect(mutations(state)).toEqual([])
+    expect(state.calls.some(([command, args]) => command === 'git'
+      && ['add', 'commit', 'switch', 'checkout'].includes(args[0]))).toBe(false)
+    expect(state.calls.some(([command, args]) => command === 'gh' && args[0] === 'pr')).toBe(false)
+    expect(state.published.size).toBe(published)
+    expect(state.release).toBeNull()
+  }
+
+  it.each(['prepare', 'publish'])('rejects skipping validation for real %s before invoking any commands', async kind => {
+    const run = vi.fn()
+    await expect(kind === 'prepare'
+      ? prepareRelease('/unused', 'prerelease', { run, skipValidation: true })
+      : publishRelease('/unused', { run, skipValidation: true, resume: true }))
+      .rejects.toThrow('--skip-validation requires --dry-run')
+    expect(run).not.toHaveBeenCalled()
+  })
+
+  it.each(['prepare', 'publish'])('rejects skipping Git checks for real %s before invoking any commands', async kind => {
+    const run = vi.fn()
+    await expect(kind === 'prepare'
+      ? prepareRelease('/unused', 'prerelease', { run, skipGitChecks: true })
+      : publishRelease('/unused', { run, skipGitChecks: true, resume: true }))
+      .rejects.toThrow('--skip-git-checks requires --dry-run')
+    expect(run).not.toHaveBeenCalled()
+  })
+
+  it.each(['prepare', 'publish'].flatMap(kind => [false, true].map(skipValidation => ({ kind, skipValidation }))))(
+    'runs a development $kind dry-run on a dirty feature branch (skipValidation: $skipValidation)', async ({ kind, skipValidation }) => {
+      const f = fixture()
+      if (kind === 'publish') f.prepareCommit()
+      f.git(['switch', '-c', 'dev/release-scripts'])
+      writeFileSync(join(f.cwd, 'schema.sql'), `${f.read('schema.sql')}-- Committed development change\n`)
+      f.git(['add', 'schema.sql'])
+      f.git(['commit', '-m', 'Develop release scripts'])
+      writeFileSync(join(f.cwd, 'schema.sql'), `${f.read('schema.sql')}-- Staged development change\n`)
+      f.git(['add', 'schema.sql'])
+      writeFileSync(join(f.cwd, 'schema.sql'), `${f.read('schema.sql')}-- Unstaged development change\n`)
+      writeFileSync(join(f.cwd, 'untracked.txt'), 'Untracked development change')
+      f.state.ciRuns = [ciRun(f.git(['rev-parse', 'HEAD']), { conclusion: 'failure' })]
+      const before = snapshot(f)
+      const isolated = isolatedRunner(f)
+      const options = { run: f.run, dryRun: true, skipGitChecks: true, skipValidation, ...isolated }
+      const result = await (kind === 'prepare' ? prepareRelease(f.cwd, 'prerelease', options) : publishRelease(f.cwd, options))
+      expect(result.gitChecksSkipped).toBe(true)
+      expect(kind === 'prepare' ? result.base : result.commit).toBe(before.head)
+      expect(snapshot(f)).toEqual(before)
+      expectNoReleaseMutations(f.state)
+      expect(f.state.calls.some(([command, args]) => command === 'git' && args.includes('refs/heads/main:refs/remotes/origin/main'))).toBe(false)
+      expect(f.state.calls.some(([command, args]) => command === 'gh' && args.some(arg => arg.includes('/actions/workflows/')))).toBe(false)
+      expect(f.state.calls.some(([command]) => command === 'node')).toBe(!skipValidation)
+      expect(existsSync(isolated.copies[0])).toBe(false)
+    }
+  )
+
+  it('previews development recovery even when the existing tag predates the feature branch', async () => {
+    const f = fixture()
+    f.prepareCommit()
+    await publishRelease(f.cwd, { run: f.run })
+    f.git(['switch', '-c', 'dev/release-scripts'])
+    f.git(['commit', '--allow-empty', '-m', 'Develop release scripts'])
+    writeFileSync(join(f.cwd, 'schema.sql'), `${f.read('schema.sql')}-- Uncommitted change\n`)
+    const before = snapshot(f)
+    const isolated = isolatedRunner(f)
+    f.state.calls = []
+    let output = ''
+    const ui = createReleaseUi({ output: new Writable({ write(chunk, encoding, callback) { output += chunk; callback() } }) })
+    const result = await publishRelease(f.cwd, { run: f.run, dryRun: true, skipGitChecks: true, skipValidation: true, resume: true, ...isolated, ui })
+    expect(result.plan).toMatchObject({ createTag: false, pushTag: false, createRelease: false, packages: [] })
+    expect(result.gitChecksSkipped).toBe(true)
+    expect(output.replaceAll('│', ' ').replace(/\s+/gu, ' ')).toContain('tag commit and manifest not verified')
+    expect(output).not.toContain('Keep verified tag')
+    expect(snapshot(f)).toEqual(before)
+    expect(mutations(f.state)).toEqual([])
+    expect(existsSync(isolated.copies[0])).toBe(false)
+  })
+
+  it.each(['prepare', 'publish'])('requires main for an ordinary %s dry-run without the development option', async kind => {
+    const f = fixture()
+    f.git(['switch', '-c', 'dev/release-scripts'])
+    await expect(kind === 'prepare'
+      ? prepareRelease(f.cwd, 'prerelease', { run: f.run, dryRun: true })
+      : publishRelease(f.cwd, { run: f.run, dryRun: true }))
+      .rejects.toThrow('Releases must start on main')
+    expectNoReleaseMutations(f.state)
+  })
+
+  it.each(['prepare', 'publish'])('previews %s with validation skipped without running local checks or installing dependencies', async kind => {
+    const f = fixture()
+    if (kind === 'publish') f.prepareCommit()
+    writeFileSync(join(f.cwd, 'schema.sql'), `${f.read('schema.sql')}-- Uncommitted preview change\n`)
+    const before = snapshot(f)
+    const isolated = isolatedRunner(f)
+    let output = ''
+    const stream = new Writable({ write(chunk, encoding, callback) { output += chunk; callback() } })
+    const ui = createReleaseUi({ output: stream })
+    ui.start('fast preview')
+    let lockfile
+    const runForDirectory = directory => {
+      lockfile = join(directory, 'pnpm-lock.yaml')
+      const run = isolated.runForDirectory(directory)
+      return (command, args, options) => {
+        if (command === 'pnpm' || command === 'node') throw new Error('Preview unexpectedly ran local validation or dependency installation')
+        expect(readFileSync(lockfile, 'utf8')).toBe(f.read('pnpm-lock.yaml'))
+        return run(command, args, options)
+      }
+    }
+    const options = { run: f.run, dryRun: true, skipValidation: true, runForDirectory, ui }
+    const result = await (kind === 'prepare' ? prepareRelease(f.cwd, 'prerelease', options) : publishRelease(f.cwd, options))
+    expect(result.validationSkipped).toBe(true)
+    expect(result.notes).toContain(kind === 'prepare' ? 'Add a capability' : 'Release notes.')
+    expect(result.manifest).toBeUndefined()
+    expect(output).toContain('local validation was skipped')
+    expect(output).toContain('Release notes preview')
+    expect(output).not.toContain('Dry-run validation passed')
+    expect(snapshot(f)).toEqual(before)
+    expectNoReleaseMutations(f.state)
+    expect(f.state.calls.some(([command]) => command === 'pnpm' || command === 'node')).toBe(false)
+    expect(isolated.copies).toHaveLength(1)
+    expect(existsSync(isolated.copies[0])).toBe(false)
+    if (kind === 'publish') {
+      expect(result.plan.packages).toHaveLength(2)
+      expect(output).not.toContain('with validated artifact integrities')
+      expect(f.state.calls.filter(([command, args]) => command === 'gh' && args.at(-1).includes('/runs?'))).toHaveLength(2)
+    } else expect(output).toContain('Skipping lockfile generation')
+  })
+
+  it.each(['prepare', 'publish'])('retains release guards and removes the quick %s preview copy on failure', async kind => {
+    const f = fixture()
+    if (kind === 'publish') {
+      f.prepareCommit()
+      f.state.ciRuns = [ciRun(f.git(['rev-parse', 'HEAD']), { conclusion: 'failure' })]
+    } else f.git(['branch', 'release/v0.1.0-rc.1'])
+    const before = snapshot(f)
+    const isolated = isolatedRunner(f)
+    const options = { run: f.run, dryRun: true, skipValidation: true, ...isolated }
+    await expect(kind === 'prepare' ? prepareRelease(f.cwd, 'prerelease', options) : publishRelease(f.cwd, options))
+      .rejects.toThrow(kind === 'prepare' ? 'already exists' : 'Wait for successful CI')
+    expect(snapshot(f)).toEqual(before)
+    expectNoReleaseMutations(f.state)
+    expect(f.state.calls.some(([command]) => command === 'pnpm' || command === 'node')).toBe(false)
+    expect(existsSync(isolated.copies[0])).toBe(false)
+  })
+
+  it('previews recovery without claiming skipped artifact integrity checks passed', async () => {
+    const f = fixture()
+    f.prepareCommit()
+    const interrupted = (command, args, options) => {
+      if (command === 'npm' && args[0] === 'publish' && args[1].includes('better-newsletter-cli')) {
+        return { status: 1, stdout: '', stderr: 'Simulated publication failure' }
+      }
+      return f.run(command, args, options)
+    }
+    await expect(publishRelease(f.cwd, { run: interrupted })).rejects.toThrow('interrupted')
+    f.git(['tag', '-d', 'v0.1.0-rc.1'])
+    f.state.calls = []
+    const before = snapshot(f)
+    const isolated = isolatedRunner(f)
+    let output = ''
+    const stream = new Writable({ write(chunk, encoding, callback) { output += chunk; callback() } })
+    const result = await publishRelease(f.cwd, { run: f.run, dryRun: true, skipValidation: true, resume: true,
+      ...isolated, ui: createReleaseUi({ output: stream }) })
+    expect(result.validationSkipped).toBe(true)
+    expect(result.manifest).toBeUndefined()
+    expect(result.plan.packages.map(pkg => pkg.name)).toEqual(['@better-newsletter/cli'])
+    expect(output).toContain('artifact manifest not verified')
+    expect(output.replaceAll('│', ' ').replace(/\s+/gu, ' ')).toContain('artifact integrity not verified')
+    expect(output).not.toContain('Keep verified')
+    expect(snapshot(f)).toEqual(before)
+    expectNoReleaseMutations(f.state, 1)
+    expect(f.state.calls.some(([command]) => command === 'pnpm' || command === 'node')).toBe(false)
+    expect(existsSync(isolated.copies[0])).toBe(false)
+  })
+
+  it('prepares and validates versions and release notes only in an isolated copy', async () => {
+    const f = fixture()
+    const before = snapshot(f)
+    const isolated = isolatedRunner(f)
+    const result = await prepareRelease(f.cwd, 'prerelease', { run: f.run, dryRun: true, ...isolated })
+    expect(result.version).toBe('0.1.0-rc.1')
+    expect(result.base).toBe(before.head)
+    expect(result.notes).toContain('Add a capability')
+    expect(result.notes).toContain('Preserve request isolation')
+    expect(result.paths).toEqual(releasePaths)
+    expect(snapshot(f)).toEqual(before)
+    expectNoReleaseMutations(f.state)
+    expect(isolated.copies).toHaveLength(1)
+    expect(existsSync(isolated.copies[0])).toBe(false)
+    expect(f.state.calls.filter(([command]) => command === 'pnpm').map(([, args]) => args)).toContainEqual(['install', '--frozen-lockfile'])
+    expect(f.state.calls.filter(([command]) => command === 'pnpm').map(([, args]) => args)).toContainEqual(['migration:snapshot:check'])
+    expect(f.state.calls.some(([command, args]) => command === 'node' && args[0] === 'scripts/smoke-pack.mjs')).toBe(true)
+  })
+
+  it('rejects local release branches preserved by the isolated Git clone', async () => {
+    const f = fixture()
+    f.git(['branch', 'release/v0.1.0-rc.1'])
+    const before = snapshot(f)
+    const isolated = isolatedRunner(f)
+    await expect(prepareRelease(f.cwd, 'prerelease', { run: f.run, dryRun: true, ...isolated })).rejects.toThrow('already exists')
+    expect(snapshot(f)).toEqual(before)
+    expectNoReleaseMutations(f.state)
+    expect(existsSync(isolated.copies[0])).toBe(false)
+  })
+
+  it('keeps existing dependencies and build output separate from the temporary copy', async () => {
+    const f = fixture()
+    writeFileSync(join(f.cwd, '.gitignore'), 'node_modules/\ndist/\n')
+    f.git(['add', '.gitignore'])
+    f.git(['commit', '-m', 'Ignore generated files'])
+    f.git(['push', 'origin', 'main'])
+    for (const path of ['node_modules', 'dist']) {
+      mkdirSync(join(f.cwd, path))
+      writeFileSync(join(f.cwd, path, 'keep.txt'), 'original output')
+    }
+    const before = snapshot(f)
+    let copy
+    const runForDirectory = directory => {
+      copy = directory
+      expect(existsSync(join(directory, 'node_modules'))).toBe(false)
+      expect(existsSync(join(directory, 'dist'))).toBe(false)
+      const run = f.runForDirectory(directory)
+      return (command, args, options) => {
+        if (command === 'pnpm' && args.includes('--frozen-lockfile')) {
+          mkdirSync(join(directory, 'node_modules'))
+          writeFileSync(join(directory, 'node_modules', 'keep.txt'), 'isolated dependencies')
+        }
+        if (command === 'pnpm' && args[0] === 'build') {
+          mkdirSync(join(directory, 'dist'))
+          writeFileSync(join(directory, 'dist', 'keep.txt'), 'isolated build')
+        }
+        return run(command, args, options)
+      }
+    }
+    await prepareRelease(f.cwd, 'prerelease', { run: f.run, dryRun: true, runForDirectory })
+    expect(snapshot(f)).toEqual(before)
+    expect(f.read('node_modules/keep.txt')).toBe('original output')
+    expect(f.read('dist/keep.txt')).toBe('original output')
+    expect(existsSync(copy)).toBe(false)
+    expectNoReleaseMutations(f.state)
+  })
+
+  it('removes the isolated copy when the version prompt is cancelled', async () => {
+    const f = fixture()
+    const before = snapshot(f)
+    const isolated = isolatedRunner(f)
+    await expect(prepareRelease(f.cwd, undefined, {
+      run: f.run, dryRun: true, ...isolated,
+      selectVersion: () => { throw new ReleaseCancelled() }
+    })).rejects.toMatchObject({ exitCode: 130 })
+    expect(snapshot(f)).toEqual(before)
+    expect(existsSync(isolated.copies[0])).toBe(false)
+    expectNoReleaseMutations(f.state)
+  })
+
+  it.each(['install', 'lint', 'typecheck', 'build', 'migration:snapshot:check', 'scripts/smoke-pack.mjs'])(
+    'cleans up failed prepare validation (%s) without touching the checkout', async fail => {
+      const f = fixture()
+      const before = snapshot(f)
+      const isolated = isolatedRunner(f)
+      f.state.fail = fail
+      await expect(prepareRelease(f.cwd, 'prerelease', { run: f.run, dryRun: true, ...isolated })).rejects.toMatchObject({ exitCode: 1 })
+      expect(snapshot(f)).toEqual(before)
+      expectNoReleaseMutations(f.state)
+      expect(existsSync(isolated.copies[0])).toBe(false)
+    }
+  )
+
+  it.each(['prepare', 'publish'])('validates local staged, unstaged and untracked files for %s', async kind => {
+    const f = fixture()
+    if (kind === 'publish') f.prepareCommit()
+    writeFileSync(join(f.cwd, 'schema.sql'), `${f.read('schema.sql')}-- Staged change\n`)
+    f.git(['add', 'schema.sql'])
+    writeFileSync(join(f.cwd, 'schema.sql'), `${f.read('schema.sql')}-- Unstaged change\n`)
+    writeFileSync(join(f.cwd, 'untracked.txt'), 'keep this work')
+    const before = snapshot(f)
+    const isolated = isolatedRunner(f)
+    const factory = isolated.runForDirectory
+    const runForDirectory = directory => {
+      expect(readFileSync(join(directory, 'schema.sql'), 'utf8')).toBe(f.read('schema.sql'))
+      expect(readFileSync(join(directory, 'untracked.txt'), 'utf8')).toBe('keep this work')
+      return factory(directory)
+    }
+    const options = { run: f.run, dryRun: true, runForDirectory }
+    await (kind === 'prepare' ? prepareRelease(f.cwd, 'prerelease', options) : publishRelease(f.cwd, options))
+    expect(snapshot(f)).toEqual(before)
+    expect(f.read('untracked.txt')).toBe('keep this work')
+    expect(isolated.copies).toHaveLength(1)
+    expect(existsSync(isolated.copies[0])).toBe(false)
+    expectNoReleaseMutations(f.state)
+  })
+
+  it.each(['prepare', 'publish'])('still rejects a dirty checkout for a real %s', async kind => {
+    const f = fixture()
+    writeFileSync(join(f.cwd, 'untracked.txt'), 'keep this work')
+    const before = snapshot(f)
+    await expect(kind === 'prepare' ? prepareRelease(f.cwd, 'prerelease', { run: f.run })
+      : publishRelease(f.cwd, { run: f.run })).rejects.toThrow('Commit or stash')
+    expect(snapshot(f)).toEqual(before)
+    expectNoReleaseMutations(f.state)
+  })
+
+  it('copies local deletions and renamed files into the snapshot', async () => {
+    const f = fixture()
+    writeFileSync(join(f.cwd, 'remove.txt'), 'Remove this file in the working tree\n')
+    f.git(['add', 'remove.txt'])
+    f.git(['commit', '-m', 'Add deletion fixture'])
+    f.git(['push', 'origin', 'main'])
+    rmSync(join(f.cwd, 'schema.sql'))
+    writeFileSync(join(f.cwd, 'renamed schema.sql'), '-- Local rename\n')
+    f.git(['add', '--', 'schema.sql', 'renamed schema.sql'])
+    rmSync(join(f.cwd, 'remove.txt'))
+    const before = f.git(['status', '--porcelain'])
+    const runForDirectory = directory => {
+      expect(existsSync(join(directory, 'schema.sql'))).toBe(false)
+      expect(existsSync(join(directory, 'remove.txt'))).toBe(false)
+      expect(readFileSync(join(directory, 'renamed schema.sql'), 'utf8')).toBe('-- Local rename\n')
+      return f.runForDirectory(directory)
+    }
+    await prepareRelease(f.cwd, 'prerelease', { run: f.run, dryRun: true, runForDirectory })
+    expect(f.git(['status', '--porcelain'])).toBe(before)
+    expectNoReleaseMutations(f.state)
+  })
+
+  it.each(['prepare', 'publish'])('still rejects unexpected validation edits in a dirty %s snapshot', async kind => {
+    const f = fixture()
+    if (kind === 'publish') f.prepareCommit()
+    writeFileSync(join(f.cwd, 'schema.sql'), `${f.read('schema.sql')}-- Local change\n`)
+    const before = snapshot(f)
+    const isolated = isolatedRunner(f)
+    const factory = isolated.runForDirectory
+    const runForDirectory = directory => {
+      const run = factory(directory)
+      return (command, args, options) => {
+        if (command === 'pnpm' && args[0] === 'build') {
+          writeFileSync(join(directory, 'schema.sql'), '-- Unexpected validation edit\n')
+          execFileSync('git', ['add', 'schema.sql'], { cwd: directory, stdio: 'pipe' })
+        }
+        return run(command, args, options)
+      }
+    }
+    const options = { run: f.run, dryRun: true, runForDirectory }
+    await expect(kind === 'prepare' ? prepareRelease(f.cwd, 'prerelease', options)
+      : publishRelease(f.cwd, options)).rejects.toThrow(kind === 'prepare' ? 'Validation changed files' : 'Commit or stash')
+    expect(snapshot(f)).toEqual(before)
+    expect(existsSync(isolated.copies[0])).toBe(false)
+    expectNoReleaseMutations(f.state)
+  })
+
+  it('validates publish artifacts, CI and race checks without publishing', async () => {
+    const f = fixture()
+    f.prepareCommit()
+    const before = snapshot(f)
+    const isolated = isolatedRunner(f)
+    const result = await publishRelease(f.cwd, { run: f.run, dryRun: true, ...isolated })
+    expect(result.plan).toMatchObject({ createTag: true, pushTag: true, createRelease: true })
+    expect(result.plan.packages).toHaveLength(2)
+    expect(result.manifest.commit).toBe(before.head)
+    expect(result.manifest.packages.every(pkg => pkg.integrity.startsWith('sha512-'))).toBe(true)
+    expect(f.state.calls.filter(([command, args]) => command === 'gh' && args.at(-1).includes('/runs?'))).toHaveLength(2)
+    expect(snapshot(f)).toEqual(before)
+    expectNoReleaseMutations(f.state)
+    expect(existsSync(isolated.copies[0])).toBe(false)
+  })
+
+  it.each([false, true])('previews recovery and fetches remote tags only in the copy (runtime published: %s)', async runtimePublished => {
+    const f = fixture()
+    f.prepareCommit()
+    const interrupted = (command, args, options) => {
+      if (command === 'npm' && args[0] === 'publish'
+        && (!runtimePublished || args[1].includes('better-newsletter-cli'))) {
+        return { status: 1, stdout: '', stderr: 'Simulated publication failure' }
+      }
+      return f.run(command, args, options)
+    }
+    await expect(publishRelease(f.cwd, { run: interrupted })).rejects.toThrow('interrupted')
+    f.git(['tag', '-d', 'v0.1.0-rc.1'])
+    f.state.calls = []
+    const before = snapshot(f)
+    const isolated = isolatedRunner(f)
+    const result = await publishRelease(f.cwd, { run: f.run, dryRun: true, resume: true, ...isolated })
+    expect(result.plan).toMatchObject({ createTag: false, pushTag: false, createRelease: true })
+    expect(result.plan.packages).toHaveLength(runtimePublished ? 1 : 2)
+    if (runtimePublished) expect(result.plan.packages[0].name).toBe('@better-newsletter/cli')
+    expect(f.state.calls.some(([command, args]) => command === 'git'
+      && args[0] === 'fetch' && args[2] === 'refs/tags/v0.1.0-rc.1:refs/tags/v0.1.0-rc.1')).toBe(true)
+    expect(snapshot(f)).toEqual(before)
+    expectNoReleaseMutations(f.state, runtimePublished ? 1 : 0)
+    expect(existsSync(isolated.copies[0])).toBe(false)
+  })
+
+  it.each(['ci', 'artifacts', 'race'])('fails publish dry-run for invalid %s', async failure => {
+    const f = fixture()
+    f.prepareCommit()
+    const before = snapshot(f)
+    const isolated = isolatedRunner(f)
+    if (failure === 'ci') f.state.ciRuns = [ciRun(before.head, { conclusion: 'failure' })]
+    if (failure === 'artifacts') f.state.fail = 'scripts/smoke-pack.mjs'
+    const factory = isolated.runForDirectory
+    const runForDirectory = directory => {
+      const run = factory(directory)
+      let ciCalls = 0
+      return (command, args, options) => {
+        if (failure === 'race' && command === 'gh' && args.at(-1).includes('/runs?') && ++ciCalls === 2) {
+          f.state.ciRuns = [ciRun(before.head, { run_attempt: 2 })]
+        }
+        return run(command, args, options)
+      }
+    }
+    await expect(publishRelease(f.cwd, { run: f.run, dryRun: true, runForDirectory })).rejects.toThrow()
+    expect(snapshot(f)).toEqual(before)
+    expectNoReleaseMutations(f.state)
+    expect(existsSync(isolated.copies[0])).toBe(false)
+  })
+
+  it.each([
+    ['git', ['commit', '-m', 'release']], ['git', ['push', 'origin', 'main']],
+    ['git', ['tag', '-a', 'v1.0.0']], ['git', ['switch', '-c', 'release/v1.0.0']],
+    ['npm', ['publish', 'package.tgz']], ['pnpm', ['release:publish']],
+    ['gh', ['pr', 'create']], ['gh', ['release', 'create', 'v1.0.0']],
+    ['gh', ['api', '--method=POST', 'repos/example/releases']]
+  ])('centrally blocks %s %j', (command, args) => {
+    const run = vi.fn()
+    expect(() => dryRunCommandRunner(run)(command, args)).toThrow('Dry-run blocked')
+    expect(run).not.toHaveBeenCalled()
+  })
+})
 
 describe('release version selection', () => {
   it.each([
@@ -388,9 +846,9 @@ describe('exact-commit GitHub CI gate', () => {
     return { check: () => requireSuccessfulCi(run, repository, commit, requiredCi), run }
   }
 
-  it('requires the configured workflow file and successful main push for exactly the requested SHA', () => {
+  it('requires the configured workflow file and successful main push for exactly the requested SHA', async () => {
     const { check, run } = gate([ciRun(commit)])
-    expect(check()).toEqual({
+    expect(await check()).toEqual({
       workflowId: 246, id: 1000, runNumber: 1, attempt: 1, status: 'completed', conclusion: 'success'
     })
     expect(run.mock.calls[0]).toEqual(['gh', ['api', `repos/${repository}/actions/workflows/ci.yml`], undefined])
@@ -409,8 +867,8 @@ describe('exact-commit GitHub CI gate', () => {
     ['other workflow', [ciRun(commit, { workflow_id: 999 })]],
     ['PR run', [ciRun(commit, { event: 'pull_request' })]],
     ['other branch', [ciRun(commit, { head_branch: 'release/v1.0.0' })]]
-  ])('blocks %s even if returned by GitHub', (_, runs) => {
-    expect(gate(runs).check).toThrow('No required CI run for exact commit')
+  ])('blocks %s even if returned by GitHub', async (_, runs) => {
+    await expect(gate(runs).check()).rejects.toThrow('No required CI run for exact commit')
   })
 
   it.each([
@@ -418,12 +876,12 @@ describe('exact-commit GitHub CI gate', () => {
     ['completed', 'failure'], ['completed', 'cancelled'], ['completed', 'timed_out'],
     ['completed', 'neutral'], ['completed', 'skipped'], ['completed', 'action_required'],
     ['completed', 'stale'], ['completed', null], ['in_progress', 'success']
-  ])('blocks status %s / conclusion %s', (status, conclusion) => {
-    expect(gate([ciRun(commit, { status, conclusion })]).check).toThrow('not completed/success')
+  ])('blocks status %s / conclusion %s', async (status, conclusion) => {
+    await expect(gate([ciRun(commit, { status, conclusion })]).check()).rejects.toThrow('not completed/success')
   })
 
   it.each(['queued', 'in_progress', 'failure', 'success'])(
-    'selects the newest run across pages without falling back to old success: %s', state => {
+    'selects the newest run across pages without falling back to old success: %s', async state => {
       const latest = ciRun(commit, {
         id: 1001, run_number: 2,
         status: ['queued', 'in_progress'].includes(state) ? state : 'completed',
@@ -435,59 +893,59 @@ describe('exact-commit GitHub CI gate', () => {
           { total_count: 3, workflow_runs: [ciRun('b'.repeat(40), { id: 2000, run_number: 3 }), latest] }
         ]
       })
-      if (state === 'success') expect(check().id).toBe(1001)
-      else expect(check).toThrow('not completed/success')
+      if (state === 'success') expect((await check()).id).toBe(1001)
+      else await expect(check()).rejects.toThrow('not completed/success')
     }
   )
 
-  it('uses run ID then attempt as deterministic tie-breakers', () => {
-    expect(gate([
+  it('uses run ID then attempt as deterministic tie-breakers', async () => {
+    expect((await gate([
       ciRun(commit, { id: 1001, run_attempt: 1 }),
       ciRun(commit, { id: 1000, run_attempt: 3 }),
       ciRun(commit, { id: 1001, run_attempt: 2 })
-    ]).check().attempt).toBe(2)
+    ]).check()).attempt).toBe(2)
   })
 
   it.each([
     { ...ciWorkflow, path: '.github/workflows/not-ci.yml' },
     { ...ciWorkflow, state: 'disabled_manually' },
     { ...ciWorkflow, id: null }
-  ])('blocks unexpected or inactive workflow metadata: %j', metadata => {
-    expect(gate([ciRun(commit)], { metadata }).check).toThrow('unexpected metadata')
+  ])('blocks unexpected or inactive workflow metadata: %j', async metadata => {
+    await expect(gate([ciRun(commit)], { metadata }).check()).rejects.toThrow('unexpected metadata')
   })
 
   it.each([
     { pages: [] }, { pages: {} }, { pages: [{ total_count: 0, workflow_runs: null }] },
     { pages: [{ total_count: 2, workflow_runs: [ciRun(commit)] }] },
     { pages: [{ total_count: 1, workflow_runs: [] }, { total_count: 0, workflow_runs: [] }] }
-  ])('blocks malformed, incomplete or changing pagination: %j', ({ pages }) => {
-    expect(gate([], { pages }).check).toThrow()
+  ])('blocks malformed, incomplete or changing pagination: %j', async ({ pages }) => {
+    await expect(gate([], { pages }).check()).rejects.toThrow()
   })
 
-  it.each(['id', 'run_number', 'run_attempt'])('blocks invalid run identity %s', field => {
-    expect(gate([ciRun(commit, { [field]: null })]).check).toThrow('Unexpected GitHub CI run identity')
+  it.each(['id', 'run_number', 'run_attempt'])('blocks invalid run identity %s', async field => {
+    await expect(gate([ciRun(commit, { [field]: null })]).check()).rejects.toThrow('Unexpected GitHub CI run identity')
   })
 
-  it.each(['Bad credentials', 'API rate limit exceeded', 'network timeout'])('blocks GitHub errors: %s', stderr => {
+  it.each(['Bad credentials', 'API rate limit exceeded', 'network timeout'])('blocks GitHub errors: %s', async stderr => {
     const run = () => ({ status: 1, stdout: '', stderr })
-    expect(() => requireSuccessfulCi(run, repository, commit, requiredCi)).toThrow(stderr)
+    await expect(requireSuccessfulCi(run, repository, commit, requiredCi)).rejects.toThrow(stderr)
   })
 
-  it('blocks malformed GitHub JSON', () => {
-    expect(() => requireSuccessfulCi(() => ({ status: 0, stdout: 'not JSON', stderr: '' }),
-      repository, commit, requiredCi)).toThrow()
+  it('blocks malformed GitHub JSON', async () => {
+    await expect(requireSuccessfulCi(() => ({ status: 0, stdout: 'not JSON', stderr: '' }),
+      repository, commit, requiredCi)).rejects.toThrow()
   })
 })
 
 describe('release publication', () => {
   it.each(['0.1.0-rc.1', '0.1.0'].flatMap(version => ['object', 'array'].map(format => [version, format])))(
-    'publishes %s without DATABASE_URL after CI/artifact validation, runtime before CLI with %s npm metadata', (version, format) => {
+    'publishes %s without DATABASE_URL after CI/artifact validation, runtime before CLI with %s npm metadata', async (version, format) => {
       const { cwd, git, run, state, prepareCommit } = fixture()
       state.npmMetadataFormat = format
       prepareCommit(version)
       const head = git(['rev-parse', 'HEAD'])
       expect(process.env.DATABASE_URL).toBeUndefined()
-      publishRelease(cwd, { run })
+      await publishRelease(cwd, { run })
       const actions = mutations(state)
       expect(actions.map(([command, args]) => [command, args[0]])).toEqual([
         ['git', 'tag'], ['git', 'push'], ['npm', 'publish'], ['npm', 'publish'], ['gh', 'release']
@@ -516,9 +974,9 @@ describe('release publication', () => {
       expect(actions[4][2].input).toContain('Release notes.')
       expect(actions[4][2].input).not.toContain('release-base:')
       expect(state.release.prerelease).toBe(version.includes('-'))
-      expect(() => publishRelease(cwd, { run })).toThrow('already exists')
+      await expect(publishRelease(cwd, { run })).rejects.toThrow('already exists')
       state.calls = []
-      publishRelease(cwd, { run, resume: true })
+      await publishRelease(cwd, { run, resume: true })
       expect(mutations(state)).toEqual([])
     }
   )
@@ -526,7 +984,7 @@ describe('release publication', () => {
   it.each([
     'no run', 'other SHA', 'queued', 'in_progress', 'failure', 'cancelled', 'timed_out',
     'neutral', 'skipped', 'action_required', 'newer queued run', 'auth error', 'API error'
-  ])('blocks publication and resume before artifact checks or mutations for CI %s', condition => {
+  ])('blocks publication and resume before artifact checks or mutations for CI %s', async condition => {
     const { cwd, git, run, state, prepareCommit } = fixture()
     prepareCommit()
     const commit = git(['rev-parse', 'HEAD'])
@@ -540,14 +998,14 @@ describe('release publication', () => {
             })]
     if (condition === 'auth error') state.fail = 'auth'
     if (condition === 'API error') state.fail = 'api'
-    expect(() => publishRelease(cwd, { run })).toThrow()
-    expect(() => publishRelease(cwd, { run, resume: true })).toThrow()
+    await expect(publishRelease(cwd, { run })).rejects.toThrow()
+    await expect(publishRelease(cwd, { run, resume: true })).rejects.toThrow()
     expect(state.calls.some(([command]) => command === 'pnpm' || command === 'node')).toBe(false)
     expect(mutations(state)).toEqual([])
   })
 
   it.each(['queued rerun', 'failed rerun', 'new successful run', 'new successful attempt', 'missing run', 'API error', 'workflow disabled'])(
-    'blocks all mutations when CI changes during artifact validation: %s', condition => {
+    'blocks all mutations when CI changes during artifact validation: %s', async condition => {
       const { cwd, git, run, state, prepareCommit } = fixture()
       prepareCommit()
       const commit = git(['rev-parse', 'HEAD'])
@@ -568,7 +1026,7 @@ describe('release publication', () => {
         }
         return result
       }
-      expect(() => publishRelease(cwd, { run: raced })).toThrow()
+      await expect(publishRelease(cwd, { run: raced })).rejects.toThrow()
       expect(mutations(state)).toEqual([])
       expect(git(['tag', '--list', 'v0.1.0-rc.1'])).toBe('')
       expect(state.published.size).toBe(0)
@@ -577,7 +1035,7 @@ describe('release publication', () => {
   )
 
   it.each(['HEAD', 'origin/main', 'working tree', 'branch'])(
-    'blocks mutations when %s changes during artifact validation', condition => {
+    'blocks mutations when %s changes during artifact validation', async condition => {
       const { cwd, git, run, state, prepareCommit } = fixture()
       prepareCommit()
       const raced = (command, args, options) => {
@@ -595,7 +1053,7 @@ describe('release publication', () => {
         }
         return result
       }
-      expect(() => publishRelease(cwd, { run: raced })).toThrow()
+      await expect(publishRelease(cwd, { run: raced })).rejects.toThrow()
       expect(mutations(state)).toEqual([])
     }
   )
@@ -612,7 +1070,7 @@ describe('release publication', () => {
     git(['commit', '-m', '🔖 Release v0.1.0-rc.1'])
     git(['push', 'origin', 'main'])
     state.calls = []
-    publishRelease(cwd, { run })
+    await publishRelease(cwd, { run })
     expect(state.published.size).toBe(2)
     expect(state.release.tag_name).toBe('v0.1.0-rc.1')
   })
@@ -633,8 +1091,8 @@ describe('release publication', () => {
     expect(read('CHANGELOG.md')).toContain(`<!-- release-base: ${base} -->`)
     expect(read('CHANGELOG.md')).not.toContain('Add feature B')
     state.calls = []
-    expect(() => publishRelease(cwd, { run })).toThrow('main advanced before the release merge')
-    expect(() => publishRelease(cwd, { run, resume: true })).toThrow('main advanced before the release merge')
+    await expect(publishRelease(cwd, { run })).rejects.toThrow('main advanced before the release merge')
+    await expect(publishRelease(cwd, { run, resume: true })).rejects.toThrow('main advanced before the release merge')
     expect(mutations(state)).toEqual([])
     expect(state.calls.some(([command]) => ['npm', 'gh', 'pnpm', 'node'].includes(command))).toBe(false)
     const correctedBase = git(['rev-parse', 'HEAD'])
@@ -645,7 +1103,7 @@ describe('release publication', () => {
     git(['merge', '--squash', 'release/v0.1.0-rc.2'])
     git(['commit', '-m', '🔖 Release v0.1.0-rc.2'])
     git(['push', 'origin', 'main'])
-    publishRelease(cwd, { run })
+    await publishRelease(cwd, { run })
     expect(state.release.tag_name).toBe('v0.1.0-rc.2')
   })
 
@@ -668,8 +1126,8 @@ describe('release publication', () => {
     git(['push', 'origin', 'main'])
     expect(git(['rev-parse', 'HEAD^'])).toBe(base)
     state.calls = []
-    expect(() => publishRelease(cwd, { run })).toThrow(`HEAD contains non-release file changes: ${path}`)
-    expect(() => publishRelease(cwd, { run, resume: true })).toThrow(`HEAD contains non-release file changes: ${path}`)
+    await expect(publishRelease(cwd, { run })).rejects.toThrow(`HEAD contains non-release file changes: ${path}`)
+    await expect(publishRelease(cwd, { run, resume: true })).rejects.toThrow(`HEAD contains non-release file changes: ${path}`)
     expect(mutations(state)).toEqual([])
     expect(state.calls.some(([command]) => ['npm', 'gh', 'pnpm', 'node'].includes(command))).toBe(false)
   })
@@ -684,13 +1142,13 @@ describe('release publication', () => {
     git(['merge', '--squash', 'release/v0.1.0-rc.1'])
     git(['commit', '-m', '🔖 Release v0.1.0-rc.1'])
     git(['push', 'origin', 'main'])
-    publishRelease(cwd, { run })
+    await publishRelease(cwd, { run })
     const release = state.calls.find(([command, args]) => command === 'gh' && args[0] === 'release')
     expect(release[2].input).toContain('Reviewed capability release note')
   })
 
   it.each(['wrong branch', 'dirty tracked', 'dirty untracked', 'stale main', 'later commit'])(
-    'rejects %s before irreversible publication', condition => {
+    'rejects %s before irreversible publication', async condition => {
       const { cwd, git, run, state, prepareCommit } = fixture()
       prepareCommit()
       if (condition === 'wrong branch') git(['switch', '-c', 'release/test'])
@@ -698,13 +1156,13 @@ describe('release publication', () => {
       if (condition === 'dirty untracked') writeFileSync(join(cwd, 'new-file'), 'untracked')
       if (condition === 'stale main' || condition === 'later commit') git(['commit', '--allow-empty', '-m', 'Later commit'])
       if (condition === 'later commit') git(['push', 'origin', 'main'])
-      expect(() => publishRelease(cwd, { run })).toThrow()
+      await expect(publishRelease(cwd, { run })).rejects.toThrow()
       expect(mutations(state)).toEqual([])
     }
   )
 
   it.each(['local tag', 'remote tag', 'npm version', 'lint', 'typecheck', 'build', 'migration:snapshot:check', 'scripts/smoke-pack.mjs'])(
-    'rejects %s before mutations', condition => {
+    'rejects %s before mutations', async condition => {
       const { cwd, git, run, state, prepareCommit } = fixture()
       prepareCommit()
       if (condition.includes('tag')) {
@@ -718,14 +1176,14 @@ describe('release publication', () => {
           name: 'better-newsletter', version: '0.1.0-rc.1', dist: { integrity: 'sha512-existing' }
         })
       } else state.fail = condition
-      expect(() => publishRelease(cwd, { run })).toThrow()
+      await expect(publishRelease(cwd, { run })).rejects.toThrow()
       expect(mutations(state)).toEqual([])
     }
   )
 
   it.each(['object', 'array'].flatMap(format =>
     ['tag push', 'runtime publish', 'CLI publish', 'GitHub Release'].map(failure => [format, failure])))(
-    'safely resumes with %s npm metadata after failed %s without repeating completed mutations', (format, failure) => {
+    'safely resumes with %s npm metadata after failed %s without repeating completed mutations', async (format, failure) => {
       const { cwd, git, run, state, prepareCommit } = fixture()
       state.npmMetadataFormat = format
       prepareCommit()
@@ -741,26 +1199,26 @@ describe('release publication', () => {
         }
         return run(command, args, options)
       }
-      expect(() => publishRelease(cwd, { run: flaky })).toThrow('pnpm release:publish --resume')
+      await expect(publishRelease(cwd, { run: flaky })).rejects.toThrow('pnpm release:publish --resume')
       expect(git(['tag'])).toContain('v0.1.0-rc.1')
       const alreadyPublished = state.published.size
       state.calls = []
       if (failure === 'GitHub Release') {
         git(['tag', '-d', 'v0.1.0-rc.1'])
       }
-      publishRelease(cwd, { run, resume: true })
+      await publishRelease(cwd, { run, resume: true })
       expect(state.published.size).toBe(2)
       expect(mutations(state).filter(([command]) => command === 'npm')).toHaveLength(2 - alreadyPublished)
       expect(mutations(state).filter(([command, args]) => command === 'git' && args[0] === 'tag')).toHaveLength(0)
       expect(state.release.tag_name).toBe('v0.1.0-rc.1')
-    }
+    }, 30_000
   )
 
-  it('rejects mismatched tag artifacts and published integrity during recovery', () => {
+  it('rejects mismatched tag artifacts and published integrity during recovery', async () => {
     const { cwd, run, state, prepareCommit } = fixture()
     prepareCommit()
     state.fail = 'publish'
-    expect(() => publishRelease(cwd, { run })).toThrow('interrupted')
+    await expect(publishRelease(cwd, { run })).rejects.toThrow('interrupted')
     state.fail = ''
     const tampered = (command, args, options) => {
       const result = run(command, args, options)
@@ -769,14 +1227,14 @@ describe('release publication', () => {
       }
       return result
     }
-    expect(() => publishRelease(cwd, { run: tampered, resume: true })).toThrow('artifact manifest differs')
+    await expect(publishRelease(cwd, { run: tampered, resume: true })).rejects.toThrow('artifact manifest differs')
     state.published.set('better-newsletter@0.1.0-rc.1', {
       name: 'better-newsletter', version: '0.1.0-rc.1', dist: { integrity: 'sha512-different' }
     })
-    expect(() => publishRelease(cwd, { run, resume: true })).toThrow('differs from the validated artifact')
+    await expect(publishRelease(cwd, { run, resume: true })).rejects.toThrow('differs from the validated artifact')
   })
 
-  it('will not publish the CLI until the runtime is visible on npm', () => {
+  it('will not publish the CLI until the runtime is visible on npm', async () => {
     const { cwd, run, state, prepareCommit } = fixture()
     prepareCommit()
     const delayed = (command, args, options) => {
@@ -784,12 +1242,12 @@ describe('release publication', () => {
       if (command === 'npm' && args[0] === 'publish') state.published.clear()
       return result
     }
-    expect(() => publishRelease(cwd, { run: delayed })).toThrow('interrupted')
+    await expect(publishRelease(cwd, { run: delayed })).rejects.toThrow('interrupted')
     expect(mutations(state).filter(([command]) => command === 'npm')).toHaveLength(1)
     expect(state.release).toBeNull()
   })
 
-  it.each(['npm', 'tag', 'GitHub Release'])('rechecks external %s state after validation and before creating a tag', condition => {
+  it.each(['npm', 'tag', 'GitHub Release'])('rechecks external %s state after validation and before creating a tag', async condition => {
     const { cwd, git, run, state, prepareCommit } = fixture()
     prepareCommit()
     const raced = (command, args, options) => {
@@ -804,16 +1262,16 @@ describe('release publication', () => {
       }
       return result
     }
-    expect(() => publishRelease(cwd, { run: raced })).toThrow('External release state changed')
+    await expect(publishRelease(cwd, { run: raced })).rejects.toThrow('External release state changed')
     expect(mutations(state)).toEqual([])
   })
 })
 
 describe('external-state safety', () => {
   const manifest = { name: 'pkg', version: '1.0.0', dist: { integrity: 'sha512-example' } }
-  it.each(['object', 'array'])('normalizes successful npm %s metadata', format => {
+  it.each(['object', 'array'])('normalizes successful npm %s metadata', async format => {
     const stdout = JSON.stringify(format === 'array' ? [manifest] : manifest)
-    expect(npmVersion(() => ({ status: 0, stdout, stderr: '' }), 'pkg', '1.0.0')).toEqual(manifest)
+    expect(await npmVersion(() => ({ status: 0, stdout, stderr: '' }), 'pkg', '1.0.0')).toEqual(manifest)
   })
 
   it.each([
@@ -823,9 +1281,9 @@ describe('external-state safety', () => {
     ['wrong version', [{ ...manifest, version: '2.0.0' }]],
     ['missing integrity', { ...manifest, dist: {} }],
     ['non-string integrity', { ...manifest, dist: { integrity: 123 } }]
-  ])('rejects invalid successful npm metadata: %s', (_, response) => {
+  ])('rejects invalid successful npm metadata: %s', async (_, response) => {
     const run = () => ({ status: 0, stdout: JSON.stringify(response), stderr: '' })
-    expect(() => npmVersion(run, 'pkg', '1.0.0')).toThrow('Unexpected npm metadata')
+    await expect(npmVersion(run, 'pkg', '1.0.0')).rejects.toThrow('Unexpected npm metadata')
   })
 
   it.each(['missing', 'invalid', 'duplicate'])('rejects %s release-base metadata', condition => {
@@ -850,11 +1308,11 @@ describe('external-state safety', () => {
     expect(releaseNotes(cwd, '0.1.0-rc.1')).toBe('## v0.1.0-rc.1\n\nManually reviewed release notes.\n')
   })
 
-  it('runs local validation and all artifact checks independently of an inherited database URL', () => {
+  it('runs local validation and all artifact checks independently of an inherited database URL', async () => {
     vi.stubEnv('DATABASE_URL', 'postgresql://release-test.invalid/disposable')
     const run = vi.fn(() => ({ status: 0, stdout: '', stderr: '' }))
-    validatePreparation(run)
-    validateArtifacts(run, '/validated-tarballs')
+    await validatePreparation(run)
+    await validateArtifacts(run, '/validated-tarballs')
     expect(run.mock.calls.map(([command, args]) => [command, args])).toEqual([
       ['pnpm', ['lint']], ['pnpm', ['typecheck']], ['pnpm', ['build']], ['pnpm', ['migration:snapshot:check']],
       ['pnpm', ['exec', 'vitest', 'run', '--exclude', 'test/postgres.test.ts', '--exclude', 'test/postgres-migration.test.ts']],
@@ -870,8 +1328,8 @@ describe('external-state safety', () => {
     ['', 'npm error code E404\nnpm error 404 No match found for version 1.0.0\n'],
     ['', 'npm ERR! code E404\nnpm ERR! 404 No match found for version 1.0.0\n'],
     ['{"error":{"code":"E404"}}', 'npm error code E404\n']
-  ])('recognizes an explicit npm E404 across stdout/stderr', (stdout, stderr) => {
-    expect(npmVersion(() => ({ status: 1, stdout, stderr }), 'pkg', '1.0.0')).toBeNull()
+  ])('recognizes an explicit npm E404 across stdout/stderr', async (stdout, stderr) => {
+    expect(await npmVersion(() => ({ status: 1, stdout, stderr }), 'pkg', '1.0.0')).toBeNull()
   })
 
   it.each([
@@ -884,13 +1342,13 @@ describe('external-state safety', () => {
     ['{"error":{"code":"E404"}}', 'npm ERR! code E401\n'],
     ['{}', 'npm error code E404\n'],
     ['{"error":', 'npm error code E404\n']
-  ])('does not turn authentication/network/conflicting errors into an unpublished version', (stdout, stderr) => {
-    expect(() => npmVersion(() => ({ status: 1, stdout, stderr }), 'pkg', '1.0.0')).toThrow('Cannot query npm')
+  ])('does not turn authentication/network/conflicting errors into an unpublished version', async (stdout, stderr) => {
+    await expect(npmVersion(() => ({ status: 1, stdout, stderr }), 'pkg', '1.0.0')).rejects.toThrow('Cannot query npm')
   })
 
-  it('does not treat GitHub authentication failures as an absent release', () => {
-    expect(() => githubRelease(() => ({ status: 1, stdout: 'HTTP/2 401 Unauthorized', stderr: 'Bad credentials' }),
-      'owner/repo', 'v1.0.0')).toThrow('Bad credentials')
+  it('does not treat GitHub authentication failures as an absent release', async () => {
+    await expect(githubRelease(() => ({ status: 1, stdout: 'HTTP/2 401 Unauthorized', stderr: 'Bad credentials' }),
+      'owner/repo', 'v1.0.0')).rejects.toThrow('Bad credentials')
   })
 
   it.each(['wrong tag', 'missing tag', 'CLI without runtime', 'release without packages'])(

@@ -11,6 +11,9 @@ importers:
       '@arethetypeswrong/cli':
         specifier: ^0.18.5
         version: 0.18.5
+      '@clack/prompts':
+        specifier: ~1.0.1
+        version: 1.0.1
       '@eslint/js':
         specifier: ^9.35.0
         version: 9.39.5
@@ -44,6 +47,9 @@ importers:
       pg:
         specifier: ^8.23.0
         version: 8.23.0
+      picocolors:
+        specifier: ^1.1.1
+        version: 1.1.1
       publint:
         specifier: ^0.3.24
         version: 0.3.24
@@ -286,9 +292,15 @@ packages:
   '@braidai/lang@1.1.2':
     resolution: {integrity: sha512-qBcknbBufNHlui137Hft8xauQMTZDKdophmLFv05r2eNmdIv/MlPuP4TdUknHG68UdWLgVZwgxVe735HzJNIwA==}
 
+  '@clack/core@1.0.1':
+    resolution: {integrity: sha512-WKeyK3NOBwDOzagPR5H08rFk9D/WuN705yEbuZvKqlkmoLM2woKtXb10OO2k1NoSU4SFG947i2/SCYh+2u5e4g==}
+
   '@clack/core@1.5.1':
     resolution: {integrity: sha512-iHTrHA8MtVuLl2TfZySmcKv1qO2PoyC9Z7pfSDozEuV5vtY3/wcOPKJXlqJ5Oq2Cx5DDGQGAMVx6HZfRRoVEbQ==}
     engines: {node: '>= 20.12.0'}
+
+  '@clack/prompts@1.0.1':
+    resolution: {integrity: sha512-/42G73JkuYdyWZ6m8d/CJtBrGl1Hegyc7Fy78m5Ob+jF85TOUmLR5XLce/U3LxYAw0kJ8CT5aI99RIvPHcGp/Q==}
 
   '@clack/prompts@1.8.1':
     resolution: {integrity: sha512-dlT1m5e/0yUL0kRNcQn7yGLVThkgbB0Ga/1AmfDDC/8ik6AIiSf2QLQO2zPYvefsHP0aFgxO93cVLCCfDp7kzQ==}
@@ -4250,9 +4262,20 @@ snapshots:
 
   '@braidai/lang@1.1.2': {}
 
+  '@clack/core@1.0.1':
+    dependencies:
+      picocolors: 1.1.1
+      sisteransi: 1.0.5
+
   '@clack/core@1.5.1':
     dependencies:
       fast-wrap-ansi: 0.2.2
+      sisteransi: 1.0.5
+
+  '@clack/prompts@1.0.1':
+    dependencies:
+      '@clack/core': 1.0.1
+      picocolors: 1.1.1
       sisteransi: 1.0.5
 
   '@clack/prompts@1.8.1':

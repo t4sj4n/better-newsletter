@@ -1,9 +1,9 @@
 import { createHash } from 'node:crypto'
 import { readFileSync } from 'node:fs'
 import { join } from 'node:path'
-import process from 'node:process'
 import semver from 'semver'
 import { checked, distTag, validVersion } from './release-core.mjs'
+import { runScriptChecks } from './script-core.mjs'
 
 export const repository = 't4sj4n/better-newsletter'
 export const requiredCi = { workflow: 'ci.yml', event: 'push', branch: 'main' }
@@ -47,8 +47,8 @@ export function releaseNotes(cwd, version) {
   return preparedChangelogEntry(readFileSync(join(cwd, 'CHANGELOG.md'), 'utf8'), version).notes
 }
 
-export function requirePreparedCommit(run, packages) {
-  const changed = checked(run, 'git', ['diff-tree', '--no-commit-id', '--name-only', '-r', 'HEAD']).split('\n')
+export async function requirePreparedCommit(run, packages) {
+  const changed = (await checked(run, 'git', ['diff-tree', '--no-commit-id', '--name-only', '-r', 'HEAD'])).split('\n')
   for (const path of releasePaths) {
     if (!changed.includes(path)) throw new Error(`HEAD is not a prepared release commit: missing change to ${path}.`)
   }
@@ -57,32 +57,50 @@ export function requirePreparedCommit(run, packages) {
     throw new Error(`HEAD contains non-release file changes: ${unexpected.join(', ')}. Merge code changes separately and regenerate the release.`)
   }
   for (const pkg of packages) {
-    const committed = JSON.parse(checked(run, 'git', ['show', `HEAD:${pkg.path}`]))
-    const previous = JSON.parse(checked(run, 'git', ['show', `HEAD^:${pkg.path}`]))
+    const committed = JSON.parse(await checked(run, 'git', ['show', `HEAD:${pkg.path}`]))
+    const previous = JSON.parse(await checked(run, 'git', ['show', `HEAD^:${pkg.path}`]))
     validVersion(previous.version)
     if (committed.version !== pkg.version || semver.compare(pkg.version, previous.version) <= 0) {
       throw new Error('HEAD must contain the prepared version bump, not a later main commit.')
     }
   }
-  const { base } = preparedChangelogEntry(checked(run, 'git', ['show', 'HEAD:CHANGELOG.md']), packages[0].version)
-  if (checked(run, 'git', ['rev-parse', 'HEAD^']) !== base) {
+  const { base } = preparedChangelogEntry(await checked(run, 'git', ['show', 'HEAD:CHANGELOG.md']), packages[0].version)
+  if (await checked(run, 'git', ['rev-parse', 'HEAD^']) !== base) {
     throw new Error('Prepared release base differs from HEAD^: main advanced before the release merge. Regenerate the release from current main with a newer unused version; do not retarget the release-base marker.')
   }
 }
 
-export function validatePreparation(run) {
-  checked(run, 'pnpm', ['lint'])
-  checked(run, 'pnpm', ['typecheck'])
-  checked(run, 'pnpm', ['build'])
-  checked(run, 'pnpm', ['migration:snapshot:check'])
-  checked(run, 'pnpm', ['exec', 'vitest', 'run',
-    '--exclude', 'test/postgres.test.ts', '--exclude', 'test/postgres-migration.test.ts'],
-  { env: { ...process.env, DATABASE_URL: '' } })
+const migrationSnapshotCheck = {
+  command: 'pnpm', args: ['migration:snapshot:check'],
+  label: 'Checking migration snapshot', completed: 'Migration snapshot checked'
 }
 
-export function validateArtifacts(run, packDestination) {
-  checked(run, 'node', ['scripts/smoke-pack.mjs', ...(packDestination ? ['--pack-destination', packDestination] : [])],
-    { env: { ...process.env, DATABASE_URL: '' } })
+export const schemaChecks = [
+  { command: 'pnpm', args: ['--filter', 'better-newsletter', 'build'], label: 'Building runtime package', completed: 'Runtime package built' },
+  migrationSnapshotCheck,
+  { command: 'pnpm', args: ['exec', 'vitest', 'run', 'test/postgres-schema-revision.test.ts'], label: 'Checking schema revision', completed: 'Schema revision checked' }
+]
+
+export const preparationChecks = [
+  { command: 'pnpm', args: ['lint'], label: 'Checking code style', completed: 'Code style checked' },
+  { command: 'pnpm', args: ['typecheck'], label: 'Checking types', completed: 'Types checked' },
+  { command: 'pnpm', args: ['build'], label: 'Building packages', completed: 'Packages built' },
+  migrationSnapshotCheck,
+  { command: 'pnpm', args: ['exec', 'vitest', 'run', '--exclude', 'test/postgres.test.ts', '--exclude', 'test/postgres-migration.test.ts'],
+    label: 'Running release tests', completed: 'Release tests passed', env: { DATABASE_URL: '' } }
+]
+
+export function artifactChecks(packDestination) {
+  return [{ command: 'node', args: ['scripts/smoke-pack.mjs', ...(packDestination ? ['--pack-destination', packDestination] : [])],
+    label: 'Validating package artifacts', completed: 'Package artifacts validated', env: { DATABASE_URL: '' } }]
+}
+
+export async function validatePreparation(run, execute = (command, args, options) => checked(run, command, args, options)) {
+  await runScriptChecks(preparationChecks, execute)
+}
+
+export async function validateArtifacts(run, packDestination, execute = (command, args, options) => checked(run, command, args, options)) {
+  await runScriptChecks(artifactChecks(packDestination), execute)
 }
 
 export function releaseArtifacts(cwd, packages) {

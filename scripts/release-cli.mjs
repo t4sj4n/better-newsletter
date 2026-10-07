@@ -82,12 +82,25 @@ export async function executeRelease(kind, options) {
   try {
     if (kind === 'publish') process.env.NEWSLETTER_RELEASE_TOKEN = options.dryRun ? 'dry-run'
       : process.env.GH_TOKEN || process.env.GITHUB_TOKEN || await checked(run, 'gh', ['auth', 'token'])
+    let result
     try {
-      return await release(releaseConfig(kind, options, cwd, Boolean(existing)))
+      result = await release(releaseConfig(kind, options, cwd, Boolean(existing)))
     } catch (error) {
       error.reportedByReleaseIt = true
       throw error
     }
+    if (kind === 'prepare' && !options.dryRun && result?.version) {
+      const branch = `release/v${result.version}`
+      try {
+        const prs = JSON.parse(await checked(run, 'gh', ['pr', 'list', '--repo', repository,
+          '--head', branch, '--base', 'main', '--state', 'open', '--json', 'url']))
+        if (prs[0]?.url) console.log(`\nRelease PR: ${prs[0].url}`)
+        else console.warn(`Release prepared, but no open PR was found for ${branch}.`)
+      } catch (error) {
+        console.warn(`Release prepared; could not retrieve the PR link: ${conciseMessage(error.message)}`)
+      }
+    }
+    return result
   } finally {
     if (previous === undefined) delete process.env.NEWSLETTER_RELEASE_TOKEN
     else process.env.NEWSLETTER_RELEASE_TOKEN = previous

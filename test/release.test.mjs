@@ -4,7 +4,7 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import process from 'node:process'
 import { fileURLToPath, URL } from 'node:url'
-import { afterEach, describe, expect, it } from 'vitest'
+import { afterEach, describe, expect, it, vi } from 'vitest'
 import { parseReleaseArgs, releaseConfig } from '../scripts/release-cli.mjs'
 import { npmDistTag, prereleaseChannel, githubRelease, npmVersion, publishPlan, requireMainCommit, requireSuccessfulCi } from '../scripts/release-core.mjs'
 import { releaseCommits } from '../scripts/release-notes.mjs'
@@ -13,7 +13,10 @@ import { preparePublication, publishPackages, publicationState } from '../script
 import { runReleaseHook } from '../scripts/release-hooks.mjs'
 
 const directories = []
-afterEach(() => directories.splice(0).forEach(path => rmSync(path, { recursive: true, force: true })))
+afterEach(() => {
+  directories.splice(0).forEach(path => rmSync(path, { recursive: true, force: true }))
+  vi.unstubAllEnvs()
+})
 const ok = (stdout = '') => ({ status: 0, stdout, stderr: '' })
 const missing = { status: 1, stdout: '{"error":{"code":"E404"}}', stderr: 'npm error code E404' }
 const sha = 'a'.repeat(40)
@@ -23,6 +26,7 @@ const ci = overrides => ({ id: 1000, run_number: 1, run_attempt: 1, workflow_id:
   head_sha: sha, head_branch: 'main', event: 'push', status: 'completed', conclusion: 'success', ...overrides })
 
 function fixture() {
+  vi.stubEnv('NPM_TOKEN', 'test-publish-token')
   const cwd = mkdtempSync(join(tmpdir(), 'newsletter-release-test-'))
   directories.push(cwd)
   for (const name of ['better-newsletter', 'cli']) {
@@ -109,6 +113,12 @@ describe('release package contracts', () => {
 })
 
 describe('publication and recovery hooks', () => {
+  it('rejects a missing token before pushing a tag or publishing packages', async () => {
+    const f = fixture()
+    vi.stubEnv('NPM_TOKEN', '')
+    await expect(runReleaseHook('publish', version, { cwd: f.cwd, run: f.run })).rejects.toThrow('Publishing requires NPM_TOKEN')
+    expect(f.state.calls).toHaveLength(0)
+  })
   it.each([undefined, 'next', 'beta'])('publishes both prerelease packages with the selected npm tag (%s)', async tag => {
     const f = fixture()
     await preparePublication(f.cwd, { run: f.run })

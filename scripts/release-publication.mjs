@@ -3,6 +3,7 @@ import { basename, isAbsolute, join, resolve } from 'node:path'
 import process from 'node:process'
 import { checked, githubRelease, npmVersion, publishPlan, requireCleanTree, requireMainCommit, requireSuccessfulCi, tagState } from './release-core.mjs'
 import { releaseArtifacts, releasePackages, repository, requiredCi } from './release-policy.mjs'
+import { authenticatedNpm } from './npm-auth.mjs'
 
 export async function artifactDirectory(cwd, run, version) {
   const path = await checked(run, 'git', ['rev-parse', '--git-path', `newsletter-releases/${version}`])
@@ -100,8 +101,8 @@ export async function publishPackages(run, { packages, artifacts, plan, channel 
     if (await npmVersion(run, pkg.name, pkg.version)) {
       throw new Error(`${pkg.name}@${pkg.version} appeared during publication; inspect it and resume.`)
     }
-    await checked(run, 'npm', ['publish', artifacts[index].path, '--access', 'public', '--tag', channel,
-      '--registry', 'https://registry.npmjs.org'], { interactive: true })
+    await authenticatedNpm(run, ['publish', artifacts[index].path, '--access', 'public', '--tag', channel,
+      '--registry', 'https://registry.npmjs.org'])
   }
   await verifyPublishedPackages(run, packages, artifacts)
 }

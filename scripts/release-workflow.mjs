@@ -8,6 +8,7 @@ import { updateChangelog } from './release-notes.mjs'
 import { releaseNotes, releasePackages, releasePaths, repository, requiredCi, requireReleaseCommit } from './release-policy.mjs'
 import { conciseMessage } from './script-errors.mjs'
 import { preparePublication } from './release-publication.mjs'
+import { authenticatedNpm, requireNpmToken } from './npm-auth.mjs'
 
 /** Keep repository-specific checks inside release-it's native lifecycle and rendering. */
 export default class ReleaseWorkflow extends Plugin {
@@ -24,13 +25,14 @@ export default class ReleaseWorkflow extends Plugin {
       this.log.warn('Preview only: Git release prerequisites, authentication, CI and artifact validation are skipped. No release readiness is established.')
       return
     }
+    if (this.options.kind === 'publish') requireNpmToken()
     this.commit = this.options.kind === 'prepare'
       ? await requireCurrentMain(this.run) : await requireMainCommit(this.run)
     await requireGitHub(this.run, repository)
     if (this.options.kind === 'publish') {
       await requireReleaseCommit(this.run, this.packages)
       await requireSuccessfulCi(this.run, repository, this.commit, requiredCi)
-      await checked(this.run, 'npm', ['whoami', '--registry', registry])
+      await authenticatedNpm(this.run, ['whoami', '--registry', registry])
     }
   }
 

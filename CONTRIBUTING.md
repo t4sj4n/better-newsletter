@@ -107,7 +107,16 @@ Better Newsletter uses **synchronized versioning** across packages:
 
 Releases use `release-it` and `@release-it/bumper`, with native version selection, confirmations, status output and dry-runs. The private workspace root is never published. CI validates pull requests and `main`; it does not publish packages or create releases automatically.
 
-Install dependencies with `pnpm install --frozen-lockfile`. Real releases require a clean checkout, including untracked files, and an `origin` push URL for this repository. Authenticate GitHub CLI (`gh auth login`); publishing also requires npm authentication and permission to publish both packages. `release-it` uses `GH_TOKEN`, `GITHUB_TOKEN`, or the existing `gh` login for the GitHub Release. Never commit tokens. npm publication inherits the terminal for browser/passkey or OTP authentication.
+Install dependencies with `pnpm install --frozen-lockfile`. Real releases require a clean checkout, including untracked files, and an `origin` push URL for this repository. Authenticate GitHub CLI (`gh auth login`); publishing also requires `NPM_TOKEN` with permission to publish both packages. `release-it` uses `GH_TOKEN`, `GITHUB_TOKEN`, or the existing `gh` login for the GitHub Release. Never commit tokens.
+
+Create a [granular npm access token](https://docs.npmjs.com/creating-and-viewing-access-tokens/) with **Read and write** access restricted to `better-newsletter` and `@better-newsletter/cli`, **Bypass 2FA** enabled, and a limited expiration. Export it as `NPM_TOKEN` in the terminal running `release:publish`, or inject it from your local secret manager. With zsh, read it without displaying it or putting its value in shell history:
+
+```zsh
+read -rs 'NPM_TOKEN?npm publish token: '
+export NPM_TOKEN
+```
+
+Keep the token outside the checkout; do not pass it as a command argument. Publication and recovery use the same token for both packages without browser/OTP prompts. The scripts require it for real publishes, verify the token with `npm whoami`, and use a temporary npm configuration containing only an environment-variable reference; that file is removed after each command. Preparation and dry-runs do not require an npm token.
 
 Neither release command requires a local PostgreSQL database. The complete quality, schema/revision, PostgreSQL and consumer checks run in CI. Prepare performs only release metadata checks. Publish installs frozen dependencies and validates the actual packed artifacts locally; it does not repeat lint, the complete test suite or a separate build sequence. Artifact validation deliberately ignores an inherited `DATABASE_URL`.
 

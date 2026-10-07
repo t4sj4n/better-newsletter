@@ -7,6 +7,7 @@ import { checked, npmDistTag, liveCommandRunner, requireMainCommit, requireSucce
 import { releaseArtifacts, releasePackages, repository, requiredCi } from './release-policy.mjs'
 import { conciseMessage } from './script-errors.mjs'
 import { artifactDirectory, publicationState, publishPackages, removeArtifacts, verifyManifest } from './release-publication.mjs'
+import { requireNpmToken } from './npm-auth.mjs'
 
 export async function runReleaseHook(action, version, { cwd = process.cwd(), resume = false, tag = 'latest', run = liveCommandRunner(cwd) } = {}) {
   const channel = npmDistTag(tag)
@@ -22,6 +23,7 @@ export async function runReleaseHook(action, version, { cwd = process.cwd(), res
   }
   if (action === 'cleanup') return removeArtifacts(cwd, run, version)
   if (action !== 'publish') throw new Error(`Unknown release hook: ${action}`)
+  requireNpmToken()
   const packages = releasePackages(cwd)
   if (packages[0].version !== version) throw new Error('Package version changed after artifact validation.')
   const commit = await requireMainCommit(run)

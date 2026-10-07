@@ -1,5 +1,13 @@
 # Changelog
 
+## v0.1.0-beta.3
+
+[compare changes](https://github.com/t4sj4n/better-newsletter/compare/v0.1.0-beta.2...v0.1.0-beta.3)
+
+### 💅 Refactors
+
+- Simplify local releases with release-it ([#64](https://github.com/t4sj4n/better-newsletter/pull/64))
+
 ## v0.1.0-beta.2
 
 <!-- release-base: debb1eaf0227fcc212df2870aded01e93cf08e18 -->

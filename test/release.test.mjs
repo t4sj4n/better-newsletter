@@ -4,7 +4,7 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import process from 'node:process'
 import { fileURLToPath, URL } from 'node:url'
-import { afterEach, describe, expect, it } from 'vitest'
+import { afterEach, describe, expect, it, vi } from 'vitest'
 import { parseReleaseArgs, releaseConfig } from '../scripts/release-cli.mjs'
 import { npmDistTag, prereleaseChannel, githubRelease, npmVersion, publishPlan, requireMainCommit, requireSuccessfulCi } from '../scripts/release-core.mjs'
 import { releaseCommits } from '../scripts/release-notes.mjs'
@@ -13,7 +13,10 @@ import { preparePublication, publishPackages, publicationState } from '../script
 import { runReleaseHook } from '../scripts/release-hooks.mjs'
 
 const directories = []
-afterEach(() => directories.splice(0).forEach(path => rmSync(path, { recursive: true, force: true })))
+afterEach(() => {
+  directories.splice(0).forEach(path => rmSync(path, { recursive: true, force: true }))
+  vi.unstubAllEnvs()
+})
 const ok = (stdout = '') => ({ status: 0, stdout, stderr: '' })
 const missing = { status: 1, stdout: '{"error":{"code":"E404"}}', stderr: 'npm error code E404' }
 const sha = 'a'.repeat(40)
@@ -23,6 +26,13 @@ const ci = overrides => ({ id: 1000, run_number: 1, run_attempt: 1, workflow_id:
   head_sha: sha, head_branch: 'main', event: 'push', status: 'completed', conclusion: 'success', ...overrides })
 
 function fixture() {
+  vi.stubEnv('GITHUB_ACTIONS', 'true')
+  vi.stubEnv('GITHUB_EVENT_NAME', 'workflow_dispatch')
+  vi.stubEnv('GITHUB_WORKFLOW_REF', `${repository}/.github/workflows/publish.yml@refs/heads/main`)
+  vi.stubEnv('ACTIONS_ID_TOKEN_REQUEST_URL', 'https://example.test/oidc')
+  vi.stubEnv('ACTIONS_ID_TOKEN_REQUEST_TOKEN', 'test-oidc-request-token')
+  vi.stubEnv('NPM_TOKEN', '')
+  vi.stubEnv('NODE_AUTH_TOKEN', '')
   const cwd = mkdtempSync(join(tmpdir(), 'newsletter-release-test-'))
   directories.push(cwd)
   for (const name of ['better-newsletter', 'cli']) {
@@ -109,6 +119,12 @@ describe('release package contracts', () => {
 })
 
 describe('publication and recovery hooks', () => {
+  it('rejects local publishing before pushing a tag or publishing packages', async () => {
+    const f = fixture()
+    vi.stubEnv('GITHUB_ACTIONS', '')
+    await expect(runReleaseHook('publish', version, { cwd: f.cwd, run: f.run })).rejects.toThrow('Publish through the Publish release workflow')
+    expect(f.state.calls).toHaveLength(0)
+  })
   it.each([undefined, 'next', 'beta'])('publishes both prerelease packages with the selected npm tag (%s)', async tag => {
     const f = fixture()
     await preparePublication(f.cwd, { run: f.run })
@@ -132,7 +148,7 @@ describe('publication and recovery hooks', () => {
     await preparePublication(f.cwd, { run: f.run })
     f.state.localTag = true
     f.state.fail = name
-    await expect(runReleaseHook('publish', version, { cwd: f.cwd, run: f.run, tag: 'next' })).rejects.toThrow('pnpm release:publish --resume --tag next')
+    await expect(runReleaseHook('publish', version, { cwd: f.cwd, run: f.run, tag: 'next' })).rejects.toThrow('resume=true and dist_tag=next')
     expect(publishCalls(f.state)).toHaveLength(name === 'better-newsletter' ? 1 : 2)
     expect(f.state.published.size).toBe(name === 'better-newsletter' ? 0 : 1)
     expect(f.state.calls.filter(([command, args]) => command === 'git' && args[0] === 'push').map(([, args]) => args))
@@ -144,7 +160,7 @@ describe('publication and recovery hooks', () => {
     await preparePublication(f.cwd, { run: f.run })
     f.state.localTag = true
     f.state.fail = '@better-newsletter/cli'
-    await expect(runReleaseHook('publish', version, { cwd: f.cwd, run: f.run, tag: 'next' })).rejects.toThrow('pnpm release:publish --resume --tag next')
+    await expect(runReleaseHook('publish', version, { cwd: f.cwd, run: f.run, tag: 'next' })).rejects.toThrow('resume=true and dist_tag=next')
     f.state.calls = []
     f.state.fail = ''
     await preparePublication(f.cwd, { run: f.run, resume: true })

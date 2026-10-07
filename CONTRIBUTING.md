@@ -103,13 +103,25 @@ Better Newsletter uses **synchronized versioning** across packages:
 - `better-newsletter`: Published as an unscoped package on npm.
 - `@better-newsletter/cli`: Published under the `@better-newsletter` npm organization. Maintainers must be authenticated with an npm account that has publishing rights in the `better-newsletter` organization on npmjs.com.
 
-### Local Release Flow
+### Release Flow
 
-Releases use `release-it` and `@release-it/bumper`, with native version selection, confirmations, status output and dry-runs. The private workspace root is never published. CI validates pull requests and `main`; it does not publish packages or create releases automatically.
+Releases use `release-it` and `@release-it/bumper` in two phases: prepare a release PR locally, then manually start the **Publish release** GitHub Actions workflow after merging. The private workspace root is never published. CI validates pull requests and `main`; merges alone do not trigger publication.
 
-Install dependencies with `pnpm install --frozen-lockfile`. Real releases require a clean checkout, including untracked files, and an `origin` push URL for this repository. Authenticate GitHub CLI (`gh auth login`); publishing also requires npm authentication and permission to publish both packages. `release-it` uses `GH_TOKEN`, `GITHUB_TOKEN`, or the existing `gh` login for the GitHub Release. Never commit tokens. npm publication inherits the terminal for browser/passkey or OTP authentication.
+Install dependencies with `pnpm install --frozen-lockfile`. Real preparation requires a clean checkout, including untracked files, and an `origin` push URL for this repository. Authenticate GitHub CLI (`gh auth login`). GitHub Actions uses its built-in `GITHUB_TOKEN` for tags and GitHub Releases; npm publication uses Trusted Publishing (OIDC), with no stored npm token or browser/OTP prompts. The local `release:publish` package script has been removed.
 
-Neither release command requires a local PostgreSQL database. The complete quality, schema/revision, PostgreSQL and consumer checks run in CI. Prepare performs only release metadata checks. Publish installs frozen dependencies and validates the actual packed artifacts locally; it does not repeat lint, the complete test suite or a separate build sequence. Artifact validation deliberately ignores an inherited `DATABASE_URL`.
+#### One-time npm setup
+
+For **each** package (`better-newsletter` and `@better-newsletter/cli`), add a GitHub Actions trusted publisher in its npm settings:
+
+- Organization or user: `t4sj4n`
+- Repository: `better-newsletter`
+- Workflow filename: `publish.yml`
+- Environment: leave empty (the workflow does not use a GitHub environment)
+- Allowed actions: enable direct `npm publish`
+
+See [npm Trusted Publishing](https://docs.npmjs.com/trusted-publishers/) for the setup steps. The workflow uses a GitHub-hosted runner, Node.js 24.15.0, npm 11.21.0 and `id-token: write`. Do not configure `NPM_TOKEN` or `NODE_AUTH_TOKEN`; the publication guard rejects stored npm tokens. npm trusted publishing configuration is external to this repository and must be completed before a real publication.
+
+Neither release phase requires a local PostgreSQL database. The complete quality, schema/revision, PostgreSQL and consumer checks run in CI. Prepare performs only release metadata checks. Publish installs frozen dependencies and validates the actual packed artifacts; it does not repeat lint, the complete test suite or a separate build sequence. Artifact validation deliberately ignores an inherited `DATABASE_URL`.
 
 #### 1. Prepare a release PR
 
@@ -133,57 +145,48 @@ Preparation failures leave the release branch for inspection; native Git rollbac
 
 #### 2. Publish the reviewed release commit
 
-```bash
-git switch main
-git pull --ff-only origin main
-pnpm release:publish
-```
-
-The selected `HEAD` must introduce the synchronized version bump, contain that version's reviewed changelog entry and be included in `origin/main`. It may change additional reviewed files; it need not change exactly four release files. The CI gate selects the newest `ci.yml` push run on `main` for this exact SHA and requires it to be completed and successful. Pending or failed reruns for that SHA block publication even if an older run succeeded; a newer successful run for the same SHA is accepted. Runs for other SHAs do not affect this check.
-
-If another change has already landed on `main`, check out the actual release commit before publishing:
+After merging the release PR and waiting for successful CI, open **Actions → Publish release → Run workflow**. Run the workflow from `main`, enter the full 40-character lowercase SHA of the commit that introduced the release version, select the npm dist-tag (default `latest`), disable the default `dry_run` option, and leave `resume` off for a new publication. You can also dispatch it through GitHub CLI:
 
 ```bash
-git switch --detach <release-commit-sha>
-pnpm release:publish
+gh workflow run publish.yml --ref main -f release_commit=<release-commit-sha> -f dist_tag=latest -F dry_run=false -F resume=false
 ```
 
-Publication checks access and external release state, installs frozen dependencies and runs the packed-artifact smoke once. The exact validated tarballs and their commit/integrities are cached under Git's `newsletter-releases/<version>` metadata directory, outside the working tree. `release-it` creates an annotated tag containing this manifest. A `before:github:release` hook pushes only that tag, publishes the runtime first, verifies its matching integrity is visible, then publishes and verifies the CLI. The native GitHub plugin creates the Release from the reviewed notes. The cache is removed after successful completion; failures preserve it.
+The selected commit must introduce the synchronized version bump, contain that version's reviewed changelog entry and be included in `origin/main`. It may change additional reviewed files. The CI gate selects the newest `ci.yml` push run on `main` for this exact SHA and requires it to be completed and successful. Pending or failed reruns for that SHA block publication even if an older run succeeded; a newer successful run for the same SHA is accepted. Runs for other SHAs do not affect this check.
 
-Native branch pushing is disabled in both phases. No command pushes a release commit directly to `main`.
+If `main` has advanced, still provide the original release commit. The workflow checks out the release tooling from the dispatched `main` revision and the selected release source separately. This allows current tooling to publish or recover older reviewed release commits without modifying them. Before installing dependencies, it verifies that the selected SHA belongs to `main`. Concurrent publications are serialized, and running workflows are never canceled by a new dispatch.
 
-Publication defaults to the npm dist-tag `latest` for both stable and prerelease versions. Choose a different tag explicitly when publishing a preview alongside the recommended version:
+Publication checks external release state, installs frozen dependencies and runs the packed-artifact smoke once. Checked tarballs and their commit/integrities are cached under the release checkout's Git metadata. `release-it --ci` creates an annotated tag containing the artifact manifest. A `before:github:release` hook pushes only that tag, publishes the runtime first through npm/OIDC, verifies its matching integrity is visible, then publishes and verifies the CLI. The native GitHub plugin creates the Release from the reviewed notes. No release commit is pushed to `main`.
 
-```bash
-pnpm release:publish --tag next
-pnpm release:publish --tag beta
-```
-
-The npm dist-tag is independent of the version's `alpha`, `beta` or `rc` identifier. Both packages receive the selected tag.
-
-GitHub prerelease status follows the version; its independent Latest release marker is left unchanged.
+The npm dist-tag defaults to `latest` for both stable and prerelease versions. Set the workflow's `dist_tag` input to `next`, `beta` or another valid tag when publishing a preview alongside the recommended version. Both packages receive the selected tag. The npm tag is independent of the version's `alpha`, `beta` or `rc` identifier. GitHub prerelease status follows the version; its independent Latest release marker is left unchanged.
 
 #### Recovery
 
-Keep valid tags and cached tarballs after a partial publication. Check out the original release commit, even if `main` has advanced:
+Keep the release tag after a partial publication. The workflow preserves remaining checked tarballs and their manifest as an Actions artifact named `release-artifacts-<release-commit-sha>` for 30 days. To recover, dispatch **Publish release** from `main` again with the original `release_commit`, the original `dist_tag`, `dry_run=false`, `resume=true`, and the failed run's numeric ID as `artifact_run_id`:
 
 ```bash
-git switch --detach <original-release-commit-sha>
-pnpm release:publish --resume
+gh workflow run publish.yml --ref main -f release_commit=<original-release-commit-sha> -f dist_tag=latest -F dry_run=false -F resume=true -f artifact_run_id=<failed-run-id>
 ```
 
-When recovering a publication with a custom npm dist-tag, repeat the original option, for example `pnpm release:publish --resume --tag next`. Recovery skips already published packages; it does not retag them.
+The run ID is the number in the Actions run URL. A rerun of the original job retains the original inputs; use a new dispatch to enable recovery and restore artifacts. If no cached artifacts exist (including a failure from the former local publisher), leave `artifact_run_id` empty. Artifact validation rebuilds the cache; its integrities must still match the annotated tag and any published package. Different results are refused.
 
-Recovery verifies tag identity, the recorded artifact manifest, cached files and existing npm integrities. It skips matching published packages and a complete existing GitHub Release. A CLI published without its runtime, a wrong tag/commit, conflicting integrity or premature/draft GitHub Release requires investigation. Immutable npm versions are never overwritten.
-
-Cached tarballs avoid rebuilding after an interruption. If the cache is missing, artifact validation rebuilds it; the result must still match the tag manifest and any published package. Different results are refused. A clean checkout, inclusion of the original SHA in `main`, and successful exact-SHA CI remain required; the latest `main` tip and an unchanged CI run ID do not.
+Recovery verifies tag identity, the recorded artifact manifest, cached files and existing npm integrities. It skips matching published packages and a complete existing GitHub Release; it does not retag already published packages. A CLI published without its runtime, a wrong tag/commit, conflicting integrity or premature/draft GitHub Release requires investigation. Immutable npm versions are never overwritten. The original release SHA must still belong to `main` and have successful exact-SHA CI; neither the latest `main` tip nor an unchanged CI run ID is required.
 
 #### Previewing and developing release scripts
 
+To test the workflow on a GitHub-hosted runner, dispatch **Publish release** from `main` with the selected release commit and leave `dry_run` enabled (the default):
+
+```bash
+gh workflow run publish.yml --ref main -f release_commit=<release-commit-sha> -F dry_run=true
+```
+
+The workflow must first be merged into `main`. This preview exercises input validation, both checkouts, main ancestry verification, installation and `release-it --dry-run`. It skips artifact restoration and upload and creates no release tag, npm publication or GitHub Release. It does not validate npm/OIDC publishing permissions, the exact-SHA CI gate or packed artifacts. Disable `dry_run` explicitly for a real publication or recovery.
+
+Local previews remain available:
+
 ```bash
 pnpm release:prepare prerelease --dry-run
-pnpm release:publish --dry-run
-pnpm release:publish --resume --dry-run
+node scripts/release-publish.mjs --dry-run
+node scripts/release-publish.mjs --resume --dry-run
 ```
 
 Dry-runs use native `release-it` behavior in the current checkout, including on dirty development branches. Our release-specific authentication, main/CI gates and artifact validation are skipped in previews. Version/package consistency still applies. No release branch, commit, tag, push, PR or publication is performed. This is a plan preview, not a full rehearsal or readiness check; `--resume --dry-run` also does not inspect which external steps have completed.
@@ -194,7 +197,7 @@ Use `--verbose` or `--debug` for command/debug output and stacks. Default failur
 
 ### Shared script helpers
 
-The migration snapshot command continues using the reusable Clack helpers in `scripts/script-ui.mjs`, the command/check helpers in `scripts/script-core.mjs` and the CLI boundary in `scripts/script-cli.mjs`. Other scripts can use these helpers without inheriting release rules. Release commands use `scripts/release-cli.mjs` and the native `release-it` UI; repository-specific behavior lives in `scripts/release-workflow.mjs`, `scripts/release-hooks.mjs`, `scripts/release-policy.mjs` and `scripts/release-publication.mjs`.
+The migration snapshot command continues using the reusable Clack helpers in `scripts/script-ui.mjs`, the command/check helpers in `scripts/script-core.mjs` and the CLI boundary in `scripts/script-cli.mjs`. Other scripts can use these helpers without inheriting release rules. Release preparation and the Actions-only publisher use `scripts/release-cli.mjs` and the native `release-it` UI; repository-specific behavior lives in `scripts/release-workflow.mjs`, `scripts/release-hooks.mjs`, `scripts/release-policy.mjs` and `scripts/release-publication.mjs`. `scripts/npm-auth.mjs` verifies the trusted workflow and OIDC environment; npm itself exchanges the OIDC credentials.
 
 ## Schema revisions and releases
 

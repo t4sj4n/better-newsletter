@@ -4,6 +4,7 @@ import { fileURLToPath, URL } from 'node:url'
 import { styleText } from 'node:util'
 import release from 'release-it'
 import { checked, githubRelease, npmDistTag, prereleaseChannel, liveCommandRunner, validVersion } from './release-core.mjs'
+import { requireTrustedPublishing } from './npm-auth.mjs'
 import { conciseMessage } from './script-errors.mjs'
 import { releaseNotes, releasePackages, repository } from './release-policy.mjs'
 
@@ -73,6 +74,7 @@ export function releaseConfig(kind, options, cwd = process.cwd(), releaseExists 
 }
 
 export async function executeRelease(kind, options) {
+  if (kind === 'publish' && !options.dryRun) requireTrustedPublishing()
   const cwd = process.cwd()
   const run = liveCommandRunner(cwd)
   const version = releasePackages(cwd)[0].version
@@ -112,7 +114,7 @@ export async function runReleaseCli(kind, args = process.argv.slice(2)) {
   try {
     const options = parseReleaseArgs(args, kind)
     if (options.help) {
-      console.log(`Usage: pnpm release:${kind}${kind === 'prepare' ? ' [prerelease|patch|minor|major|version]' : ' [--resume] [--tag <tag>]'} [--dry-run] [--verbose|--debug] [--ci]`)
+      console.log(`Usage: ${kind === 'prepare' ? 'pnpm release:prepare [prerelease|patch|minor|major|version]' : 'node scripts/release-publish.mjs [--resume] [--tag <tag>]'} [--dry-run] [--verbose|--debug] [--ci]`)
       return
     }
     if (kind === 'prepare' && !options.increment && !process.stdin.isTTY) throw new Error('Version selection requires a terminal. Pass a selector or explicit version, for example: pnpm release:prepare prerelease --dry-run')

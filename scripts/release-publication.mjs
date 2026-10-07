@@ -101,7 +101,7 @@ export async function publishPackages(run, { packages, artifacts, plan, channel 
       throw new Error(`${pkg.name}@${pkg.version} appeared during publication; inspect it and resume.`)
     }
     await checked(run, 'npm', ['publish', artifacts[index].path, '--access', 'public', '--tag', channel,
-      '--registry', 'https://registry.npmjs.org'], { interactive: true })
+      '--registry', 'https://registry.npmjs.org'])
   }
   await verifyPublishedPackages(run, packages, artifacts)
 }

@@ -266,7 +266,8 @@ describe('shared command presentation', () => {
     }
   })
 
-  it('stops the release workflow when an active spinner is cancelled', async () => {
+  it('stops the script when an active spinner is cancelled', async () => {
+    vi.stubEnv('CI', 'false')
     const stream = new Writable({ write(chunk, encoding, callback) { callback() } })
     stream.isTTY = true
     const ui = createScriptUi({ output: stream })

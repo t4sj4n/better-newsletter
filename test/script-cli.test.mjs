@@ -4,6 +4,7 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import process from 'node:process'
 import { PassThrough, Writable } from 'node:stream'
+import { stripVTControlCharacters } from 'node:util'
 import { fileURLToPath, URL } from 'node:url'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { select } from '@clack/prompts'
@@ -105,11 +106,14 @@ describe('migration script using shared CLI', () => {
   }
 
   it('reports drift concisely, preserves the file, and still supports writing and verifying the canonical snapshot', () => {
+    // Exercise colored, wrapped output independently of the runner's terminal settings.
+    vi.stubEnv('NO_COLOR', undefined)
+    vi.stubEnv('FORCE_COLOR', '1')
     const { cwd, script, sql } = fixture()
     const run = args => spawnSync(process.execPath, [script, ...args], { cwd, encoding: 'utf8' })
     const failed = run([])
     expect(failed.status).toBe(1)
-    expect(failed.stdout.replaceAll('│', ' ').replace(/\s+/gu, ' ')).toContain('has drifted from the canonical schema')
+    expect(stripVTControlCharacters(failed.stdout).replaceAll('│', ' ').replace(/\s+/gu, ' ')).toContain('has drifted from the canonical schema')
     expect(failed.stdout).toContain('Script failed.')
     expect(failed.stderr).toBe('')
     expect(readFileSync(sql, 'utf8')).toBe('-- Changed SQL\n')

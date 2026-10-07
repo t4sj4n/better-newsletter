@@ -17,7 +17,6 @@
     "migration:snapshot:check": "node scripts/check-postgres-migration.mjs",
     "migration:snapshot:write": "pnpm --filter better-newsletter build && node scripts/check-postgres-migration.mjs --write",
     "release:prepare": "node scripts/release-prepare.mjs",
-    "release:publish": "node scripts/release-publish.mjs",
     "release:notes": "node scripts/release-notes.mjs --write"
   },
   "devDependencies": {

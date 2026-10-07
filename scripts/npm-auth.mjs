@@ -1,33 +1,14 @@
-import { mkdtempSync, rmSync, writeFileSync } from 'node:fs'
-import { tmpdir } from 'node:os'
-import { join } from 'node:path'
 import process from 'node:process'
-import { checked } from './script-core.mjs'
+import { repository } from './release-policy.mjs'
 
-export function requireNpmToken() {
-  const token = process.env.NPM_TOKEN?.trim()
-  if (!token) throw new Error('Publishing requires NPM_TOKEN: use a granular npm token with write access to both packages and Bypass 2FA enabled.')
-  return token
-}
-
-/** Keep credentials out of command arguments and temporary files. */
-export async function authenticatedNpm(run, args) {
-  const token = requireNpmToken()
-  const directory = mkdtempSync(join(tmpdir(), 'newsletter-npm-auth-'))
-  const config = join(directory, 'npmrc')
-  try {
-    writeFileSync(config, '//registry.npmjs.org/:_authToken=${NPM_TOKEN}\n', { mode: 0o600 })
-    const redact = text => text.replaceAll(token, '[REDACTED]')
-    const safeRun = async (command, commandArgs, options) => {
-      const result = await run(command, commandArgs, options)
-      return { ...result, stdout: redact(result.stdout), stderr: redact(result.stderr) }
-    }
-    return await checked(safeRun, 'npm', [...args, '--userconfig', config], {
-      env: { ...process.env, NPM_TOKEN: token },
-      // npm output is checked and redacted before errors reach verbose logging.
-      onOutput: undefined
-    })
-  } finally {
-    rmSync(directory, { recursive: true, force: true })
+/** Real publishes run only through the manually dispatched trusted workflow. */
+export function requireTrustedPublishing(env = process.env) {
+  if (env.GITHUB_ACTIONS !== 'true' || env.GITHUB_EVENT_NAME !== 'workflow_dispatch'
+      || env.GITHUB_WORKFLOW_REF !== `${repository}/.github/workflows/publish.yml@refs/heads/main`
+      || !env.ACTIONS_ID_TOKEN_REQUEST_URL || !env.ACTIONS_ID_TOKEN_REQUEST_TOKEN) {
+    throw new Error('Publish through the Publish release workflow on main; npm authentication uses GitHub Actions OIDC.')
+  }
+  if (env.NPM_TOKEN || env.NODE_AUTH_TOKEN) {
+    throw new Error('Remove NPM_TOKEN and NODE_AUTH_TOKEN; this workflow uses npm trusted publishing, not stored npm tokens.')
   }
 }

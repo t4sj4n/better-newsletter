@@ -26,7 +26,13 @@ const ci = overrides => ({ id: 1000, run_number: 1, run_attempt: 1, workflow_id:
   head_sha: sha, head_branch: 'main', event: 'push', status: 'completed', conclusion: 'success', ...overrides })
 
 function fixture() {
-  vi.stubEnv('NPM_TOKEN', 'test-publish-token')
+  vi.stubEnv('GITHUB_ACTIONS', 'true')
+  vi.stubEnv('GITHUB_EVENT_NAME', 'workflow_dispatch')
+  vi.stubEnv('GITHUB_WORKFLOW_REF', `${repository}/.github/workflows/publish.yml@refs/heads/main`)
+  vi.stubEnv('ACTIONS_ID_TOKEN_REQUEST_URL', 'https://example.test/oidc')
+  vi.stubEnv('ACTIONS_ID_TOKEN_REQUEST_TOKEN', 'test-oidc-request-token')
+  vi.stubEnv('NPM_TOKEN', '')
+  vi.stubEnv('NODE_AUTH_TOKEN', '')
   const cwd = mkdtempSync(join(tmpdir(), 'newsletter-release-test-'))
   directories.push(cwd)
   for (const name of ['better-newsletter', 'cli']) {
@@ -113,10 +119,10 @@ describe('release package contracts', () => {
 })
 
 describe('publication and recovery hooks', () => {
-  it('rejects a missing token before pushing a tag or publishing packages', async () => {
+  it('rejects local publishing before pushing a tag or publishing packages', async () => {
     const f = fixture()
-    vi.stubEnv('NPM_TOKEN', '')
-    await expect(runReleaseHook('publish', version, { cwd: f.cwd, run: f.run })).rejects.toThrow('Publishing requires NPM_TOKEN')
+    vi.stubEnv('GITHUB_ACTIONS', '')
+    await expect(runReleaseHook('publish', version, { cwd: f.cwd, run: f.run })).rejects.toThrow('Publish through the Publish release workflow')
     expect(f.state.calls).toHaveLength(0)
   })
   it.each([undefined, 'next', 'beta'])('publishes both prerelease packages with the selected npm tag (%s)', async tag => {
@@ -142,7 +148,7 @@ describe('publication and recovery hooks', () => {
     await preparePublication(f.cwd, { run: f.run })
     f.state.localTag = true
     f.state.fail = name
-    await expect(runReleaseHook('publish', version, { cwd: f.cwd, run: f.run, tag: 'next' })).rejects.toThrow('pnpm release:publish --resume --tag next')
+    await expect(runReleaseHook('publish', version, { cwd: f.cwd, run: f.run, tag: 'next' })).rejects.toThrow('resume=true and dist_tag=next')
     expect(publishCalls(f.state)).toHaveLength(name === 'better-newsletter' ? 1 : 2)
     expect(f.state.published.size).toBe(name === 'better-newsletter' ? 0 : 1)
     expect(f.state.calls.filter(([command, args]) => command === 'git' && args[0] === 'push').map(([, args]) => args))
@@ -154,7 +160,7 @@ describe('publication and recovery hooks', () => {
     await preparePublication(f.cwd, { run: f.run })
     f.state.localTag = true
     f.state.fail = '@better-newsletter/cli'
-    await expect(runReleaseHook('publish', version, { cwd: f.cwd, run: f.run, tag: 'next' })).rejects.toThrow('pnpm release:publish --resume --tag next')
+    await expect(runReleaseHook('publish', version, { cwd: f.cwd, run: f.run, tag: 'next' })).rejects.toThrow('resume=true and dist_tag=next')
     f.state.calls = []
     f.state.fail = ''
     await preparePublication(f.cwd, { run: f.run, resume: true })

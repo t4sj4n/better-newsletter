@@ -183,7 +183,7 @@ export async function githubRelease(run, repository, tag) {
 export function publishPlan({ commit, tag, packages, published, release, resume }) {
   const exists = tag.localCommit || tag.remoteCommit
   if (!resume && (exists || published.some(Boolean) || release)) {
-    throw new Error('Tag, npm version or GitHub Release already exists. Inspect it, then use pnpm release:publish --resume.')
+    throw new Error('Tag, npm version or GitHub Release already exists. Inspect it, then dispatch the Publish release workflow with resume=true.')
   }
   if ((tag.localCommit && tag.localCommit !== commit) || (tag.remoteCommit && tag.remoteCommit !== commit)) {
     throw new Error('Existing release tag does not point to the selected release commit.')

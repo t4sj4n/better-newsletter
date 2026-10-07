@@ -13,15 +13,22 @@ export function validVersion(version) {
   return version
 }
 
-export function distTag(version) {
+export function prereleaseChannel(version) {
   validVersion(version)
   const prerelease = semver.prerelease(version)
-  if (!prerelease) return 'latest'
+  if (!prerelease) return null
   const channel = prerelease[0]
   if (!['alpha', 'beta', 'rc'].includes(channel)) {
     throw new Error(`Unsupported prerelease channel: ${channel}. Use alpha, beta or rc.`)
   }
   return channel
+}
+
+export function npmDistTag(tag = 'latest') {
+  if (typeof tag !== 'string' || !/^[a-zA-Z][a-zA-Z0-9._-]*$/u.test(tag) || semver.validRange(tag)) {
+    throw new Error(`Invalid npm dist-tag: ${tag}. Use a name such as latest, next or beta, not a version or range.`)
+  }
+  return tag
 }
 
 export async function requireCleanTree(run) {

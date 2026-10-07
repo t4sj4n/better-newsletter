@@ -3,7 +3,7 @@ import { join } from 'node:path'
 import process from 'node:process'
 import { Plugin } from 'release-it'
 import semver from 'semver'
-import { checked, createReleaseBranch, distTag, liveCommandRunner, npmVersion, registry, requireCurrentMain, requireGitHub, requireMainCommit, requireSuccessfulCi, tagState } from './release-core.mjs'
+import { checked, createReleaseBranch, prereleaseChannel, liveCommandRunner, npmVersion, registry, requireCurrentMain, requireGitHub, requireMainCommit, requireSuccessfulCi, tagState } from './release-core.mjs'
 import { updateChangelog } from './release-notes.mjs'
 import { releaseNotes, releasePackages, releasePaths, repository, requiredCi, requireReleaseCommit } from './release-policy.mjs'
 import { conciseMessage } from './script-errors.mjs'
@@ -37,7 +37,7 @@ export default class ReleaseWorkflow extends Plugin {
   async beforeBump() {
     if (this.options.kind !== 'prepare') return
     const version = this.config.getContext('version')
-    distTag(version)
+    prereleaseChannel(version)
     if (this.options.increment === 'prerelease' && !this.packages[0].version.includes('-')) {
       throw new Error('prerelease requires an existing channel; choose an explicit alpha, beta or rc version.')
     }

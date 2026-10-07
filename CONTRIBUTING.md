@@ -36,18 +36,30 @@ This repository is organized as a pnpm monorepo:
 # Build all packages
 pnpm build
 
-# Typecheck all packages and fixtures
+# Typecheck runtime, CLI, and root TypeScript tests
 pnpm typecheck
+```
+
+`pnpm typecheck` excludes `test/fixtures/**` and does not typecheck the playground or basic example. After building the packages, run the separate Nuxt consumer checks used in CI:
+
+```bash
+pnpm exec nuxt build test/fixtures/nuxt --logLevel=silent
+pnpm --dir playground typecheck
+pnpm --dir playground build
+pnpm --dir examples/basic typecheck
+pnpm --dir examples/basic build
 ```
 
 ### Tests & Quality Checks
 
-Run the full verification suite before committing:
+Run the repository quality checks before committing:
 
 ```bash
 # Run lint, typecheck, build, migration checks, and tests in one command
 pnpm check
 ```
+
+PostgreSQL integration tests require a running PostgreSQL database and `DATABASE_URL` pointing to a dedicated test database. Set this variable before running `pnpm check` or `pnpm test`; without it, PostgreSQL tests are skipped. CI uses PostgreSQL 16 and runs these tests, the separate Nuxt consumer checks above, packed-artifact smoke tests, and a Kysely compatibility matrix. A successful local `pnpm check` without `DATABASE_URL` does not establish the same coverage.
 
 Or run individual steps:
 
@@ -58,12 +70,15 @@ pnpm lint
 # Run Vitest test suite
 pnpm test
 
-# Check that PostgreSQL migration SQL matches the canonical TypeScript schema model
+# Build the current runtime schema before checking its SQL snapshot
+pnpm --filter better-newsletter build
 pnpm migration:snapshot:check
 
 # Update the migration SQL snapshot if the canonical schema model was intentionally changed
 pnpm migration:snapshot:write
 ```
+
+`migration:snapshot:check` imports the compiled schema from `dist`, so always rebuild the runtime after schema changes before running it separately. `pnpm check` and `migration:snapshot:write` already include the required build.
 
 ### Packed Artifact & Clean Consumer Smoke Tests
 
@@ -124,7 +139,7 @@ git pull --ff-only origin main
 pnpm release:publish
 ```
 
-The selected `HEAD` must introduce the synchronized version bump, contain that version's reviewed changelog entry and be included in `origin/main`. It may change additional reviewed files; it need not change exactly four release files. The newest relevant successful `ci.yml` push run on `main` must match this exact SHA. Pending or failed reruns still block; a newer successful run for the same SHA is accepted.
+The selected `HEAD` must introduce the synchronized version bump, contain that version's reviewed changelog entry and be included in `origin/main`. It may change additional reviewed files; it need not change exactly four release files. The CI gate selects the newest `ci.yml` push run on `main` for this exact SHA and requires it to be completed and successful. Pending or failed reruns for that SHA block publication even if an older run succeeded; a newer successful run for the same SHA is accepted. Runs for other SHAs do not affect this check.
 
 If another change has already landed on `main`, check out the actual release commit before publishing:
 
@@ -137,12 +152,14 @@ Publication checks access and external release state, installs frozen dependenci
 
 Native branch pushing is disabled in both phases. No command pushes a release commit directly to `main`.
 
-| Version | Explicit npm dist-tag |
-| --- | --- |
-| `*-alpha.*` | `alpha` |
-| `*-beta.*` | `beta` |
-| `*-rc.*` | `rc` |
-| Stable | `latest` |
+Publication defaults to the npm dist-tag `latest` for both stable and prerelease versions. Choose a different tag explicitly when publishing a preview alongside the recommended version:
+
+```bash
+pnpm release:publish --tag next
+pnpm release:publish --tag beta
+```
+
+The npm dist-tag is independent of the version's `alpha`, `beta` or `rc` identifier. Both packages receive the selected tag.
 
 GitHub prerelease status follows the version; its independent Latest release marker is left unchanged.
 
@@ -154,6 +171,8 @@ Keep valid tags and cached tarballs after a partial publication. Check out the o
 git switch --detach <original-release-commit-sha>
 pnpm release:publish --resume
 ```
+
+When recovering a publication with a custom npm dist-tag, repeat the original option, for example `pnpm release:publish --resume --tag next`. Recovery skips already published packages; it does not retag them.
 
 Recovery verifies tag identity, the recorded artifact manifest, cached files and existing npm integrities. It skips matching published packages and a complete existing GitHub Release. A CLI published without its runtime, a wrong tag/commit, conflicting integrity or premature/draft GitHub Release requires investigation. Immutable npm versions are never overwritten.
 

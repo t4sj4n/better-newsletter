@@ -6,7 +6,7 @@ import process from 'node:process'
 import { fileURLToPath, URL } from 'node:url'
 import { afterEach, describe, expect, it } from 'vitest'
 import { parseReleaseArgs, releaseConfig } from '../scripts/release-cli.mjs'
-import { distTag, githubRelease, npmVersion, publishPlan, requireMainCommit, requireSuccessfulCi } from '../scripts/release-core.mjs'
+import { npmDistTag, prereleaseChannel, githubRelease, npmVersion, publishPlan, requireMainCommit, requireSuccessfulCi } from '../scripts/release-core.mjs'
 import { releaseCommits } from '../scripts/release-notes.mjs'
 import { releaseArtifacts, releaseNotes, releasePackages, repository, requiredCi, requireReleaseCommit } from '../scripts/release-policy.mjs'
 import { preparePublication, publishPackages, publicationState } from '../scripts/release-publication.mjs'
@@ -78,7 +78,7 @@ function fixture() {
 const publishCalls = state => state.calls.filter(([command, args]) => command === 'npm' && args[0] === 'publish')
 
 describe('release package contracts', () => {
-  it.each([['0.2.0', 'latest'], ['0.2.0-alpha.1', 'alpha'], ['0.2.0-beta.1', 'beta'], ['0.2.0-rc.1', 'rc']])('uses an explicit channel for %s', (input, channel) => expect(distTag(input)).toBe(channel))
+  it.each([['0.2.0', null], ['0.2.0-alpha.1', 'alpha'], ['0.2.0-beta.1', 'beta'], ['0.2.0-rc.1', 'rc']])('identifies the prerelease version channel for %s', (input, channel) => expect(prereleaseChannel(input)).toBe(channel))
   it('rejects mismatched versions or runtime dependencies', () => {
     const f = fixture()
     const path = join(f.cwd, 'packages/cli/package.json')
@@ -109,6 +109,14 @@ describe('release package contracts', () => {
 })
 
 describe('publication and recovery hooks', () => {
+  it.each([undefined, 'next', 'beta'])('publishes both prerelease packages with the selected npm tag (%s)', async tag => {
+    const f = fixture()
+    await preparePublication(f.cwd, { run: f.run })
+    f.state.localTag = true
+    await runReleaseHook('publish', version, { cwd: f.cwd, run: f.run, tag })
+    expect(publishCalls(f.state)).toHaveLength(2)
+    for (const [, args] of publishCalls(f.state)) expect(args[args.indexOf('--tag') + 1]).toBe(tag ?? 'latest')
+  })
   it('accepts a newer green CI run for the same SHA while retaining exact-SHA validation', async () => {
     const f = fixture()
     const result = await preparePublication(f.cwd, { run: f.run })
@@ -124,7 +132,7 @@ describe('publication and recovery hooks', () => {
     await preparePublication(f.cwd, { run: f.run })
     f.state.localTag = true
     f.state.fail = name
-    await expect(runReleaseHook('publish', version, { cwd: f.cwd, run: f.run })).rejects.toThrow('Publication interrupted')
+    await expect(runReleaseHook('publish', version, { cwd: f.cwd, run: f.run, tag: 'next' })).rejects.toThrow('pnpm release:publish --resume --tag next')
     expect(publishCalls(f.state)).toHaveLength(name === 'better-newsletter' ? 1 : 2)
     expect(f.state.published.size).toBe(name === 'better-newsletter' ? 0 : 1)
     expect(f.state.calls.filter(([command, args]) => command === 'git' && args[0] === 'push').map(([, args]) => args))
@@ -136,14 +144,15 @@ describe('publication and recovery hooks', () => {
     await preparePublication(f.cwd, { run: f.run })
     f.state.localTag = true
     f.state.fail = '@better-newsletter/cli'
-    await expect(runReleaseHook('publish', version, { cwd: f.cwd, run: f.run })).rejects.toThrow('Publication interrupted')
+    await expect(runReleaseHook('publish', version, { cwd: f.cwd, run: f.run, tag: 'next' })).rejects.toThrow('pnpm release:publish --resume --tag next')
     f.state.calls = []
     f.state.fail = ''
     await preparePublication(f.cwd, { run: f.run, resume: true })
-    await runReleaseHook('publish', version, { cwd: f.cwd, run: f.run, resume: true })
+    await runReleaseHook('publish', version, { cwd: f.cwd, run: f.run, resume: true, tag: 'next' })
     expect(f.state.packed).toBe(1)
     expect(publishCalls(f.state)).toHaveLength(1)
     expect(publishCalls(f.state)[0][1][1]).toContain('better-newsletter-cli')
+    expect(publishCalls(f.state)[0][1]).toContain('next')
     expect(f.state.calls.some(([command, args]) => command === 'git' && args[0] === 'merge-base' && args.at(-1) === 'origin/main')).toBe(true)
     expect(f.state.calls.some(([command, args]) => command === 'git' && args.join(' ') === 'rev-parse origin/main')).toBe(false)
   })
@@ -213,6 +222,26 @@ describe('publication and recovery hooks', () => {
 })
 
 describe('native release-it CLI', () => {
+  it('defaults to latest and passes explicit tags to publish and recovery hooks without changing the version channel', () => {
+    const f = fixture()
+    expect(parseReleaseArgs([], 'publish').tag).toBe('latest')
+    for (const args of [[], ['--tag', 'next'], ['--tag=beta', '--resume']]) {
+      const options = parseReleaseArgs(args, 'publish')
+      const config = releaseConfig('publish', options, f.cwd)
+      expect(config.preReleaseId).toBe('beta')
+      expect(config.hooks['before:github:release']).toContain(`--tag '${options.tag}'`)
+      expect(releaseConfig('publish', options, f.cwd, true).hooks['after:release'][0]).toContain(`--tag '${options.tag}'`)
+    }
+  })
+  it.each(['', '1.2.3', 'v1', 'x', 'next preview', '--resume', 'next;echo'])('rejects invalid npm tags (%s)', tag => {
+    expect(() => npmDistTag(tag)).toThrow('Invalid npm dist-tag')
+    expect(() => parseReleaseArgs([`--tag=${tag}`], 'publish')).toThrow('Invalid npm dist-tag')
+  })
+  it('rejects missing tags and tags on prepare', () => {
+    expect(() => parseReleaseArgs(['--tag'], 'publish')).toThrow('--tag requires')
+    expect(() => parseReleaseArgs(['--tag', '--resume'], 'publish')).toThrow('--tag requires')
+    expect(() => parseReleaseArgs(['--tag', 'next'], 'prepare')).toThrow('Unknown option')
+  })
   it('rejects removed skip flags and unexpected selectors', () => {
     expect(() => parseReleaseArgs(['--skip-git-checks'], 'prepare')).toThrow('Unknown option')
     expect(() => parseReleaseArgs(['--skip-validation'], 'publish')).toThrow('Unknown option')

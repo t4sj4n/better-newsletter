@@ -3,13 +3,13 @@ import { readFileSync } from 'node:fs'
 import { join } from 'node:path'
 import process from 'node:process'
 import { fileURLToPath } from 'node:url'
-import { checked, distTag, liveCommandRunner, requireMainCommit, requireSuccessfulCi } from './release-core.mjs'
+import { checked, npmDistTag, liveCommandRunner, requireMainCommit, requireSuccessfulCi } from './release-core.mjs'
 import { releaseArtifacts, releasePackages, repository, requiredCi } from './release-policy.mjs'
 import { conciseMessage } from './script-errors.mjs'
 import { artifactDirectory, publicationState, publishPackages, removeArtifacts, verifyManifest } from './release-publication.mjs'
 
-export async function runReleaseHook(action, version, { cwd = process.cwd(), resume = false, run = liveCommandRunner(cwd) } = {}) {
-  const channel = distTag(version)
+export async function runReleaseHook(action, version, { cwd = process.cwd(), resume = false, tag = 'latest', run = liveCommandRunner(cwd) } = {}) {
+  const channel = npmDistTag(tag)
   if (action === 'prepare-pr') {
     const branch = `release/v${version}`
     if (await checked(run, 'git', ['branch', '--show-current']) !== branch) throw new Error('Release branch changed before push.')
@@ -40,13 +40,14 @@ export async function runReleaseHook(action, version, { cwd = process.cwd(), res
     console.log(`Publishing runtime and CLI v${version} with npm dist-tag ${channel}`)
     await publishPackages(run, { packages, artifacts, plan: state.plan, channel })
   } catch (error) {
-    throw new Error(`Publication interrupted: ${error.message}\nKeep the tag and cached artifacts. Check out this commit (${commit}) and run pnpm release:publish --resume.`, { cause: error })
+    throw new Error(`Publication interrupted: ${error.message}\nKeep the tag and cached artifacts. Check out this commit (${commit}) and run pnpm release:publish --resume --tag ${channel}.`, { cause: error })
   }
 }
 
 if (process.argv[1] && fileURLToPath(import.meta.url) === process.argv[1]) {
   try {
-    await runReleaseHook(process.argv[2], process.argv[3], { resume: process.argv.includes('--resume') })
+    await runReleaseHook(process.argv[2], process.argv[3], { resume: process.argv.includes('--resume'),
+      tag: process.argv.includes('--tag') ? process.argv[process.argv.indexOf('--tag') + 1] : undefined })
   } catch (error) {
     console.error(process.argv.includes('--verbose') ? error.stack : conciseMessage(error.message))
     process.exitCode = error.exitCode ?? 1

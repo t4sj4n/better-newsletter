@@ -2,7 +2,7 @@ import { createHash } from 'node:crypto'
 import { readFileSync } from 'node:fs'
 import { join } from 'node:path'
 import semver from 'semver'
-import { checked, distTag, validVersion } from './release-core.mjs'
+import { checked, prereleaseChannel, validVersion } from './release-core.mjs'
 
 export const repository = 't4sj4n/better-newsletter'
 export const requiredCi = { workflow: 'ci.yml', event: 'push', branch: 'main' }
@@ -17,7 +17,7 @@ export function releasePackages(cwd) {
   }))
   const [runtime, cli] = packages
   validVersion(runtime.version)
-  distTag(runtime.version)
+  prereleaseChannel(runtime.version)
   if (runtime.name !== 'better-newsletter' || cli.name !== '@better-newsletter/cli') {
     throw new Error('Unexpected runtime/CLI package names.')
   }

@@ -44,7 +44,7 @@ jobs:
 
       - name: Install npm supporting OIDC trusted publishing
         run: |
-          npm install --global npm@11.5.1
+          npm install --global npm@latest
           npm --version
 
       - name: Install dependencies
@@ -79,38 +79,9 @@ jobs:
           echo "tag=$TAG" >> "$GITHUB_OUTPUT"
           echo "version=$VERSION" >> "$GITHUB_OUTPUT"
           if [[ "$TAG" =~ -(alpha|beta|rc) ]]; then
+            DIST_TAG=$(echo "$TAG" | sed -E 's/.*-(alpha|beta|rc).*/\1/')
+            echo "dist_tag=--tag $DIST_TAG" >> "$GITHUB_OUTPUT"
             echo "is_prerelease=true" >> "$GITHUB_OUTPUT"
-            # Query the npm registry specifically to distinguish confirmed absence from network/registry errors
-            LATEST_RESULT=$(node -e '
-              async function getLatest() {
-                try {
-                  const res = await fetch("https://registry.npmjs.org/better-newsletter", {
-                    headers: { Accept: "application/vnd.npm.install-v1+json" }
-                  });
-                  if (res.status === 404) {
-                    process.stdout.write("__ABSENT__");
-                    return;
-                  }
-                  if (!res.ok) {
-                    process.stderr.write(`Registry HTTP ${res.status}`);
-                    process.exit(1);
-                  }
-                  const meta = await res.json();
-                  const latest = meta["dist-tags"]?.latest;
-                  process.stdout.write(latest || "__ABSENT__");
-                } catch (error) {
-                  process.stderr.write(error.message || String(error));
-                  process.exit(1);
-                }
-              }
-              getLatest();
-            ')
-            if [ "$LATEST_RESULT" = "__ABSENT__" ] || [[ "$LATEST_RESULT" =~ -(alpha|beta|rc) ]]; then
-              echo "dist_tag=" >> "$GITHUB_OUTPUT"
-            else
-              DIST_TAG=$(echo "$TAG" | sed -E 's/.*-(alpha|beta|rc).*/\1/')
-              echo "dist_tag=--tag $DIST_TAG" >> "$GITHUB_OUTPUT"
-            fi
           else
             echo "dist_tag=" >> "$GITHUB_OUTPUT"
             echo "is_prerelease=false" >> "$GITHUB_OUTPUT"
@@ -143,5 +114,41 @@ jobs:
       - name: Publish packages to npm via OIDC Trusted Publishing
         run: |
           pnpm publish -r --access public --no-git-checks --provenance ${{ steps.release-meta.outputs.dist_tag }}
+
+      - name: Update latest dist-tag while in prerelease stage
+        run: |
+          VERSION="${{ steps.release-meta.outputs.version }}"
+          # Query the npm registry to distinguish confirmed absence from network/registry errors
+          LATEST_RESULT=$(node -e '
+            async function getLatest() {
+              try {
+                const res = await fetch("https://registry.npmjs.org/better-newsletter", {
+                  headers: { Accept: "application/vnd.npm.install-v1+json" }
+                });
+                if (res.status === 404) {
+                  process.stdout.write("__ABSENT__");
+                  return;
+                }
+                if (!res.ok) {
+                  process.stderr.write(`Registry HTTP ${res.status}`);
+                  process.exit(1);
+                }
+                const meta = await res.json();
+                const latest = meta["dist-tags"]?.latest;
+                process.stdout.write(latest || "__ABSENT__");
+              } catch (error) {
+                process.stderr.write(error.message || String(error));
+                process.exit(1);
+              }
+            }
+            getLatest();
+          ')
+          if [ "$LATEST_RESULT" = "__ABSENT__" ] || [[ "$LATEST_RESULT" =~ -(alpha|beta|rc) ]]; then
+            echo "Current latest ($LATEST_RESULT) is absent or a prerelease; updating latest tag to $VERSION"
+            npm dist-tag add better-newsletter@"$VERSION" latest
+            npm dist-tag add @better-newsletter/cli@"$VERSION" latest
+          else
+            echo "A stable release ($LATEST_RESULT) already exists; preserving stable latest tag."
+          fi
 
 

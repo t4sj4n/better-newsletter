@@ -1,5 +1,13 @@
 # Changelog
 
+## v0.1.0-beta.5
+
+[compare changes](https://github.com/t4sj4n/better-newsletter/compare/v0.1.0-beta.4...v0.1.0-beta.5)
+
+### 🩹 Fixes
+
+- Use Node 22 LTS default in reusable release workflow ([#73](https://github.com/t4sj4n/better-newsletter/pull/73))
+
 ## v0.1.0-beta.4
 
 [compare changes](https://github.com/t4sj4n/better-newsletter/compare/v0.1.0-beta.3...v0.1.0-beta.4)

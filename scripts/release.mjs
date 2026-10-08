@@ -64,7 +64,7 @@ export async function runRelease({ cwd = process.cwd(), releaseArg, ui } = {}) {
   }
 
   // Interactive version selection and file update via bumpp
-  const bumpResult = await versionBump({
+  const executeBump = () => versionBump({
     cwd,
     release: releaseArg,
     currentVersion,
@@ -77,6 +77,8 @@ export async function runRelease({ cwd = process.cwd(), releaseArg, ui } = {}) {
     push: false,
     noGitCheck: true
   })
+
+  const bumpResult = ui && !releaseArg ? await ui.input(executeBump) : await executeBump()
 
   const newVersion = bumpResult.newVersion
   if (!newVersion || !semver.valid(newVersion)) {
@@ -108,7 +110,19 @@ export async function runRelease({ cwd = process.cwd(), releaseArg, ui } = {}) {
       run('git', ['tag', '-a', `v${newVersion}`, '-m', `v${newVersion}`])
     })
 
-    ui.finish(`Created release commit and tag v${newVersion}. Push to trigger publication:\n\n  git push origin main --follow-tags`)
+    const shouldPush = await ui.confirm({
+      message: `Push commit and tag v${newVersion} to origin to trigger publication?`,
+      initialValue: true
+    })
+
+    if (shouldPush) {
+      await ui.step(`Pushing main and tag v${newVersion} to origin`, async () => {
+        run('git', ['push', 'origin', 'main', '--follow-tags'])
+      })
+      ui.finish(`Released and pushed v${newVersion} to origin. GitHub Actions workflow will publish packages.`)
+    } else {
+      ui.finish(`Created release commit and tag v${newVersion}. Push when ready to publish:\n\n  git push origin main --follow-tags`)
+    }
   } else {
     const updatedCliPkg = JSON.parse(readFileSync(cliPkgPath, 'utf8'))
     updatedCliPkg.dependencies['better-newsletter'] = `workspace:${newVersion}`

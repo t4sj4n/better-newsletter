@@ -3,7 +3,7 @@ import { performance } from 'node:perf_hooks'
 import process from 'node:process'
 import { Writable } from 'node:stream'
 import { stripVTControlCharacters } from 'node:util'
-import { cancel, intro, isCancel, isCI, log, note, outro, S_BAR, spinner, taskLog } from '@clack/prompts'
+import { cancel, confirm as clackConfirm, intro, isCancel, isCI, log, note, outro, S_BAR, spinner, taskLog } from '@clack/prompts'
 import picocolors from 'picocolors'
 import { conciseMessage } from './script-errors.mjs'
 import { checkedResult, liveCommandRunner } from './script-core.mjs'
@@ -256,6 +256,9 @@ export function createScriptUi({ name = 'better-newsletter', operation = 'Script
       } finally {
         if (--promptDepth === 0) promptWait += elapsed(promptStartedAt)
       }
+    },
+    async confirm({ message, initialValue = false }) {
+      return this.input(async () => clackConfirm({ message: format(message), initialValue }))
     },
     async step(label, action) {
       const start = now()

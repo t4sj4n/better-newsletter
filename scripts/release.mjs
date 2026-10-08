@@ -3,7 +3,7 @@ import { execFileSync } from 'node:child_process'
 import { readFileSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 import process from 'node:process'
-import { versionBump } from 'bumpp'
+import { versionBump, versionBumpInfo } from 'bumpp'
 import semver from 'semver'
 import { updateChangelog } from './release-notes.mjs'
 import { runScriptCli } from './script-cli.mjs'
@@ -63,8 +63,8 @@ export async function runRelease({ cwd = process.cwd(), releaseArg, ui } = {}) {
     currentVersion = runtimePkg.version
   }
 
-  // Interactive version selection and file update via bumpp
-  const bumpResult = await versionBump({
+  // Interactive version selection via bumpp info (does not modify files)
+  const getBumpInfo = () => versionBumpInfo({
     cwd,
     release: releaseArg,
     currentVersion,
@@ -78,10 +78,24 @@ export async function runRelease({ cwd = process.cwd(), releaseArg, ui } = {}) {
     noGitCheck: true
   })
 
-  const newVersion = bumpResult.newVersion
-  if (!newVersion || semver.compare(newVersion, currentVersion) <= 0) {
-    throw new Error(`Selected version (v${newVersion}) must be greater than current version (v${currentVersion}).`)
+  const bumpInfo = ui && !releaseArg ? await ui.input(getBumpInfo) : await getBumpInfo()
+
+  const newVersion = bumpInfo.state.newVersion
+  if (!newVersion || !semver.valid(newVersion)) {
+    throw new Error(`Invalid version: '${newVersion}'.`)
   }
+
+  const existingTag = run('git', ['tag', '-l', `v${newVersion}`], true).trim()
+  if (existingTag) {
+    throw new Error(`Git tag 'v${newVersion}' already exists. Choose a new version or remove the tag first.`)
+  }
+
+  // Apply version bump to package manifests
+  await versionBump({
+    ...bumpInfo.options,
+    release: newVersion,
+    printCommits: false
+  })
 
   // Synchronize CLI workspace dependency and lockfile
   if (ui) {
@@ -103,7 +117,19 @@ export async function runRelease({ cwd = process.cwd(), releaseArg, ui } = {}) {
       run('git', ['tag', '-a', `v${newVersion}`, '-m', `v${newVersion}`])
     })
 
-    ui.finish(`Created release commit and tag v${newVersion}. Push to trigger publication:\n\n  git push origin main --follow-tags`)
+    const shouldPush = await ui.confirm({
+      message: `Push commit and tag v${newVersion} to origin to trigger publication?`,
+      initialValue: true
+    })
+
+    if (shouldPush) {
+      await ui.step(`Pushing main and tag v${newVersion} to origin`, async () => {
+        run('git', ['push', 'origin', 'main', `v${newVersion}`])
+      })
+      ui.finish(`Released and pushed v${newVersion} to origin. GitHub Actions workflow will publish packages.`)
+    } else {
+      ui.finish(`Created release commit and tag v${newVersion}. Push when ready to publish:\n\n  git push origin main v${newVersion}`)
+    }
   } else {
     const updatedCliPkg = JSON.parse(readFileSync(cliPkgPath, 'utf8'))
     updatedCliPkg.dependencies['better-newsletter'] = `workspace:${newVersion}`

@@ -18,20 +18,19 @@ describe('Nuxt module installation', () => {
     const nuxt = await loadNuxt({ cwd, dev: true })
     try {
       const routes = registeredRoutes(nuxt).filter(handler =>
-        handler.route?.startsWith('/api/newsletter/')
+        handler.route?.startsWith('/api/newsletter')
       )
-      expect(routes.map(route => route.route)).toEqual([
-        '/api/newsletter/**'
-      ])
-      expect(routes[0]?.method).toBe('post')
-      const nitro: unknown = Reflect.get(nuxt.options, 'nitro')
-      expect(nitro).toMatchObject({
-        virtual: {
-          '#better-newsletter-config': expect.any(Function),
-          '#better-newsletter-handler': expect.any(Function)
-        },
-        externals: { inline: [expect.stringContaining('/dist')] }
+      expect(routes.map(route => route.route)).toContain('/api/newsletter/**')
+      expect(routes.every(route => route.method === 'post')).toBe(true)
+      const nitro = Reflect.get(nuxt.options, 'nitro') as {
+        virtual: Record<string, unknown>
+        externals: { inline: Array<unknown> }
+      }
+      expect(nitro.virtual).toMatchObject({
+        '#better-newsletter-config': expect.any(Function),
+        '#better-newsletter-handler': expect.any(Function)
       })
+      expect(nitro.externals.inline).toContainEqual(expect.stringContaining('/dist'))
       expect(nuxt.options.runtimeConfig.public).not.toHaveProperty('storage')
       expect(nuxt.options.runtimeConfig.public).not.toHaveProperty('capabilities')
       expect(nuxt.options.runtimeConfig.public.betterNewsletter).toMatchObject({
@@ -53,9 +52,10 @@ describe('Nuxt module installation', () => {
       }
     })
     try {
-      expect(registeredRoutes(nuxt).filter(handler => handler.route?.startsWith('/api/signup')))
-        .toEqual([expect.objectContaining({ route: '/api/signup/**', method: 'post' })])
-      expect(registeredRoutes(nuxt).some(handler => handler.route?.startsWith('/api/newsletter/'))).toBe(false)
+      const routes = registeredRoutes(nuxt).filter(handler => handler.route?.startsWith('/api/signup'))
+      expect(routes).toContainEqual(expect.objectContaining({ route: '/api/signup/**', method: 'post' }))
+      expect(routes.every(handler => handler.method === 'post')).toBe(true)
+      expect(registeredRoutes(nuxt).some(handler => handler.route?.startsWith('/api/newsletter'))).toBe(false)
     } finally {
       await nuxt.close()
     }

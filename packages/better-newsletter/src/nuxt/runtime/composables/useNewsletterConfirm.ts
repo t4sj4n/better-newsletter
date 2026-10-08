@@ -49,11 +49,11 @@ export function useNewsletterConfirm(options?: UseNewsletterConfirmOptions): Use
 
   const resultTitle = computed(() => {
     switch (displayState.value) {
-      case 'success': return messages.value.confirmation.success
-      case 'alreadyConfirmed': return messages.value.confirmation.alreadyConfirmed
-      case 'expired': return messages.value.confirmation.expired
-      case 'invalid': return messages.value.confirmation.invalid
-      default: return messages.value.confirmation.error
+      case 'success': return messages.value.confirmation.successTitle
+      case 'alreadyConfirmed': return messages.value.confirmation.alreadyConfirmedTitle
+      case 'expired': return messages.value.confirmation.expiredTitle
+      case 'invalid': return messages.value.confirmation.invalidTitle
+      default: return messages.value.common.error
     }
   })
 

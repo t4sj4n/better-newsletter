@@ -1,6 +1,7 @@
 <script setup lang="ts">
 type Subscription = { audience: string, status: string, unsubscribeCapability: string }
 
+const client = useNewsletterClient()
 const route = useRoute()
 const capability = computed(() => typeof route.query.capability === 'string' ? route.query.capability : '')
 const subscriptions = ref<Subscription[] | null>(null)
@@ -14,12 +15,9 @@ async function viewPreferences() {
   if (!capability.value || busy.value) return
   busy.value = true
   try {
-    const result = await $fetch<{ subscriptions: Subscription[] | null }>(
-      '/api/newsletter/preferences',
-      { method: 'POST', body: { capability: capability.value } }
-    )
+    const result = await client.preferences(capability.value)
     completed.value = true
-    subscriptions.value = result.subscriptions
+    subscriptions.value = result.subscriptions as Subscription[] | null
     message.value = result.subscriptions == null
       ? 'This preferences link is invalid or outdated.'
       : 'Current audience subscriptions are shown below. You can close this tab when finished and return to the demo.'

@@ -46,9 +46,9 @@ export function useNewsletterUnsubscribe(options?: UseNewsletterUnsubscribeOptio
 
   const resultTitle = computed(() => {
     switch (displayState.value) {
-      case 'success': return messages.value.unsubscribe.success
-      case 'invalid': return messages.value.unsubscribe.invalid
-      default: return messages.value.unsubscribe.error
+      case 'success': return messages.value.unsubscribe.successTitle
+      case 'invalid': return messages.value.unsubscribe.invalidTitle
+      default: return messages.value.common.error
     }
   })
 

@@ -51,6 +51,8 @@ async function refreshInbox() {
   }
 }
 
+const client = useNewsletterClient()
+
 async function subscribe() {
   if (!consent.value || selectedAudiences.value.length === 0) {
     message.value = 'Choose at least one audience and explicitly consent first.'
@@ -58,15 +60,12 @@ async function subscribe() {
   }
   busy.value = true
   try {
-    await $fetch('/api/newsletter/subscribe', {
-      method: 'POST',
-      body: {
-        email: email.value,
-        audiences: selectedAudiences.value,
-        consent: true,
-        consentVersion: 'demo-privacy-v1',
-        website: website.value
-      }
+    await client.subscribe({
+      email: email.value,
+      audiences: selectedAudiences.value,
+      consent: true,
+      consentVersion: 'demo-privacy-v1',
+      ...(website.value ? { metadata: { website: website.value } } : {})
     })
     message.value = 'Request accepted. Refresh the development inbox for confirmation links.'
     await refreshInbox()
@@ -80,10 +79,7 @@ async function subscribe() {
 async function resend() {
   busy.value = true
   try {
-    await $fetch('/api/newsletter/resend-confirmation', {
-      method: 'POST',
-      body: { email: email.value, audience: retryAudience.value }
-    })
+    await client.resendConfirmation({ email: email.value, audience: retryAudience.value })
     await refreshInbox()
     message.value = inbox.value?.mailerMode === 'resend'
       ? `Confirmation email requested again for ${retryAudience.value}. Check the recipient inbox for the new message.`

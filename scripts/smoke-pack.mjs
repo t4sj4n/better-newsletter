@@ -359,9 +359,9 @@ if (typeof module.default !== 'function' || !Object.keys(server).length ||
   }, {
     kysely: '0.29.5',
     pg: rootManifest.devDependencies.pg,
-    '@nuxt/kit': '4.5.2',
+    '@nuxt/kit': '4.6.0',
     h3: runtimeManifest.peerDependencies.h3,
-    nuxt: '4.5.2'
+    nuxt: '4.6.0'
   }, `
 import type { NewsletterMigrations } from 'better-newsletter/db/migration'
 import type { CreateConfirmationTokenInput } from 'better-newsletter'

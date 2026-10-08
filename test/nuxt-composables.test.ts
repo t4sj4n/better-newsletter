@@ -101,6 +101,7 @@ describe('useNewsletterConfirm', () => {
     expect(confirmation.displayState.value).toBe('idle')
     await confirmation.confirm()
     expect(confirmation.displayState.value).toBe('expired')
+    expect(confirmation.resultTitle.value).toBe(defaultNewsletterCopy.confirmation.expiredTitle)
     expect(confirmation.completed.value).toBe(false)
   })
 
@@ -113,7 +114,20 @@ describe('useNewsletterConfirm', () => {
 
     await confirmation.confirm()
     expect(confirmation.displayState.value).toBe('success')
+    expect(confirmation.resultTitle.value).toBe(defaultNewsletterCopy.confirmation.successTitle)
     expect(confirmation.completed.value).toBe(true)
+  })
+
+  it('falls back to common.error for error states', async () => {
+    const confirm = vi.fn().mockRejectedValue(new Error('Unknown'))
+    const confirmation = useNewsletterConfirm({
+      token: 'test-token',
+      client: { confirm, resendConfirmation: vi.fn() }
+    })
+
+    await confirmation.confirm()
+    expect(confirmation.displayState.value).toBe('error')
+    expect(confirmation.resultTitle.value).toBe(defaultNewsletterCopy.common.error)
   })
 })
 
@@ -145,6 +159,7 @@ describe('useNewsletterUnsubscribe', () => {
     await unsub.unsubscribe()
     expect(unsubscribe).toHaveBeenCalledWith('test-cap')
     expect(unsub.displayState.value).toBe('success')
+    expect(unsub.resultTitle.value).toBe(defaultNewsletterCopy.unsubscribe.successTitle)
   })
 
   it('maps false result to invalid', async () => {
@@ -153,6 +168,16 @@ describe('useNewsletterUnsubscribe', () => {
 
     await unsub.unsubscribe()
     expect(unsub.displayState.value).toBe('invalid')
+    expect(unsub.resultTitle.value).toBe(defaultNewsletterCopy.unsubscribe.invalidTitle)
+  })
+
+  it('falls back to common.error for error states', async () => {
+    const unsubscribe = vi.fn().mockRejectedValue(new Error('Unknown'))
+    const unsub = useNewsletterUnsubscribe({ token: 'test-cap', client: { unsubscribe } })
+
+    await unsub.unsubscribe()
+    expect(unsub.displayState.value).toBe('error')
+    expect(unsub.resultTitle.value).toBe(defaultNewsletterCopy.common.error)
   })
 })
 

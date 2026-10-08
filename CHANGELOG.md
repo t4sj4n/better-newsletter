@@ -1,5 +1,13 @@
 # Changelog
 
+## v0.1.0-beta.4
+
+[compare changes](https://github.com/t4sj4n/better-newsletter/compare/v0.1.0-beta.3...v0.1.0-beta.4)
+
+### 🩹 Fixes
+
+- Set dist-tag directly on publish to avoid unauthenticated npm dist-tag add ([#72](https://github.com/t4sj4n/better-newsletter/pull/72))
+
 ## v0.1.0-beta.3
 
 [compare changes](https://github.com/t4sj4n/better-newsletter/compare/v0.1.0-beta.2...v0.1.0-beta.3)

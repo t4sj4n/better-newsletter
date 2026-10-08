@@ -163,7 +163,7 @@ export async function resolve(specifier, context, nextResolve) {
     '.', './client', './adapters/memory', './adapters/postgres', './mailers', './mailers/resend',
     './webhooks/resend',
     './security', './storage', './db/migration', './nuxt', './nuxt/server',
-    './nuxt/client', './nuxt/handler', './package.json'
+    './nuxt/client', './nuxt/handler', './nuxt/runtime', './package.json'
   ], ['package/migrations/postgres/001_newsletter.sql'])
   if ([...runtime.files].some(file => file.startsWith('package/dist/nuxt/routes/'))) {
     throw new Error('Packed runtime still contains obsolete individual newsletter routes')

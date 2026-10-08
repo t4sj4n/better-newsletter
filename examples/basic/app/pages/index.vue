@@ -9,11 +9,20 @@ interface Inbox {
   unsubscribeUrl: string | null
 }
 
-const email = ref('')
-const consent = ref(false)
+const {
+  email,
+  consent,
+  state: signupState,
+  emailError,
+  consentError,
+  submit: submitSignup
+} = useNewsletterSignup({
+  consentVersion: 'basic-v1'
+})
+
 const inbox = ref<Inbox | null>(null)
 const message = ref('')
-const busy = ref(false)
+const loadingInbox = ref(false)
 
 let inboxRequest = 0
 watch(email, () => {
@@ -26,6 +35,7 @@ async function refreshInbox() {
   const address = email.value.trim()
   inbox.value = null
   if (!address) return
+  loadingInbox.value = true
   try {
     const result = await $fetch<Inbox>('/api/example/inbox', {
       method: 'POST',
@@ -36,27 +46,18 @@ async function refreshInbox() {
     if (request !== inboxRequest) return
     inbox.value = null
     message.value = 'Could not load the local inbox.'
+  } finally {
+    loadingInbox.value = false
   }
 }
 
 async function subscribe() {
-  if (!consent.value || busy.value) return
-  busy.value = true
-  try {
-    await $fetch('/api/newsletter/subscribe', {
-      method: 'POST',
-      body: {
-        email: email.value,
-        consent: true,
-        consentVersion: 'basic-v1'
-      }
-    })
+  const result = await submitSignup()
+  if (result && !result.failed) {
     message.value = 'Request accepted. Refresh the local inbox to see any confirmation mail.'
     await refreshInbox()
-  } catch {
+  } else if (result?.failed) {
     message.value = 'Could not submit your request. Please try again.'
-  } finally {
-    busy.value = false
   }
 }
 
@@ -81,14 +82,14 @@ function toRelative(url: string | null): string {
         <input v-model="consent" type="checkbox" required>
         I agree to receive the newsletter (consent version basic-v1).
       </label>
-      <button :disabled="busy" type="submit">Request confirmation</button>
+      <button :disabled="signupState === 'loading'" type="submit">Request confirmation</button>
     </form>
     <p role="status">{{ message }}</p>
 
     <section>
       <h2>Local development inbox</h2>
       <p>For local testing only: this inbox reveals bearer links and subscription status for the entered address.</p>
-      <button :disabled="busy || !email.trim()" type="button" @click="refreshInbox">Refresh inbox</button>
+      <button :disabled="loadingInbox || !email.trim()" type="button" @click="refreshInbox">Refresh inbox</button>
       <template v-if="inbox">
         <p>Subscription: {{ inbox.status ?? 'none' }}</p>
         <template v-if="inbox.mail">

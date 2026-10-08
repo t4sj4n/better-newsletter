@@ -1,44 +1,28 @@
 <script setup lang="ts">
 const route = useRoute()
-const capability = computed(() => typeof route.query.capability === 'string' ? route.query.capability : '')
+const client = useNewsletterClient()
 const all = computed(() => route.query.all === '1')
-const completed = ref(false)
-const message = ref('')
-const busy = ref(false)
+
+const { token, state, resultTitle, unsubscribe: unsubscribeSingle } = useNewsletterUnsubscribe({
+  client: {
+    unsubscribe: (cap: string) => all.value ? client.unsubscribeAll(cap) : client.unsubscribe(cap)
+  }
+})
+
+const completed = computed(() => state.value === 'success')
 
 useHead({ meta: [{ name: 'referrer', content: 'no-referrer' }] })
-
-async function unsubscribe() {
-  if (!capability.value || busy.value) return
-  busy.value = true
-  try {
-    const result = await $fetch<{ unsubscribed: boolean }>(
-      all.value ? '/api/newsletter/unsubscribe-all' : '/api/newsletter/unsubscribe',
-      { method: 'POST', body: { capability: capability.value } }
-    )
-    completed.value = true
-    message.value = result.unsubscribed
-      ? all.value
-        ? 'Unsubscribed from all audiences. You can close this tab and return to the demo.'
-        : 'Unsubscribed from this audience. You can close this tab and return to the demo.'
-      : 'This link is invalid or outdated.'
-  } catch {
-    message.value = 'Unsubscribe failed. Please try again later.'
-  } finally {
-    busy.value = false
-  }
-}
 </script>
 
 <template>
   <main>
     <h1>{{ all ? 'Unsubscribe from all newsletters' : 'Unsubscribe from a newsletter' }}</h1>
     <p>Opening this page does not change preferences. Only the button sends a POST request.</p>
-    <p v-if="!capability">The unsubscribe link is missing a capability.</p>
-    <button v-else-if="!completed" :disabled="busy" @click="unsubscribe">
+    <p v-if="!token">The unsubscribe link is missing a capability.</p>
+    <button v-else-if="!completed" :disabled="state === 'loading'" @click="() => unsubscribeSingle()">
       {{ all ? 'Unsubscribe from all' : 'Unsubscribe from this audience' }}
     </button>
-    <p role="status">{{ message }}</p>
+    <p v-if="state !== 'idle'" role="status">{{ resultTitle }}</p>
     <NuxtLink to="/">Open demo in this tab</NuxtLink>
   </main>
 </template>

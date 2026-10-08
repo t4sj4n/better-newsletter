@@ -24,7 +24,7 @@ This repository is organized as a pnpm monorepo:
 - [`packages/better-newsletter`](packages/better-newsletter/): Core runtime library, storage adapters (Memory, PostgreSQL), mailers (Resend), security primitives, and Nuxt integration module.
 - [`packages/cli`](packages/cli/): `@better-newsletter/cli` executable for database schema migrations.
 - [`playground/`](playground/): Local maintainer playground app with interactive controls (clock manipulation, failure injection, PostgreSQL/Resend modes).
-- [`examples/basic/`](examples/basic/): Minimal copyable Nuxt 4 consumer demonstrating the Double Opt-In lifecycle, also used for the [StackBlitz demo](https://stackblitz.com/github/t4sj4n/better-newsletter/tree/main/examples/basic).
+- [`examples/basic/`](examples/basic/): Minimal copyable Nuxt 4 consumer demonstrating the Double Opt-In lifecycle, also used for the [StackBlitz demo](https://stackblitz.com/github/t4sj4n/better-newsletter/tree/main/examples/basic). In `examples/basic/package.json`, `"better-newsletter": "latest"` is specified so standalone StackBlitz instances always load the newest published release from npm. Inside this workspace, the root `package.json` configures a `pnpm.overrides` rule (`better-newsletter-basic-example>better-newsletter: workspace:*`) so local branch development and CI typechecks run directly against the local workspace package without manual switching.
 
 ---
 

@@ -1,12 +1,14 @@
 import { existsSync } from 'node:fs'
 import { resolve as resolvePath } from 'node:path'
-import { addServerHandler, addServerTemplate, createResolver, defineNuxtModule } from '@nuxt/kit'
+import { addImports, addServerHandler, addServerTemplate, createResolver, defineNuxtModule } from '@nuxt/kit'
 import type { NuxtModule } from 'nuxt/schema'
 import { assertNewsletterBasePath } from './nuxt/routing.js'
+import type { NewsletterCopyOverrides } from './nuxt/runtime/copy.js'
 
 export interface BetterNewsletterModuleOptions {
   basePath: string
   configFile: string
+  copy?: NewsletterCopyOverrides
 }
 
 export type BetterNewsletterUserOptions = Partial<BetterNewsletterModuleOptions>
@@ -48,6 +50,42 @@ const betterNewsletterModule: NuxtModule<BetterNewsletterModuleOptions> = define
       getContents: () => `import { createNewsletterHandler } from ${JSON.stringify(resolve('./nuxt/handler.js'))};
 export default createNewsletterHandler(${JSON.stringify({ basePath: options.basePath })});`
     })
+
+    const runtimeConfig = nuxt.options.runtimeConfig as typeof nuxt.options.runtimeConfig & {
+      public: Record<string, unknown>
+    }
+    runtimeConfig.public.betterNewsletter = {
+      basePath: options.basePath,
+      copy: options.copy ?? {}
+    }
+
+    addImports([
+      {
+        name: 'useNewsletterClient',
+        from: resolve('./nuxt/runtime/composables/useNewsletterClient.js')
+      },
+      {
+        name: 'useNewsletterCopy',
+        from: resolve('./nuxt/runtime/composables/useNewsletterCopy.js')
+      },
+      {
+        name: 'useNewsletterSignup',
+        from: resolve('./nuxt/runtime/composables/useNewsletterSignup.js')
+      },
+      {
+        name: 'useNewsletterConfirm',
+        from: resolve('./nuxt/runtime/composables/useNewsletterConfirm.js')
+      },
+      {
+        name: 'useNewsletterResend',
+        from: resolve('./nuxt/runtime/composables/useNewsletterResend.js')
+      },
+      {
+        name: 'useNewsletterUnsubscribe',
+        from: resolve('./nuxt/runtime/composables/useNewsletterUnsubscribe.js')
+      }
+    ])
+
     // Nitro dev otherwise externalizes linked-package imports with paths
     // relative to its generated entry rather than to this package.
     const nitro = nuxt.options as typeof nuxt.options & {

@@ -163,7 +163,7 @@ export async function resolve(specifier, context, nextResolve) {
     '.', './client', './adapters/memory', './adapters/postgres', './mailers', './mailers/resend',
     './webhooks/resend',
     './security', './storage', './db/migration', './nuxt', './nuxt/server',
-    './nuxt/client', './nuxt/handler', './package.json'
+    './nuxt/client', './nuxt/handler', './nuxt/runtime', './package.json'
   ], ['package/migrations/postgres/001_newsletter.sql'])
   if ([...runtime.files].some(file => file.startsWith('package/dist/nuxt/routes/'))) {
     throw new Error('Packed runtime still contains obsolete individual newsletter routes')
@@ -359,9 +359,9 @@ if (typeof module.default !== 'function' || !Object.keys(server).length ||
   }, {
     kysely: '0.29.5',
     pg: rootManifest.devDependencies.pg,
-    '@nuxt/kit': '4.5.2',
+    '@nuxt/kit': '4.6.0',
     h3: runtimeManifest.peerDependencies.h3,
-    nuxt: '4.5.2'
+    nuxt: '4.6.0'
   }, `
 import type { NewsletterMigrations } from 'better-newsletter/db/migration'
 import type { CreateConfirmationTokenInput } from 'better-newsletter'

@@ -23,7 +23,7 @@
     "@arethetypeswrong/cli": "^0.18.5",
     "@clack/prompts": "~1.0.1",
     "@eslint/js": "^9.35.0",
-    "@nuxt/kit": "^4.5.2",
+    "@nuxt/kit": "^4.6.0",
     "@release-it/bumper": "~8.0.1",
     "@types/pg": "^8.23.1",
     "better-newsletter": "workspace:*",
@@ -31,7 +31,7 @@
     "eslint": "^9.35.0",
     "h3": "^1.15.11",
     "kysely": "^0.28.17",
-    "nuxt": "^4.5.2",
+    "nuxt": "^4.6.0",
     "pg": "^8.23.0",
     "picocolors": "^1.1.1",
     "publint": "^0.3.24",
@@ -40,6 +40,12 @@
     "semver": "^7.8.5",
     "typescript": "^5.9.2",
     "typescript-eslint": "^8.42.0",
-    "vitest": "^3.2.4"
+    "vitest": "^3.2.4",
+    "vue": "^3.5.0"
+  },
+  "pnpm": {
+    "overrides": {
+      "better-newsletter-basic-example>better-newsletter": "workspace:*"
+    }
   }
 }

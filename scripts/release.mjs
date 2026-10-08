@@ -7,6 +7,7 @@ import { versionBump, versionBumpInfo } from 'bumpp'
 import semver from 'semver'
 import { updateChangelog } from './release-notes.mjs'
 import { runScriptCli } from './script-cli.mjs'
+import { scriptCommand } from './script-ui.mjs'
 
 /**
  * Interactive local release command using Clack UI, bumpp, and changelogen.
@@ -99,11 +100,17 @@ export async function runRelease({ cwd = process.cwd(), releaseArg, ui } = {}) {
 
   // Synchronize CLI workspace dependency and lockfile
   if (ui) {
-    await ui.step(`Synchronizing CLI dependency and updating lockfile for v${newVersion}`, async () => {
+    const cmd = scriptCommand(cwd, undefined, ui)
+
+    await ui.step(`Synchronizing CLI dependency for v${newVersion}`, async () => {
       const updatedCliPkg = JSON.parse(readFileSync(cliPkgPath, 'utf8'))
       updatedCliPkg.dependencies['better-newsletter'] = `workspace:${newVersion}`
       writeFileSync(cliPkgPath, `${JSON.stringify(updatedCliPkg, null, 2)}\n`)
-      run('pnpm', ['install', '--lockfile-only', '--ignore-scripts'])
+    })
+
+    await cmd('pnpm', ['install', '--lockfile-only', '--ignore-scripts'], {
+      label: `Updating lockfile for v${newVersion}`,
+      completed: `Updated lockfile for v${newVersion}`
     })
 
     await ui.step(`Generating release notes in CHANGELOG.md for v${newVersion}`, async () => {
@@ -123,8 +130,9 @@ export async function runRelease({ cwd = process.cwd(), releaseArg, ui } = {}) {
     })
 
     if (shouldPush) {
-      await ui.step(`Pushing main and tag v${newVersion} to origin`, async () => {
-        run('git', ['push', 'origin', 'main', `v${newVersion}`])
+      await cmd('git', ['push', 'origin', 'main', `v${newVersion}`], {
+        label: `Pushing main and tag v${newVersion} to origin`,
+        completed: `Pushed main and tag v${newVersion} to origin`
       })
       ui.finish(`Released and pushed v${newVersion} to origin. GitHub Actions workflow will publish packages.`)
     } else {

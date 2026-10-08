@@ -79,8 +79,13 @@ export async function runRelease({ cwd = process.cwd(), releaseArg, ui } = {}) {
   })
 
   const newVersion = bumpResult.newVersion
-  if (!newVersion || semver.compare(newVersion, currentVersion) <= 0) {
-    throw new Error(`Selected version (v${newVersion}) must be greater than current version (v${currentVersion}).`)
+  if (!newVersion || !semver.valid(newVersion)) {
+    throw new Error(`Invalid version: '${newVersion}'.`)
+  }
+
+  const existingTag = run('git', ['tag', '-l', `v${newVersion}`], true).trim()
+  if (existingTag) {
+    throw new Error(`Git tag 'v${newVersion}' already exists. Choose a new version or remove the tag first.`)
   }
 
   // Synchronize CLI workspace dependency and lockfile

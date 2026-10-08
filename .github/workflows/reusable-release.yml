@@ -79,9 +79,15 @@ jobs:
           echo "tag=$TAG" >> "$GITHUB_OUTPUT"
           echo "version=$VERSION" >> "$GITHUB_OUTPUT"
           if [[ "$TAG" =~ -(alpha|beta|rc) ]]; then
-            DIST_TAG=$(echo "$TAG" | sed -E 's/.*-(alpha|beta|rc).*/\1/')
-            echo "dist_tag=--tag $DIST_TAG" >> "$GITHUB_OUTPUT"
             echo "is_prerelease=true" >> "$GITHUB_OUTPUT"
+            CURRENT_LATEST=$(npm view better-newsletter dist-tags.latest 2>/dev/null || echo "")
+            # If no stable release exists yet on npm, publish prerelease directly to latest
+            if [[ -z "$CURRENT_LATEST" || "$CURRENT_LATEST" =~ -(alpha|beta|rc) ]]; then
+              echo "dist_tag=" >> "$GITHUB_OUTPUT"
+            else
+              DIST_TAG=$(echo "$TAG" | sed -E 's/.*-(alpha|beta|rc).*/\1/')
+              echo "dist_tag=--tag $DIST_TAG" >> "$GITHUB_OUTPUT"
+            fi
           else
             echo "dist_tag=" >> "$GITHUB_OUTPUT"
             echo "is_prerelease=false" >> "$GITHUB_OUTPUT"
@@ -114,18 +120,5 @@ jobs:
       - name: Publish packages to npm via OIDC Trusted Publishing
         run: |
           pnpm publish -r --access public --no-git-checks --provenance ${{ steps.release-meta.outputs.dist_tag }}
-
-      - name: Update latest dist-tag while in prerelease stage
-        run: |
-          VERSION="${{ steps.release-meta.outputs.version }}"
-          # Only update latest if currently published latest on npm is still a prerelease (no stable release exists yet)
-          CURRENT_LATEST=$(npm view better-newsletter dist-tags.latest 2>/dev/null || echo "")
-          if [[ -z "$CURRENT_LATEST" || "$CURRENT_LATEST" =~ -(alpha|beta|rc) ]]; then
-            echo "Current latest ($CURRENT_LATEST) is a prerelease; updating latest tag to $VERSION"
-            npm dist-tag add better-newsletter@"$VERSION" latest
-            npm dist-tag add @better-newsletter/cli@"$VERSION" latest
-          else
-            echo "A stable release ($CURRENT_LATEST) already exists; preserving stable latest tag."
-          fi
 
 

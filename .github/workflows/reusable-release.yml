@@ -44,7 +44,7 @@ jobs:
 
       - name: Install npm supporting OIDC trusted publishing
         run: |
-          npm install --global npm@latest
+          npm install --global npm@12.2.0
           npm --version
 
       - name: Install dependencies

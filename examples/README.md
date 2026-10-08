@@ -18,4 +18,5 @@ The demo runs completely in the browser using the in-memory adapter and fake mai
 ## Architecture & Maintenance
 
 - `playground/`: Internal development environment using `workspace:*` to develop and test monorepo changes against current local code.
-- `examples/basic/`: Standalone consumer using `"better-newsletter": "latest"` so that the interactive StackBlitz demo always runs against the latest published release without requiring manual version updates.
+- `examples/basic/`: Standalone consumer using `"better-newsletter": "beta"` during prereleases so that the interactive StackBlitz demo always runs against the latest published prerelease from npm without requiring manual version updates.
+

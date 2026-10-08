@@ -28,4 +28,5 @@ StackBlitz runs `nuxt dev` in an in-browser WebContainer, executing the memory a
 
 ## Architecture & Versioning
 
-This example specifies `"better-newsletter": "latest"` so that the StackBlitz interactive demo always loads the newest published release from npm automatically. For internal branch development against local code, use the root `playground/` application.
+This example specifies `"better-newsletter": "beta"` during prereleases so that the StackBlitz interactive demo always loads the newest published prerelease from npm automatically. For internal branch development against local code, use the root `playground/` application.
+

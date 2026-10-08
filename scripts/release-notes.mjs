@@ -2,7 +2,6 @@ import { readFileSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 import process from 'node:process'
 import { fileURLToPath } from 'node:url'
-import { releasePackages } from './release-policy.mjs'
 import { conciseMessage } from './script-errors.mjs'
 import console from 'node:console'
 import { generateMarkDown, getGitDiff, getLastGitTag, loadChangelogConfig, parseGitCommit } from 'changelogen'
@@ -49,7 +48,7 @@ export async function updateChangelog(cwd, version, replaceCurrent = false) {
 if (process.argv[1] && fileURLToPath(import.meta.url) === process.argv[1]) {
   try {
     if (process.argv[2] === '--write') {
-      const version = releasePackages(process.cwd())[0].version
+      const version = JSON.parse(readFileSync(join(process.cwd(), 'packages/better-newsletter/package.json'), 'utf8')).version
       if (await getLastGitTag(process.cwd()) === `v${version}`) throw new Error('Do not regenerate notes for an already tagged version.')
       await updateChangelog(process.cwd(), version, true)
       console.log(`Updated release notes for v${version}; review and commit them before merging.`)

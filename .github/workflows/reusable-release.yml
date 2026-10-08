@@ -1,0 +1,131 @@
+name: Reusable Release
+
+on:
+  workflow_call:
+    inputs:
+      runner:
+        description: Runner to use
+        type: string
+        default: ubuntu-latest
+      node-version:
+        description: Node.js version
+        type: string
+        default: 22.22.2
+
+permissions:
+  contents: write
+  id-token: write
+
+env:
+  NPM_CONFIG_FETCH_RETRIES: '5'
+  NPM_CONFIG_FETCH_RETRY_MINTIMEOUT: '20000'
+  NPM_CONFIG_FETCH_RETRY_MAXTIMEOUT: '120000'
+
+jobs:
+  release:
+    runs-on: ${{ inputs.runner }}
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Set up pnpm
+        uses: pnpm/action-setup@v4
+        with:
+          version: 10.17.1
+          run_install: false
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: ${{ inputs.node-version }}
+          registry-url: https://registry.npmjs.org
+
+      - name: Install npm supporting OIDC trusted publishing
+        run: |
+          npm install --global npm@11.5.1
+          npm --version
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Build packages
+        run: pnpm build
+
+      - name: Run checks
+        run: pnpm check
+        env:
+          DATABASE_URL: ''
+
+      - name: Run packed-artifact smoke tests
+        run: node scripts/smoke-pack.mjs
+
+      - name: Determine dist-tag and prerelease status
+        id: release-meta
+        run: |
+          TAG="${GITHUB_REF#refs/tags/}"
+          VERSION="${TAG#v}"
+          RUNTIME_VERSION=$(node -p "require('./packages/better-newsletter/package.json').version")
+          CLI_VERSION=$(node -p "require('./packages/cli/package.json').version")
+          if [ "$VERSION" != "$RUNTIME_VERSION" ]; then
+            echo "Error: Tag version $VERSION does not match packages/better-newsletter version $RUNTIME_VERSION"
+            exit 1
+          fi
+          if [ "$VERSION" != "$CLI_VERSION" ]; then
+            echo "Error: Tag version $VERSION does not match packages/cli version $CLI_VERSION"
+            exit 1
+          fi
+          echo "tag=$TAG" >> "$GITHUB_OUTPUT"
+          echo "version=$VERSION" >> "$GITHUB_OUTPUT"
+          if [[ "$TAG" =~ -(alpha|beta|rc) ]]; then
+            DIST_TAG=$(echo "$TAG" | sed -E 's/.*-(alpha|beta|rc).*/\1/')
+            echo "dist_tag=--tag $DIST_TAG" >> "$GITHUB_OUTPUT"
+            echo "is_prerelease=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "dist_tag=" >> "$GITHUB_OUTPUT"
+            echo "is_prerelease=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Extract release notes from CHANGELOG.md
+        id: notes
+        run: |
+          VERSION="${{ steps.release-meta.outputs.version }}"
+          node scripts/extract-release-notes.mjs "$VERSION" > release-notes.md
+
+      - name: Create or verify GitHub Release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          TAG="${{ steps.release-meta.outputs.tag }}"
+          if gh release view "$TAG" >/dev/null 2>&1; then
+            echo "GitHub Release for $TAG already exists; skipping release creation."
+          else
+            PRERELEASE_FLAG=""
+            if [ "${{ steps.release-meta.outputs.is_prerelease }}" = "true" ]; then
+              PRERELEASE_FLAG="--prerelease"
+            fi
+            gh release create "$TAG" \
+              --title "🔖 Release $TAG" \
+              --notes-file release-notes.md \
+              $PRERELEASE_FLAG
+          fi
+
+      - name: Publish packages to npm via OIDC Trusted Publishing
+        run: |
+          pnpm publish -r --access public --no-git-checks --provenance ${{ steps.release-meta.outputs.dist_tag }}
+
+      - name: Update latest dist-tag while in prerelease stage
+        run: |
+          VERSION="${{ steps.release-meta.outputs.version }}"
+          # Only update latest if currently published latest on npm is still a prerelease (no stable release exists yet)
+          CURRENT_LATEST=$(npm view better-newsletter dist-tags.latest 2>/dev/null || echo "")
+          if [[ -z "$CURRENT_LATEST" || "$CURRENT_LATEST" =~ -(alpha|beta|rc) ]]; then
+            echo "Current latest ($CURRENT_LATEST) is a prerelease; updating latest tag to $VERSION"
+            npm dist-tag add better-newsletter@"$VERSION" latest
+            npm dist-tag add @better-newsletter/cli@"$VERSION" latest
+          else
+            echo "A stable release ($CURRENT_LATEST) already exists; preserving stable latest tag."
+          fi
+
+

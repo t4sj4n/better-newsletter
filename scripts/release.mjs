@@ -3,7 +3,7 @@ import { execFileSync } from 'node:child_process'
 import { readFileSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 import process from 'node:process'
-import { versionBump } from 'bumpp'
+import { versionBump, versionBumpInfo } from 'bumpp'
 import semver from 'semver'
 import { updateChangelog } from './release-notes.mjs'
 import { runScriptCli } from './script-cli.mjs'
@@ -63,8 +63,8 @@ export async function runRelease({ cwd = process.cwd(), releaseArg, ui } = {}) {
     currentVersion = runtimePkg.version
   }
 
-  // Interactive version selection and file update via bumpp
-  const executeBump = () => versionBump({
+  // Interactive version selection via bumpp info (does not modify files)
+  const getBumpInfo = () => versionBumpInfo({
     cwd,
     release: releaseArg,
     currentVersion,
@@ -78,9 +78,9 @@ export async function runRelease({ cwd = process.cwd(), releaseArg, ui } = {}) {
     noGitCheck: true
   })
 
-  const bumpResult = ui && !releaseArg ? await ui.input(executeBump) : await executeBump()
+  const bumpInfo = ui && !releaseArg ? await ui.input(getBumpInfo) : await getBumpInfo()
 
-  const newVersion = bumpResult.newVersion
+  const newVersion = bumpInfo.state.newVersion
   if (!newVersion || !semver.valid(newVersion)) {
     throw new Error(`Invalid version: '${newVersion}'.`)
   }
@@ -89,6 +89,13 @@ export async function runRelease({ cwd = process.cwd(), releaseArg, ui } = {}) {
   if (existingTag) {
     throw new Error(`Git tag 'v${newVersion}' already exists. Choose a new version or remove the tag first.`)
   }
+
+  // Apply version bump to package manifests
+  await versionBump({
+    ...bumpInfo.options,
+    release: newVersion,
+    printCommits: false
+  })
 
   // Synchronize CLI workspace dependency and lockfile
   if (ui) {
@@ -117,11 +124,11 @@ export async function runRelease({ cwd = process.cwd(), releaseArg, ui } = {}) {
 
     if (shouldPush) {
       await ui.step(`Pushing main and tag v${newVersion} to origin`, async () => {
-        run('git', ['push', 'origin', 'main', '--follow-tags'])
+        run('git', ['push', 'origin', 'main', `v${newVersion}`])
       })
       ui.finish(`Released and pushed v${newVersion} to origin. GitHub Actions workflow will publish packages.`)
     } else {
-      ui.finish(`Created release commit and tag v${newVersion}. Push when ready to publish:\n\n  git push origin main --follow-tags`)
+      ui.finish(`Created release commit and tag v${newVersion}. Push when ready to publish:\n\n  git push origin main v${newVersion}`)
     }
   } else {
     const updatedCliPkg = JSON.parse(readFileSync(cliPkgPath, 'utf8'))

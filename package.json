@@ -16,7 +16,7 @@
     "check": "pnpm lint && pnpm typecheck && pnpm build && pnpm migration:snapshot:check && pnpm test",
     "migration:snapshot:check": "node scripts/check-postgres-migration.mjs",
     "migration:snapshot:write": "pnpm --filter better-newsletter build && node scripts/check-postgres-migration.mjs --write",
-    "release:prepare": "node scripts/release-prepare.mjs",
+    "release": "node scripts/release.mjs",
     "release:notes": "node scripts/release-notes.mjs --write"
   },
   "devDependencies": {
@@ -24,9 +24,9 @@
     "@clack/prompts": "~1.0.1",
     "@eslint/js": "^9.35.0",
     "@nuxt/kit": "^4.6.0",
-    "@release-it/bumper": "~8.0.1",
     "@types/pg": "^8.23.1",
     "better-newsletter": "workspace:*",
+    "bumpp": "^12.3.0",
     "changelogen": "^0.6.2",
     "eslint": "^9.35.0",
     "h3": "^1.15.11",
@@ -35,7 +35,6 @@
     "pg": "^8.23.0",
     "picocolors": "^1.1.1",
     "publint": "^0.3.24",
-    "release-it": "~21.1.0",
     "resend": "^6.30.0",
     "semver": "^7.8.5",
     "typescript": "^5.9.2",

@@ -4,6 +4,24 @@
 
 [compare changes](https://github.com/t4sj4n/better-newsletter/compare/v0.1.0-beta.2...v0.1.0-beta.3)
 
+### 🚀 Enhancements
+
+- Publish releases through GitHub Actions OIDC ([#66](https://github.com/t4sj4n/better-newsletter/pull/66))
+- **nuxt:** Add headless Vue / Nuxt composables ([#68](https://github.com/t4sj4n/better-newsletter/pull/68))
+- Simplify release workflow to tag-triggered publishing #69 ([#70](https://github.com/t4sj4n/better-newsletter/pull/70), [#69](https://github.com/t4sj4n/better-newsletter/issues/69))
+
+### 💅 Refactors
+
+- Simplify local releases with release-it ([#64](https://github.com/t4sj4n/better-newsletter/pull/64))
+
+### Other changes
+
+- 👌 check tag existence rather than strictly greater version in release flow ([5b2cdd4](https://github.com/t4sj4n/better-newsletter/commit/5b2cdd4))
+
+## v0.1.0-beta.3
+
+[compare changes](https://github.com/t4sj4n/better-newsletter/compare/v0.1.0-beta.2...v0.1.0-beta.3)
+
 ### 💅 Refactors
 
 - Simplify local releases with release-it ([#64](https://github.com/t4sj4n/better-newsletter/pull/64))

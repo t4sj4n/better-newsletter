@@ -1,5 +1,15 @@
 # Changelog
 
+## v0.1.0-beta.8
+
+[compare changes](https://github.com/t4sj4n/better-newsletter/compare/v0.1.0-beta.7...v0.1.0-beta.8)
+
+### 🚀 Enhancements
+
+- Add submitted email snapshot for #78 ([#79](https://github.com/t4sj4n/better-newsletter/pull/79), [#78](https://github.com/t4sj4n/better-newsletter/issues/78))
+- Add audience snapshots and loading helpers for #80 ([#81](https://github.com/t4sj4n/better-newsletter/pull/81), [#80](https://github.com/t4sj4n/better-newsletter/issues/80))
+- Add unsubscribe-all and error titles for #82 ([#83](https://github.com/t4sj4n/better-newsletter/pull/83), [#82](https://github.com/t4sj4n/better-newsletter/issues/82))
+
 ## v0.1.0-beta.7
 
 [compare changes](https://github.com/t4sj4n/better-newsletter/compare/v0.1.0-beta.6...v0.1.0-beta.7)

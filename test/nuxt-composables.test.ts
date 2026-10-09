@@ -164,7 +164,7 @@ describe('useNewsletterSignup', () => {
   })
 })
 
-describe.each(['signup', 'resend'] as const)('%s errorMessage', kind => {
+describe.each(['signup', 'resend'] as const)('%s error helpers', kind => {
   function createForm(
     client: Pick<NewsletterClient, 'subscribe' | 'resendConfirmation'>,
     copy = ref<NewsletterCopyOverrides>({})
@@ -187,17 +187,21 @@ describe.each(['signup', 'resend'] as const)('%s errorMessage', kind => {
     const form = createForm(client)
 
     expect(form.errorMessage.value).toBeUndefined()
+    expect(form.errorTitle.value).toBeUndefined()
     await form.submit()
     expect(form.errorMessage.value).toBe('Please try again later')
+    expect(form.errorTitle.value).toBe(defaultNewsletterCopy.common.error)
     expect(form.error.value).toBeInstanceOf(Error)
 
     const retry = form.submit()
     expect(form.state.value).toBe('loading')
     expect(form.errorMessage.value).toBeUndefined()
+    expect(form.errorTitle.value).toBeUndefined()
     expect(form.error.value).toBeUndefined()
     finishRetry(new Response('{"accepted":true}'))
     expect(await retry).toMatchObject({ state: 'success', failed: false })
     expect(form.errorMessage.value).toBeUndefined()
+    expect(form.errorTitle.value).toBeUndefined()
   })
 
   it('reactively updates fallback copy and resets before resubmission', async () => {
@@ -217,6 +221,7 @@ describe.each(['signup', 'resend'] as const)('%s errorMessage', kind => {
     expect(form.state.value).toBe('idle')
     expect(form.error.value).toBeUndefined()
     expect(form.errorMessage.value).toBeUndefined()
+    expect(form.errorTitle.value).toBeUndefined()
     if ('consent' in form) expect(form.consent.value).toBe(false)
 
     form.email.value = 'retry@example.com'
@@ -225,6 +230,42 @@ describe.each(['signup', 'resend'] as const)('%s errorMessage', kind => {
     expect(form.state.value).toBe('success')
     expect(form.errorMessage.value).toBeUndefined()
     expect(action).toHaveBeenCalledTimes(2)
+  })
+
+  it.each([
+    [undefined, 'Common failure'], ['', 'Common failure'], [' \t ', 'Common failure'], [' Custom failure ', 'Custom failure']
+  ])('resolves optional title %j with a common fallback', async (title, expected) => {
+    const copy = ref<NewsletterCopyOverrides>({
+      common: { error: 'Common failure' },
+      ...(title === undefined ? {} : { [kind]: { errorTitle: title } })
+    })
+    const action = vi.fn().mockRejectedValue(new Error('Request failed'))
+    const form = createForm({ subscribe: action, resendConfirmation: action }, copy)
+    expect(isReadonly(form.errorTitle)).toBe(true)
+    expect(form.errorTitle.value).toBeUndefined()
+    await form.submit()
+    expect(form.errorTitle.value).toBe(expected)
+    expect(form.errorMessage.value).toBe('Request failed')
+  })
+
+  it('follows reactive action titles and common fallback overrides without changing the raw error', async () => {
+    const copy = ref<NewsletterCopyOverrides>({})
+    const error = new Error('Request failed')
+    const action = vi.fn().mockRejectedValue(error)
+    const form = createForm({ subscribe: action, resendConfirmation: action }, copy)
+    await form.submit()
+    expect(form.errorTitle.value).toBe(defaultNewsletterCopy.common.error)
+    copy.value = { common: { error: 'Localized error' } }
+    expect(form.errorTitle.value).toBe('Localized error')
+    copy.value = { common: { error: 'Localized error' }, [kind]: { errorTitle: 'Action failed' } }
+    expect(form.errorTitle.value).toBe('Action failed')
+    copy.value.common = { error: 'Updated general error' }
+    expect(form.errorTitle.value).toBe('Action failed')
+    copy.value = { common: { error: 'Updated general error' } }
+    expect(form.errorTitle.value).toBe('Updated general error')
+    expect(form.error.value).toBe(error)
+    form.reset()
+    expect(form.errorTitle.value).toBeUndefined()
   })
 })
 

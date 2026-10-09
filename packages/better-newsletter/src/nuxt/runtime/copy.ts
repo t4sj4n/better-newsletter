@@ -14,6 +14,7 @@ export interface NewsletterCopy {
     submit: string
     successTitle: string
     success: string
+    errorTitle?: string
     error: string
   }
   resend: {
@@ -21,6 +22,7 @@ export interface NewsletterCopy {
     submit: string
     successTitle: string
     success: string
+    errorTitle?: string
     error: string
   }
   confirmation: {

@@ -27,6 +27,7 @@ export interface UseNewsletterSignupReturn {
   state: Ref<NewsletterState>
   loading: ComputedRef<boolean>
   error: Ref<unknown>
+  errorTitle: ComputedRef<string | undefined>
   errorMessage: ComputedRef<string | undefined>
   emailError: ComputedRef<string | undefined>
   consentError: ComputedRef<string | undefined>
@@ -55,6 +56,8 @@ export function useNewsletterSignup(options?: UseNewsletterSignupOptions): UseNe
   const consentError = computed(() => submitted.value && !consent.value ? messages.value.validation.consent : undefined)
   const errorMessage = computed(() => state.value === 'error'
     ? extractErrorMessage(error.value, messages.value.signup.error) : undefined)
+  const errorTitle = computed(() => state.value === 'error'
+    ? messages.value.signup.errorTitle?.trim() || messages.value.common.error : undefined)
 
   function clearForm() {
     email.value = ''
@@ -112,6 +115,7 @@ export function useNewsletterSignup(options?: UseNewsletterSignupOptions): UseNe
     state,
     loading,
     error,
+    errorTitle,
     errorMessage,
     emailError,
     consentError,

@@ -1045,6 +1045,20 @@ All four composables expose `loading: ComputedRef<boolean>`, which is true exact
 </button>
 ```
 
+#### Unsubscribe-all mode
+
+`useNewsletterUnsubscribe()` defaults to `mode: 'single'`, calling the client's `unsubscribe()` action. Set `mode: 'all'` to call `unsubscribeAll()` through the same request lifecycle and result helpers:
+
+```ts
+const unsubscribe = useNewsletterUnsubscribe({ mode: 'all' })
+// The landing page reads ?capability=… without making a request.
+// Call unsubscribe.unsubscribe() only in response to the user's action.
+```
+
+The mode is fixed when the composable is created. All mode requires a separately issued capability with `ALL` scope, as shown in [Unsubscribe and preferences](#unsubscribe-and-preferences). A per-audience capability cannot authorize global unsubscribe; choosing a mode does not change its scope. The server validates authorization. Both modes use the same missing-token, loading/success guards, reset and stale-response protection, and neither submits automatically.
+
+Custom clients may implement just the selected action (`unsubscribe` for single mode or `unsubscribeAll` for all mode), or both. Existing single-method clients remain supported. A client missing the selected action produces the existing `error` state without invoking an action with a different scope. When overriding the success copy for all mode, use wording appropriate for all audiences.
+
 #### Result helpers
 
 | Composable | Result helper |
@@ -1055,6 +1069,22 @@ All four composables expose `loading: ComputedRef<boolean>`, which is true exact
 | `useNewsletterUnsubscribe` | `resultDescription: ComputedRef<string>` matches success, invalid or default error copy. |
 
 `errorMessage` is undefined outside the `error` state. In that state it selects the first non-empty string from `error.data.statusMessage`, `error.data.message`, then `error.message`, and finally the corresponding `messages` fallback. The generic default-client HTTP message is skipped so untranslated transport text does not replace your fallback. The raw `error` ref remains available. Resetting or starting a new request clears the previous error.
+
+Signup and resend also expose `errorTitle: ComputedRef<string | undefined>`. It is undefined outside the error state; in that state it uses the optional `signup.errorTitle` or `resend.errorTitle` copy override, trimmed, with fallback to `common.error` when absent, empty or whitespace-only. Complete existing `NewsletterCopy` dictionaries need no new fields. The raw `messages` dictionary retains optional titles; the helper resolves their fallback and follows reactive copy changes.
+
+```ts
+const signup = useNewsletterSignup({
+  copy: { signup: { errorTitle: 'Subscription failed' } }
+})
+```
+
+```vue
+<UAlert
+  v-if="signup.state.value === 'error'"
+  :title="signup.errorTitle.value"
+  :description="signup.errorMessage.value"
+/>
+```
 
 `resultDescription` follows `displayState`, alongside the existing `resultTitle`. Render these helpers only in result states: their default error copy also applies during `idle` and `loading`. A missing or empty token uses the existing `invalid` display state; the default confirmation and unsubscribe descriptions cover invalid or incomplete links. Customize those descriptions and titles through the existing `confirmation.invalid` / `invalidTitle` and `unsubscribe.invalid` / `invalidTitle` copy keys. All helpers follow reactive `copy` overrides, including error fallbacks.
 

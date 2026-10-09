@@ -18,6 +18,7 @@ export interface UseNewsletterResendReturn {
   state: Ref<NewsletterState>
   loading: ComputedRef<boolean>
   error: Ref<unknown>
+  errorTitle: ComputedRef<string | undefined>
   errorMessage: ComputedRef<string | undefined>
   emailError: ComputedRef<string | undefined>
   messages: ComputedRef<NewsletterCopy>
@@ -37,6 +38,8 @@ export function useNewsletterResend(options?: UseNewsletterResendOptions): UseNe
   const emailError = computed(() => submitted.value && !validEmail(email.value) ? messages.value.validation.email : undefined)
   const errorMessage = computed(() => state.value === 'error'
     ? extractErrorMessage(error.value, messages.value.resend.error) : undefined)
+  const errorTitle = computed(() => state.value === 'error'
+    ? messages.value.resend.errorTitle?.trim() || messages.value.common.error : undefined)
 
   watch(() => toValue(options?.email), (value: string | undefined) => {
     email.value = value ?? ''
@@ -74,6 +77,7 @@ export function useNewsletterResend(options?: UseNewsletterResendOptions): UseNe
     state,
     loading,
     error,
+    errorTitle,
     errorMessage,
     emailError,
     messages,

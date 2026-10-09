@@ -1,5 +1,13 @@
 # Changelog
 
+## v0.1.0-beta.6
+
+[compare changes](https://github.com/t4sj4n/better-newsletter/compare/v0.1.0-beta.5...v0.1.0-beta.6)
+
+### 🚀 Enhancements
+
+- Improve Nuxt composables for #74 ([#75](https://github.com/t4sj4n/better-newsletter/pull/75), [#74](https://github.com/t4sj4n/better-newsletter/issues/74))
+
 ## v0.1.0-beta.5
 
 [compare changes](https://github.com/t4sj4n/better-newsletter/compare/v0.1.0-beta.4...v0.1.0-beta.5)

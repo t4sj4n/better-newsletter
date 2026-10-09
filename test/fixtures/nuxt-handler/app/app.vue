@@ -8,17 +8,20 @@ const form = reactive({ email: '', consent: false })
 const signup = useNewsletterSignup({
   email: toRef(form, 'email'), consent: toRef(form, 'consent'), clearOnSuccess: true, honeypot: website, client
 })
-const resend = useNewsletterResend({ client })
+const resend = useNewsletterResend({ email: signup.submittedEmail, client })
 const confirmation = useNewsletterConfirm({ token: 'token', client })
 const unsubscribe = useNewsletterUnsubscribe({ token: 'capability', client })
 // Compile package-owned calls without relying on generated InternalApi.
 function checkTypes() {
   const signupError: string | undefined = signup.errorMessage.value
+  const submittedEmail: string | undefined = signup.submittedEmail.value
   const clearForm: () => void = signup.clearForm
   const resendError: string | undefined = resend.errorMessage.value
   const confirmationDescription: string = confirmation.resultDescription.value
   const unsubscribeDescription: string = unsubscribe.resultDescription.value
-  void [signupError, resendError, confirmationDescription, unsubscribeDescription, clearForm]
+  void [signupError, resendError, confirmationDescription, unsubscribeDescription, clearForm, submittedEmail]
+  // @ts-expect-error the submitted email snapshot is read-only
+  signup.submittedEmail.value = 'another@example.com'
   void legacyClient.subscribe
   void client.subscribe({ email: 'packed@example.com', consent: true, consentVersion: 'packed-v1', website: website.value })
   void client.resendConfirmation({ email: 'packed@example.com' })

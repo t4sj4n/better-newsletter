@@ -1012,6 +1012,19 @@ The composable returns the supplied refs unchanged. Edits from either the host o
 
 Automatic clearing skips invalidated requests, failures and responses after scope disposal. If email or consent changes while a request is in flight, the whole form is retained, even if the changed value is subsequently restored before the response. The same guards apply to internal and external refs. Success remains neutral request acceptance, rather than confirmation of the subscription.
 
+#### Submitted email and resend
+
+`useNewsletterSignup` exposes `submittedEmail: ComputedRef<string | undefined>`, a read-only snapshot of the trimmed email sent by the most recent successfully accepted request. It starts undefined and follows the captured request payload, even if the user edits the form while that request is pending. Use it to connect a resend action while automatically clearing editable input:
+
+```ts
+const signup = useNewsletterSignup({ clearOnSuccess: true })
+const resend = useNewsletterResend({ email: signup.submittedEmail })
+```
+
+`clearForm()` and `clearOnSuccess` preserve the snapshot. Form edits, validation failures and rejected requests also preserve the last accepted email. A later valid success replaces it, while explicit `reset()` clears it to undefined. Invalidated or superseded responses, including responses after reset or scope disposal, cannot update it. The snapshot records submitted input; neutral acceptance does not establish delivery, subscription existence or confirmation.
+
+Resend follows successful snapshot updates and clears its email/request state when signup is reset. For audience-specific flows, also configure resend with the audience corresponding to the accepted signup; `submittedEmail` does not capture the audience.
+
 #### Result helpers
 
 | Composable | Result helper |

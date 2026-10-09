@@ -22,6 +22,7 @@ export interface UseNewsletterSignupReturn {
   email: Ref<string>
   consent: Ref<boolean>
   submitted: Ref<boolean>
+  submittedEmail: ComputedRef<string | undefined>
   state: Ref<NewsletterState>
   error: Ref<unknown>
   errorMessage: ComputedRef<string | undefined>
@@ -41,6 +42,8 @@ export function useNewsletterSignup(options?: UseNewsletterSignupOptions): UseNe
   const email = options?.email ?? ref('')
   const consent = options?.consent ?? ref(false)
   const submitted = ref(false)
+  const lastSubmittedEmail = ref<string>()
+  const submittedEmail = computed(() => lastSubmittedEmail.value)
   let formRevision = 0
 
   watch([email, consent], () => { formRevision++ }, { flush: 'sync' })
@@ -59,6 +62,7 @@ export function useNewsletterSignup(options?: UseNewsletterSignupOptions): UseNe
   function reset() {
     clearForm()
     resetRequest()
+    lastSubmittedEmail.value = undefined
   }
 
   async function submit(formElement?: HTMLFormElement | null) {
@@ -90,6 +94,7 @@ export function useNewsletterSignup(options?: UseNewsletterSignupOptions): UseNe
     const client = toValue(options?.client) ?? defaultClient
     return await run(() => client.subscribe(input), () => {
       // run invokes this mapper only for the active, undisposed request generation.
+      lastSubmittedEmail.value = input.email
       if (options?.clearOnSuccess && formRevision === submittedRevision) clearForm()
       return 'success'
     })
@@ -99,6 +104,7 @@ export function useNewsletterSignup(options?: UseNewsletterSignupOptions): UseNe
     email,
     consent,
     submitted,
+    submittedEmail,
     state,
     error,
     errorMessage,

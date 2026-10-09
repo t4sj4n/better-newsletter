@@ -100,10 +100,10 @@
     "typecheck": "tsc -p tsconfig.json"
   },
   "peerDependencies": {
-    "@nuxt/kit": "^4.6.0",
+    "@nuxt/kit": "^4.5.0",
     "h3": "^1.15.11",
     "kysely": ">=0.28.17 <0.30.0",
-    "nuxt": "^4.6.0",
+    "nuxt": "^4.5.0",
     "resend": "^6.30.0",
     "vue": "^3.5.0"
   },

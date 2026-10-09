@@ -3,10 +3,20 @@ import { createNewsletterClient } from 'better-newsletter/client'
 import { createNewsletterClient as createLegacyNewsletterClient } from 'better-newsletter/nuxt/client'
 const client = createNewsletterClient({ basePath: '/api/mail', routes: { preferences: '/manage' } })
 const legacyClient = createLegacyNewsletterClient({ basePath: '/api/mail' })
+const website = ref('')
+const signup = useNewsletterSignup({ honeypot: website, client })
+const resend = useNewsletterResend({ client })
+const confirmation = useNewsletterConfirm({ token: 'token', client })
+const unsubscribe = useNewsletterUnsubscribe({ token: 'capability', client })
 // Compile package-owned calls without relying on generated InternalApi.
 function checkTypes() {
+  const signupError: string | undefined = signup.errorMessage.value
+  const resendError: string | undefined = resend.errorMessage.value
+  const confirmationDescription: string = confirmation.resultDescription.value
+  const unsubscribeDescription: string = unsubscribe.resultDescription.value
+  void [signupError, resendError, confirmationDescription, unsubscribeDescription]
   void legacyClient.subscribe
-  void client.subscribe({ email: 'packed@example.com', consent: true, consentVersion: 'packed-v1' })
+  void client.subscribe({ email: 'packed@example.com', consent: true, consentVersion: 'packed-v1', website: website.value })
   void client.resendConfirmation({ email: 'packed@example.com' })
   void client.confirm('token')
   void client.unsubscribe('capability')

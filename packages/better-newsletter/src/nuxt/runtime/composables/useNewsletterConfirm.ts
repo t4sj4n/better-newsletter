@@ -21,6 +21,7 @@ export interface UseNewsletterConfirmReturn {
   error: Ref<unknown>
   completed: ComputedRef<boolean>
   resultTitle: ComputedRef<string>
+  resultDescription: ComputedRef<string>
   messages: ComputedRef<NewsletterCopy>
   confirm: () => Promise<{ state: NewsletterState; error?: unknown; failed: boolean } | undefined>
   reset: () => void
@@ -57,6 +58,16 @@ export function useNewsletterConfirm(options?: UseNewsletterConfirmOptions): Use
     }
   })
 
+  const resultDescription = computed(() => {
+    switch (displayState.value) {
+      case 'success': return messages.value.confirmation.success
+      case 'alreadyConfirmed': return messages.value.confirmation.alreadyConfirmed
+      case 'expired': return messages.value.confirmation.expired
+      case 'invalid': return messages.value.confirmation.invalid
+      default: return messages.value.confirmation.error
+    }
+  })
+
   watch(token, reset, { flush: 'sync' })
 
   async function confirm() {
@@ -76,6 +87,7 @@ export function useNewsletterConfirm(options?: UseNewsletterConfirmOptions): Use
     error,
     completed,
     resultTitle,
+    resultDescription,
     messages,
     confirm,
     reset

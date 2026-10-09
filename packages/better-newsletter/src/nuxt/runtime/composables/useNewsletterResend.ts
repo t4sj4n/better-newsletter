@@ -3,7 +3,7 @@ import type { NewsletterClient } from '../../../client.js'
 import type { NewsletterCopy, NewsletterCopyOverrides } from '../copy.js'
 import { useNewsletterClient } from './useNewsletterClient.js'
 import { useNewsletterCopy } from './useNewsletterCopy.js'
-import { focusInvalid, useNewsletterRequest, validEmail, type NewsletterState } from '../utils/request.js'
+import { extractErrorMessage, focusInvalid, useNewsletterRequest, validEmail, type NewsletterState } from '../utils/request.js'
 
 export interface UseNewsletterResendOptions {
   email?: MaybeRefOrGetter<string | undefined>
@@ -17,6 +17,7 @@ export interface UseNewsletterResendReturn {
   submitted: Ref<boolean>
   state: Ref<NewsletterState>
   error: Ref<unknown>
+  errorMessage: ComputedRef<string | undefined>
   emailError: ComputedRef<string | undefined>
   messages: ComputedRef<NewsletterCopy>
   submit: (formElement?: HTMLFormElement | null) => Promise<{ state: NewsletterState; error?: unknown; failed: boolean } | undefined>
@@ -33,6 +34,8 @@ export function useNewsletterResend(options?: UseNewsletterResendOptions): UseNe
   const submitted = ref(false)
 
   const emailError = computed(() => submitted.value && !validEmail(email.value) ? messages.value.validation.email : undefined)
+  const errorMessage = computed(() => state.value === 'error'
+    ? extractErrorMessage(error.value, messages.value.resend.error) : undefined)
 
   watch(() => toValue(options?.email), (value: string | undefined) => {
     email.value = value ?? ''
@@ -69,6 +72,7 @@ export function useNewsletterResend(options?: UseNewsletterResendOptions): UseNe
     submitted,
     state,
     error,
+    errorMessage,
     emailError,
     messages,
     submit,

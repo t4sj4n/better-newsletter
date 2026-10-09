@@ -725,6 +725,8 @@ Deleting a Contact cascades to its Subscriptions, token records, provider-event 
 
 ## Nuxt 4 / Nitro
 
+The Nuxt module supports Nuxt and `@nuxt/kit` from 4.5.0 through stable Nuxt 4 releases below 5.0.0.
+
 Install the package in a Nuxt 4 application:
 
 ```bash
@@ -946,6 +948,33 @@ The client is framework-neutral, implemented using only standard Web `fetch` and
 Nuxt registers one POST-only catch-all handler instead of six individual POST routes. Nitro may generate a catch-all type, but the package no longer promises individual `$fetch` route/method inference. Use the typed client for newsletter calls. This reduces route-union exposure without claiming to fix Nitro's general `TS2589` limits in large applications. See the [architecture comparison](https://github.com/t4sj4n/better-newsletter/blob/main/docs/nuxt-single-handler.md).
 
 For a host-owned H3 boundary, `createNewsletterHandler({ basePath }, configuration?)` from `better-newsletter/nuxt/handler` returns a ready event handler; an explicit server configuration or factory avoids the Nuxt virtual import. Lifecycle core operations remain framework-independent.
+
+On HTTP failure, the client throws an `Error` with the message `Newsletter request failed (STATUS).`. When the response contains a JSON object, that object is available on the error's `data` property, including server `statusMessage` or `message` fields. Empty, malformed, non-JSON or primitive response bodies retain the HTTP error. Network errors are propagated unchanged.
+
+### Headless composables
+
+The module auto-imports `useNewsletterSignup`, `useNewsletterResend`, `useNewsletterConfirm` and `useNewsletterUnsubscribe`. They are also exported with their option and return types from `better-newsletter/nuxt/runtime`.
+
+```ts
+const website = ref('')
+const signup = useNewsletterSignup({
+  honeypot: website,
+  consentVersion: 'privacy-2026-09'
+})
+```
+
+Bind `signup.email` and `signup.consent` to your form and `website` to an off-screen honeypot input excluded from keyboard navigation and assistive technology. Match `consentVersion` to your server policy. The `honeypot` option accepts a string, ref or getter; `submit()` reads and trims it on each submission. A non-empty value is forwarded as `website` to the server, while undefined, empty and whitespace-only values omit the field. Existing email/consent validation still applies, and the server owns the neutral honeypot response.
+
+| Composable | Result helper |
+| --- | --- |
+| `useNewsletterSignup` | `errorMessage: ComputedRef<string \| undefined>` uses signup error copy as its fallback. |
+| `useNewsletterResend` | `errorMessage: ComputedRef<string \| undefined>` uses resend error copy as its fallback. |
+| `useNewsletterConfirm` | `resultDescription: ComputedRef<string>` matches success, already confirmed, expired, invalid or default error copy. |
+| `useNewsletterUnsubscribe` | `resultDescription: ComputedRef<string>` matches success, invalid or default error copy. |
+
+`errorMessage` is undefined outside the `error` state. In that state it selects the first non-empty string from `error.data.statusMessage`, `error.data.message`, then `error.message`, and finally the corresponding `messages` fallback. The generic default-client HTTP message is skipped so untranslated transport text does not replace your fallback. The raw `error` ref remains available. Resetting or starting a new request clears the previous error.
+
+`resultDescription` follows `displayState`, alongside the existing `resultTitle`. Render these helpers only in result states: their default error copy also applies during `idle` and `loading`. A missing token uses invalid copy. All helpers follow reactive `copy` overrides, including error fallbacks.
 
 ### Consumer example and maintainer playground
 

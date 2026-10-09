@@ -951,6 +951,30 @@ For a host-owned H3 boundary, `createNewsletterHandler({ basePath }, configurati
 
 On HTTP failure, the client throws an `Error` with the message `Newsletter request failed (STATUS).`. When the response contains a JSON object, that object is available on the error's `data` property, including server `statusMessage` or `message` fields. Empty, malformed, non-JSON or primitive response bodies retain the HTTP error. Network errors are propagated unchanged.
 
+#### Custom fetchers, CSRF and dynamic headers
+
+The client's second argument accepts a custom `Fetcher`. In client-side Nuxt setup, wrap standard `fetch` to add a host-provided CSRF token:
+
+```ts
+import { createNewsletterClient } from 'better-newsletter/client'
+
+const client = createNewsletterClient(
+  { basePath: '/api/newsletter' },
+  (url, init) => {
+    const headers = new Headers(init.headers)
+    headers.set('x-csrf-token', getCsrfToken())
+
+    return fetch(url, { ...init, headers })
+  }
+)
+
+const signup = useNewsletterSignup({ client })
+```
+
+`getCsrfToken()` is a host-owned function returning the current token; it is called on every request rather than captured when the client is created. `new Headers(init.headers)` preserves existing headers, including the JSON content type, and supports plain objects, header tuples and native `Headers` instances. The same pattern can set a dynamic `Authorization` header.
+
+Pass the custom client explicitly through `{ client }` to each composable that should use it. A client created and provided by a Nuxt plugin can be retrieved by the consuming component and passed this way; it does not automatically replace `useNewsletterClient()`. Keep token retrieval in client-side setup or a client plugin, rather than passing a function through public runtime config. The host remains responsible for server-side CSRF validation and authentication.
+
 ### Headless composables
 
 The module auto-imports `useNewsletterSignup`, `useNewsletterResend`, `useNewsletterConfirm` and `useNewsletterUnsubscribe`. They are also exported with their option and return types from `better-newsletter/nuxt/runtime`.
@@ -964,6 +988,31 @@ const signup = useNewsletterSignup({
 ```
 
 Bind `signup.email` and `signup.consent` to your form and `website` to an off-screen honeypot input excluded from keyboard navigation and assistive technology. Match `consentVersion` to your server policy. The `honeypot` option accepts a string, ref or getter; `submit()` reads and trims it on each submission. A non-empty value is forwarded as `website` to the server, while undefined, empty and whitespace-only values omit the field. Existing email/consent validation still applies, and the server owns the neutral honeypot response.
+
+#### External signup refs and clearing
+
+By default, signup owns an initially empty email ref and a false consent ref. Pass existing writable refs to bind host-owned form state directly, including reactive properties used by form libraries:
+
+```ts
+const form = reactive({ email: '', consent: false })
+const signup = useNewsletterSignup({
+  email: toRef(form, 'email'),
+  consent: toRef(form, 'consent'),
+  clearOnSuccess: true
+})
+```
+
+The composable returns the supplied refs unchanged. Edits from either the host or the composable update the same fields, and validation follows those values after submission. Editing fields does not reset the request state or error. Either ref may be omitted to retain its internal default. Supply writable refs; clearing actions also modify host-owned values, and the host manages any additional form-library validation or reset state.
+
+| Signup action or option | Behavior |
+| --- | --- |
+| `clearForm()` | Clears email to `''`, consent to `false` and submitted to `false`. Preserves the current request state and raw error, including during loading; it does not cancel a request. |
+| `reset()` | Clears the same fields and resets the request to idle, clears its error and invalidates any previous pending response. External values are cleared rather than restored to their initial values. |
+| `clearOnSuccess` | Defaults to `false`, retaining the submitted values for success messages. When `true`, clears unchanged input after successful acceptance while keeping the success state. |
+
+Automatic clearing skips invalidated requests, failures and responses after scope disposal. If email or consent changes while a request is in flight, the whole form is retained, even if the changed value is subsequently restored before the response. The same guards apply to internal and external refs. Success remains neutral request acceptance, rather than confirmation of the subscription.
+
+#### Result helpers
 
 | Composable | Result helper |
 | --- | --- |

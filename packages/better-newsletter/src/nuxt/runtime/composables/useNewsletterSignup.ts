@@ -1,4 +1,4 @@
-import { computed, ref, toValue, type ComputedRef, type MaybeRefOrGetter, type Ref } from 'vue'
+import { computed, ref, toValue, watch, type ComputedRef, type MaybeRefOrGetter, type Ref } from 'vue'
 import type { NewsletterClient, NewsletterClientSubscribeInput } from '../../../client.js'
 import type { NewsletterCopy, NewsletterCopyOverrides } from '../copy.js'
 import { useNewsletterClient } from './useNewsletterClient.js'
@@ -6,6 +6,9 @@ import { useNewsletterCopy } from './useNewsletterCopy.js'
 import { extractErrorMessage, focusInvalid, useNewsletterRequest, validEmail, type NewsletterState } from '../utils/request.js'
 
 export interface UseNewsletterSignupOptions {
+  email?: Ref<string>
+  consent?: Ref<boolean>
+  clearOnSuccess?: boolean
   audience?: MaybeRefOrGetter<string | undefined>
   source?: MaybeRefOrGetter<string | undefined>
   metadata?: MaybeRefOrGetter<NewsletterClientSubscribeInput['metadata']>
@@ -26,6 +29,7 @@ export interface UseNewsletterSignupReturn {
   consentError: ComputedRef<string | undefined>
   messages: ComputedRef<NewsletterCopy>
   submit: (formElement?: HTMLFormElement | null) => Promise<{ state: NewsletterState; error?: unknown; failed: boolean } | undefined>
+  clearForm: () => void
   reset: () => void
 }
 
@@ -34,19 +38,26 @@ export function useNewsletterSignup(options?: UseNewsletterSignupOptions): UseNe
   const defaultClient = useNewsletterClient()
   const { state, error, reset: resetRequest, run } = useNewsletterRequest()
 
-  const email = ref('')
-  const consent = ref(false)
+  const email = options?.email ?? ref('')
+  const consent = options?.consent ?? ref(false)
   const submitted = ref(false)
+  let formRevision = 0
+
+  watch([email, consent], () => { formRevision++ }, { flush: 'sync' })
 
   const emailError = computed(() => submitted.value && !validEmail(email.value) ? messages.value.validation.email : undefined)
   const consentError = computed(() => submitted.value && !consent.value ? messages.value.validation.consent : undefined)
   const errorMessage = computed(() => state.value === 'error'
     ? extractErrorMessage(error.value, messages.value.signup.error) : undefined)
 
-  function reset() {
+  function clearForm() {
     email.value = ''
     consent.value = false
     submitted.value = false
+  }
+
+  function reset() {
+    clearForm()
     resetRequest()
   }
 
@@ -60,6 +71,7 @@ export function useNewsletterSignup(options?: UseNewsletterSignupOptions): UseNe
       return
     }
 
+    const submittedRevision = formRevision
     const rawMetadata = toValue(options?.metadata)
     const source = toValue(options?.source)
     const metadata = { ...rawMetadata, ...(source === undefined ? {} : { source }) }
@@ -76,7 +88,11 @@ export function useNewsletterSignup(options?: UseNewsletterSignupOptions): UseNe
     }
 
     const client = toValue(options?.client) ?? defaultClient
-    return await run(() => client.subscribe(input), () => 'success')
+    return await run(() => client.subscribe(input), () => {
+      // run invokes this mapper only for the active, undisposed request generation.
+      if (options?.clearOnSuccess && formRevision === submittedRevision) clearForm()
+      return 'success'
+    })
   }
 
   return {
@@ -90,6 +106,7 @@ export function useNewsletterSignup(options?: UseNewsletterSignupOptions): UseNe
     consentError,
     messages,
     submit,
+    clearForm,
     reset
   }
 }

@@ -7,9 +7,10 @@ import { useNewsletterCopy } from './useNewsletterCopy.js'
 import { useNewsletterRequest, type NewsletterState } from '../utils/request.js'
 
 export interface UseNewsletterUnsubscribeOptions {
+  mode?: 'single' | 'all'
   token?: MaybeRefOrGetter<string | undefined>
   tokenQuery?: MaybeRefOrGetter<string | undefined>
-  client?: MaybeRefOrGetter<Pick<NewsletterClient, 'unsubscribe'> | undefined>
+  client?: MaybeRefOrGetter<Pick<NewsletterClient, 'unsubscribe'> | Pick<NewsletterClient, 'unsubscribeAll'> | undefined>
   copy?: MaybeRefOrGetter<NewsletterCopyOverrides | undefined>
 }
 
@@ -27,6 +28,7 @@ export interface UseNewsletterUnsubscribeReturn {
 }
 
 export function useNewsletterUnsubscribe(options?: UseNewsletterUnsubscribeOptions): UseNewsletterUnsubscribeReturn {
+  const mode = options?.mode ?? 'single'
   const tokenQuery = computed(() => toValue(options?.tokenQuery) ?? 'capability')
   const messages = useNewsletterCopy(() => toValue(options?.copy))
   const route = useRoute()
@@ -68,7 +70,14 @@ export function useNewsletterUnsubscribe(options?: UseNewsletterUnsubscribeOptio
     if (!token.value || state.value === 'success' || state.value === 'loading') return
     const client = toValue(options?.client) ?? defaultClient
     return await run(
-      () => client.unsubscribe(token.value),
+      () => {
+        if (mode === 'all') {
+          if (!('unsubscribeAll' in client)) throw new Error('Newsletter client does not support unsubscribeAll.')
+          return client.unsubscribeAll(token.value)
+        }
+        if (!('unsubscribe' in client)) throw new Error('Newsletter client does not support unsubscribe.')
+        return client.unsubscribe(token.value)
+      },
       (value: { unsubscribed: boolean }) => value.unsubscribed ? 'success' : 'invalid'
     )
   }

@@ -1,6 +1,6 @@
 {
   "name": "better-newsletter",
-  "version": "0.1.0-beta.6",
+  "version": "0.1.0-beta.7",
   "description": "Framework-agnostic newsletter lifecycle infrastructure for TypeScript, with first-class Nuxt 4 / Nitro integration.",
   "type": "module",
   "license": "MIT",

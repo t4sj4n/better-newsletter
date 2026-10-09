@@ -1,5 +1,13 @@
 # Changelog
 
+## v0.1.0-beta.7
+
+[compare changes](https://github.com/t4sj4n/better-newsletter/compare/v0.1.0-beta.6...v0.1.0-beta.7)
+
+### 🚀 Enhancements
+
+- Add external signup refs and safe clearing #76 ([#77](https://github.com/t4sj4n/better-newsletter/pull/77), [#76](https://github.com/t4sj4n/better-newsletter/issues/76))
+
 ## v0.1.0-beta.6
 
 [compare changes](https://github.com/t4sj4n/better-newsletter/compare/v0.1.0-beta.5...v0.1.0-beta.6)

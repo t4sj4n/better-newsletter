@@ -1,7 +1,7 @@
 import { describe, expect, it, vi } from 'vitest'
-import { effectScope, reactive, ref, toRef } from 'vue'
+import { effectScope, isReadonly, nextTick, reactive, ref, toRef } from 'vue'
 import type { NewsletterClientSubscribeResult } from '../packages/better-newsletter/src/client.js'
-import { useNewsletterSignup, type UseNewsletterSignupOptions } from '../packages/better-newsletter/src/nuxt/runtime/index.js'
+import { useNewsletterResend, useNewsletterSignup, type UseNewsletterSignupOptions } from '../packages/better-newsletter/src/nuxt/runtime/index.js'
 
 vi.mock('nuxt/app', () => ({
   useRuntimeConfig: vi.fn(() => ({ public: { betterNewsletter: {} } })),
@@ -29,6 +29,8 @@ describe('signup external refs', () => {
     expect(signup.email.value).toBe('existing@example.com')
     expect(signup.consent.value).toBe(true)
     expect(signup.submitted.value).toBe(false)
+    expect(signup.submittedEmail.value).toBeUndefined()
+    expect(isReadonly(signup.submittedEmail)).toBe(true)
     expect(signup.state.value).toBe('idle')
   })
 
@@ -130,10 +132,12 @@ describe.each(['internal', 'external'] as const)('signup clearing with %s refs',
       expect(signup.consentError.value).toBeUndefined()
       expect(signup.state.value).toBe(state)
       expect(signup.error.value).toBe(state === 'error' ? error : undefined)
+      expect(signup.submittedEmail.value).toBe(state === 'success' ? 'user@example.com' : undefined)
 
       if (state === 'loading') {
         pending.accept()
         expect(await request).toMatchObject({ state: 'success', failed: false })
+        expect(signup.submittedEmail.value).toBe('user@example.com')
       }
     }
   )
@@ -151,6 +155,9 @@ describe.each(['internal', 'external'] as const)('signup clearing with %s refs',
     expect(signup.error.value).toBeUndefined()
     expect(signup.emailError.value).toBeUndefined()
     expect(signup.consentError.value).toBeUndefined()
+    expect(signup.submittedEmail.value).toBe('user@example.com')
+    signup.clearForm()
+    expect(signup.submittedEmail.value).toBe('user@example.com')
   })
 
   it('retains input and submitted validation after a failed request', async () => {
@@ -160,6 +167,7 @@ describe.each(['internal', 'external'] as const)('signup clearing with %s refs',
     expect(signup.email.value).toBe('user@example.com')
     expect(signup.consent.value).toBe(true)
     expect(signup.submitted.value).toBe(true)
+    expect(signup.submittedEmail.value).toBeUndefined()
   })
 
   it('does not clear invalid input or send a request', async () => {
@@ -193,6 +201,7 @@ describe.each(['internal', 'external'] as const)('signup clearing with %s refs',
       expect(signup.email.value).toBe(editedEmail)
       expect(signup.consent.value).toBe(editedConsent)
       expect(signup.submitted.value).toBe(true)
+      expect(signup.submittedEmail.value).toBe('user@example.com')
     }
   )
 
@@ -204,6 +213,7 @@ describe.each(['internal', 'external'] as const)('signup clearing with %s refs',
       const signup = createForm({ clearOnSuccess: true, client: { subscribe } })
       const oldRequest = signup.submit()
       signup.reset()
+      expect(signup.submittedEmail.value).toBeUndefined()
       signup.email.value = 'new@example.com'
       signup.consent.value = true
 
@@ -227,12 +237,14 @@ describe.each(['internal', 'external'] as const)('signup clearing with %s refs',
       expect(signup.email.value).toBe(currentEmail)
       expect(signup.consent.value).toBe(currentConsent)
       expect(signup.submitted.value).toBe(currentSubmitted)
+      expect(signup.submittedEmail.value).toBe(state === 'success' ? 'new@example.com' : undefined)
 
       if (state === 'loading') {
         second.accept()
         expect(await newRequest).toMatchObject({ state: 'success', failed: false })
         expect(signup.email.value).toBe('')
         expect(signup.consent.value).toBe(false)
+        expect(signup.submittedEmail.value).toBe('new@example.com')
       }
     }
   )
@@ -266,5 +278,81 @@ describe.each(['internal', 'external'] as const)('signup clearing with %s refs',
     expect(signup.consent.value).toBe(true)
     expect(signup.submitted.value).toBe(true)
     expect(signup.error.value).toBeUndefined()
+    expect(signup.submittedEmail.value).toBeUndefined()
+  })
+
+  it('captures the trimmed payload email without changing the editable value', async () => {
+    const subscribe = vi.fn().mockResolvedValue({ accepted: true })
+    const signup = createForm({ client: { subscribe } })
+    signup.email.value = '  User@example.com  '
+    expect(signup.submittedEmail.value).toBeUndefined()
+    await signup.submit()
+
+    expect(subscribe).toHaveBeenCalledExactlyOnceWith({
+      email: 'User@example.com', consent: true, consentVersion: 'v1'
+    })
+    expect(signup.submittedEmail.value).toBe('User@example.com')
+    expect(signup.email.value).toBe('  User@example.com  ')
+  })
+
+  it('preserves the last accepted email through edits, validation and request failures until a new success or reset', async () => {
+    const subscribe = vi.fn()
+      .mockResolvedValueOnce({ accepted: true })
+      .mockRejectedValueOnce(new Error('Server unavailable'))
+      .mockResolvedValueOnce({ accepted: true })
+    const signup = createForm({ client: { subscribe } })
+    await signup.submit()
+    signup.email.value = 'invalid'
+    expect(await signup.submit()).toBeUndefined()
+    expect(subscribe).toHaveBeenCalledTimes(1)
+    expect(signup.submittedEmail.value).toBe('user@example.com')
+
+    signup.email.value = 'next@example.com'
+    await signup.submit()
+    expect(signup.state.value).toBe('error')
+    expect(signup.submittedEmail.value).toBe('user@example.com')
+    signup.clearForm()
+    expect(signup.submittedEmail.value).toBe('user@example.com')
+
+    signup.email.value = 'next@example.com'
+    signup.consent.value = true
+    await signup.submit()
+    expect(signup.submittedEmail.value).toBe('next@example.com')
+    signup.reset()
+    expect(signup.submittedEmail.value).toBeUndefined()
+  })
+
+  it('reactively supplies the accepted email to resend after clearing, subsequent success and reset', async () => {
+    const signup = createForm({
+      clearOnSuccess: true, client: { subscribe: vi.fn().mockResolvedValue({ accepted: true }) }
+    })
+    const resendConfirmation = vi.fn().mockResolvedValue({ accepted: true })
+    const resend = useNewsletterResend({ email: signup.submittedEmail, client: { resendConfirmation } })
+    expect(resend.email.value).toBe('')
+
+    await signup.submit()
+    await nextTick()
+    expect(signup.email.value).toBe('')
+    expect(resend.email.value).toBe('user@example.com')
+    await resend.submit()
+    expect(resendConfirmation).toHaveBeenLastCalledWith({ email: 'user@example.com' })
+    expect(resend.state.value).toBe('success')
+
+    signup.email.value = 'next@example.com'
+    signup.consent.value = true
+    await signup.submit()
+    await nextTick()
+    expect(resend.email.value).toBe('next@example.com')
+    expect(resend.state.value).toBe('idle')
+    expect(resend.submitted.value).toBe(false)
+    await resend.submit()
+    expect(resendConfirmation).toHaveBeenLastCalledWith({ email: 'next@example.com' })
+
+    signup.reset()
+    await nextTick()
+    expect(signup.submittedEmail.value).toBeUndefined()
+    expect(resend.email.value).toBe('')
+    expect(resend.state.value).toBe('idle')
+    expect(resend.submitted.value).toBe(false)
   })
 })

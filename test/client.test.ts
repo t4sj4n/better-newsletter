@@ -176,6 +176,42 @@ describe('framework-neutral browser client', () => {
     await expect(client.confirm('invalid-token')).rejects.toThrow('Newsletter request failed (400).')
   })
 
+  it('forwards the typed website honeypot in the subscribe request', async () => {
+    const fetcher = vi.fn<Fetcher>(async () => new Response('{"accepted":true}'))
+    const input: NewsletterClientSubscribeInput = {
+      email: 'user@example.com', consent: true, consentVersion: 'v1', website: 'bot'
+    }
+    await createNewsletterClient(undefined, fetcher).subscribe(input)
+    expect(fetcher).toHaveBeenCalledExactlyOnceWith('/api/newsletter/subscribe', expect.objectContaining({
+      body: JSON.stringify(input)
+    }))
+  })
+
+  it.each([
+    { statusMessage: 'Rate limit exceeded', message: 'Please try again later', statusCode: 429 },
+    { message: 'Invalid request' }
+  ])('retains structured HTTP error details: %j', async data => {
+    const fetcher = vi.fn<Fetcher>(async () => new Response(JSON.stringify(data), { status: 429 }))
+    await expect(createNewsletterClient(undefined, fetcher).confirm('token')).rejects.toMatchObject({
+      message: 'Newsletter request failed (429).', data
+    })
+  })
+
+  it.each([
+    '', 'Bad Request', '{broken', 'null', '42', 'true', '"error"', '[]'
+  ])('preserves the HTTP error for unusable response bodies: %j', async body => {
+    const fetcher = vi.fn<Fetcher>(async () => new Response(body, { status: 400 }))
+    const request = createNewsletterClient(undefined, fetcher).confirm('token')
+    await expect(request).rejects.toThrow('Newsletter request failed (400).')
+    await expect(request).rejects.not.toHaveProperty('data')
+  })
+
+  it('preserves network errors without wrapping them', async () => {
+    const error = new TypeError('Failed to fetch')
+    const fetcher = vi.fn<Fetcher>().mockRejectedValue(error)
+    await expect(createNewsletterClient(undefined, fetcher).confirm('token')).rejects.toBe(error)
+  })
+
   it('validates basePath format', () => {
     expect(() => createNewsletterClient({ basePath: '/api/newsletter/' })).toThrow('Invalid newsletter base path')
     expect(() => createNewsletterClient({ basePath: 'api/newsletter' })).toThrow('Invalid newsletter base path')

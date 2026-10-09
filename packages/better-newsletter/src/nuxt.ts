@@ -23,7 +23,7 @@ const betterNewsletterModule: NuxtModule<BetterNewsletterModuleOptions> = define
   meta: {
     name: 'better-newsletter',
     configKey: 'betterNewsletter',
-    compatibility: { nuxt: '^4.5.2' }
+    compatibility: { nuxt: '^4.5.0' }
   },
   defaults: {
     basePath: '/api/newsletter',

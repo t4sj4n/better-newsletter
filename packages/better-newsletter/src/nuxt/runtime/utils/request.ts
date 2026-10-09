@@ -3,6 +3,23 @@ import { getCurrentScope, nextTick, onScopeDispose, ref } from 'vue'
 export type NewsletterState = 'idle' | 'loading' | 'success' | 'error'
   | 'invalid' | 'expired' | 'alreadyConfirmed'
 
+function nonEmptyMessage(value: unknown): string | undefined {
+  return typeof value === 'string' ? value.trim() || undefined : undefined
+}
+
+export function extractErrorMessage(error: unknown, fallbackMessage: string): string | undefined {
+  if (typeof error !== 'object' || error === null) return nonEmptyMessage(fallbackMessage)
+  const details = error as Record<string, unknown>
+  if (typeof details.data === 'object' && details.data !== null && !Array.isArray(details.data)) {
+    const data = details.data as Record<string, unknown>
+    const message = nonEmptyMessage(data.statusMessage) ?? nonEmptyMessage(data.message)
+    if (message) return message
+  }
+  const message = nonEmptyMessage(details.message)
+  return message && !/^Newsletter request failed \(\d+\)\.$/.test(message)
+    ? message : nonEmptyMessage(fallbackMessage)
+}
+
 export function errorState(error: unknown): NewsletterState {
   if (typeof error !== 'object' || error === null || !('code' in error)) return 'error'
   switch ((error as Record<string, unknown>).code) {
@@ -64,4 +81,3 @@ export async function focusInvalid(form: HTMLFormElement | null) {
 export function validEmail(value: string) {
   return /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(value.trim())
 }
-

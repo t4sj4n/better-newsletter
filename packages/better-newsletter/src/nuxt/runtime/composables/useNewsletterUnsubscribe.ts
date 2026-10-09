@@ -19,6 +19,7 @@ export interface UseNewsletterUnsubscribeReturn {
   displayState: ComputedRef<NewsletterState>
   error: Ref<unknown>
   resultTitle: ComputedRef<string>
+  resultDescription: ComputedRef<string>
   messages: ComputedRef<NewsletterCopy>
   unsubscribe: () => Promise<{ state: NewsletterState; error?: unknown; failed: boolean } | undefined>
   reset: () => void
@@ -52,6 +53,14 @@ export function useNewsletterUnsubscribe(options?: UseNewsletterUnsubscribeOptio
     }
   })
 
+  const resultDescription = computed(() => {
+    switch (displayState.value) {
+      case 'success': return messages.value.unsubscribe.success
+      case 'invalid': return messages.value.unsubscribe.invalid
+      default: return messages.value.unsubscribe.error
+    }
+  })
+
   watch(token, reset, { flush: 'sync' })
 
   async function unsubscribe() {
@@ -69,6 +78,7 @@ export function useNewsletterUnsubscribe(options?: UseNewsletterUnsubscribeOptio
     displayState,
     error,
     resultTitle,
+    resultDescription,
     messages,
     unsubscribe,
     reset

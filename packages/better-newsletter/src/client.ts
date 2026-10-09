@@ -24,6 +24,8 @@ export interface NewsletterClientSubscribeInput {
   readonly audiences?: readonly string[]
   readonly consent: true
   readonly consentVersion: string
+  /** Optional honeypot field checked by the public subscribe handler. */
+  readonly website?: string
   /** Untrusted public input; only host-selected values from publicSubscribeMetadata may be persisted. */
   readonly metadata?: Readonly<Record<string, JsonValue>>
 }
@@ -73,7 +75,18 @@ export function createNewsletterClient(
       headers: { 'content-type': 'application/json' },
       body: JSON.stringify(body)
     })
-    if (!response.ok) throw new Error(`Newsletter request failed (${response.status}).`)
+    if (!response.ok) {
+      const error = new Error(`Newsletter request failed (${response.status}).`)
+      try {
+        const data: unknown = await response.json()
+        if (typeof data === 'object' && data !== null && !Array.isArray(data)) {
+          Object.assign(error, { data })
+        }
+      } catch {
+        // Preserve the HTTP error when the response has no valid JSON body.
+      }
+      throw error
+    }
     return (await response.json()) as T
   }
 

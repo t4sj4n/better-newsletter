@@ -16,6 +16,7 @@ export interface UseNewsletterResendReturn {
   email: Ref<string>
   submitted: Ref<boolean>
   state: Ref<NewsletterState>
+  loading: ComputedRef<boolean>
   error: Ref<unknown>
   errorMessage: ComputedRef<string | undefined>
   emailError: ComputedRef<string | undefined>
@@ -27,7 +28,7 @@ export interface UseNewsletterResendReturn {
 export function useNewsletterResend(options?: UseNewsletterResendOptions): UseNewsletterResendReturn {
   const messages = useNewsletterCopy(() => toValue(options?.copy))
   const defaultClient = useNewsletterClient()
-  const { state, error, reset: resetRequest, run } = useNewsletterRequest()
+  const { state, loading, error, reset: resetRequest, run } = useNewsletterRequest()
 
   const initialEmail = toValue(options?.email) ?? ''
   const email = ref(initialEmail)
@@ -71,6 +72,7 @@ export function useNewsletterResend(options?: UseNewsletterResendOptions): UseNe
     email,
     submitted,
     state,
+    loading,
     error,
     errorMessage,
     emailError,

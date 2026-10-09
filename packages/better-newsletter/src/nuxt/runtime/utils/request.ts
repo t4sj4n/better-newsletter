@@ -1,4 +1,4 @@
-import { getCurrentScope, nextTick, onScopeDispose, ref } from 'vue'
+import { computed, getCurrentScope, nextTick, onScopeDispose, ref } from 'vue'
 
 export type NewsletterState = 'idle' | 'loading' | 'success' | 'error'
   | 'invalid' | 'expired' | 'alreadyConfirmed'
@@ -32,6 +32,7 @@ export function errorState(error: unknown): NewsletterState {
 
 export function useNewsletterRequest() {
   const state = ref<NewsletterState>('idle')
+  const loading = computed(() => state.value === 'loading')
   const error = ref<unknown>()
   let generation = 0
 
@@ -70,7 +71,7 @@ export function useNewsletterRequest() {
     if (current === generation) return { state: state.value, error: error.value, failed }
   }
 
-  return { state, error, reset, run }
+  return { state, loading, error, reset, run }
 }
 
 export async function focusInvalid(form: HTMLFormElement | null) {

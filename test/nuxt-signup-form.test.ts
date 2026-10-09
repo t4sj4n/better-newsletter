@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from 'vitest'
-import { effectScope, isReadonly, nextTick, reactive, ref, toRef } from 'vue'
+import { effectScope, isReadonly, nextTick, reactive, ref, toRef, watch } from 'vue'
 import type { NewsletterClientSubscribeResult } from '../packages/better-newsletter/src/client.js'
 import { useNewsletterResend, useNewsletterSignup, type UseNewsletterSignupOptions } from '../packages/better-newsletter/src/nuxt/runtime/index.js'
 
@@ -31,6 +31,8 @@ describe('signup external refs', () => {
     expect(signup.submitted.value).toBe(false)
     expect(signup.submittedEmail.value).toBeUndefined()
     expect(isReadonly(signup.submittedEmail)).toBe(true)
+    expect(signup.submittedAudience.value).toBeUndefined()
+    expect(isReadonly(signup.submittedAudience)).toBe(true)
     expect(signup.state.value).toBe('idle')
   })
 
@@ -118,7 +120,7 @@ describe.each(['internal', 'external'] as const)('signup clearing with %s refs',
     'clearForm preserves the %s request state and raw error', async state => {
       const pending = deferredAcceptance()
       const error = new Error('Server unavailable')
-      const signup = createForm({ client: { subscribe: vi.fn(() => pending.promise) } })
+      const signup = createForm({ audience: 'updates', client: { subscribe: vi.fn(() => pending.promise) } })
       const request = signup.submit()
       if (state === 'success') { pending.accept(); await request }
       if (state === 'error') { pending.reject(error); await request }
@@ -133,17 +135,20 @@ describe.each(['internal', 'external'] as const)('signup clearing with %s refs',
       expect(signup.state.value).toBe(state)
       expect(signup.error.value).toBe(state === 'error' ? error : undefined)
       expect(signup.submittedEmail.value).toBe(state === 'success' ? 'user@example.com' : undefined)
+      expect(signup.submittedAudience.value).toBe(state === 'success' ? 'updates' : undefined)
 
       if (state === 'loading') {
         pending.accept()
         expect(await request).toMatchObject({ state: 'success', failed: false })
         expect(signup.submittedEmail.value).toBe('user@example.com')
+        expect(signup.submittedAudience.value).toBe('updates')
       }
     }
   )
 
   it.each([undefined, false, true])('clearOnSuccess=%s retains or clears unchanged input', async clearOnSuccess => {
     const signup = createForm({
+      audience: 'updates',
       ...(clearOnSuccess === undefined ? {} : { clearOnSuccess }),
       client: { subscribe: vi.fn().mockResolvedValue({ accepted: true }) }
     })
@@ -156,8 +161,10 @@ describe.each(['internal', 'external'] as const)('signup clearing with %s refs',
     expect(signup.emailError.value).toBeUndefined()
     expect(signup.consentError.value).toBeUndefined()
     expect(signup.submittedEmail.value).toBe('user@example.com')
+    expect(signup.submittedAudience.value).toBe('updates')
     signup.clearForm()
     expect(signup.submittedEmail.value).toBe('user@example.com')
+    expect(signup.submittedAudience.value).toBe('updates')
   })
 
   it('retains input and submitted validation after a failed request', async () => {
@@ -210,10 +217,13 @@ describe.each(['internal', 'external'] as const)('signup clearing with %s refs',
       const first = deferredAcceptance()
       const second = deferredAcceptance()
       const subscribe = vi.fn().mockReturnValueOnce(first.promise).mockReturnValueOnce(second.promise)
-      const signup = createForm({ clearOnSuccess: true, client: { subscribe } })
+      const audience = ref('old-audience')
+      const signup = createForm({ audience, clearOnSuccess: true, client: { subscribe } })
       const oldRequest = signup.submit()
       signup.reset()
       expect(signup.submittedEmail.value).toBeUndefined()
+      expect(signup.submittedAudience.value).toBeUndefined()
+      audience.value = 'new-audience'
       signup.email.value = 'new@example.com'
       signup.consent.value = true
 
@@ -238,6 +248,8 @@ describe.each(['internal', 'external'] as const)('signup clearing with %s refs',
       expect(signup.consent.value).toBe(currentConsent)
       expect(signup.submitted.value).toBe(currentSubmitted)
       expect(signup.submittedEmail.value).toBe(state === 'success' ? 'new@example.com' : undefined)
+      expect(signup.submittedAudience.value).toBe(state === 'success' ? 'new-audience' : undefined)
+      expect(signup.loading.value).toBe(state === 'loading')
 
       if (state === 'loading') {
         second.accept()
@@ -245,6 +257,7 @@ describe.each(['internal', 'external'] as const)('signup clearing with %s refs',
         expect(signup.email.value).toBe('')
         expect(signup.consent.value).toBe(false)
         expect(signup.submittedEmail.value).toBe('new@example.com')
+        expect(signup.submittedAudience.value).toBe('new-audience')
       }
     }
   )
@@ -267,7 +280,7 @@ describe.each(['internal', 'external'] as const)('signup clearing with %s refs',
     const pending = deferredAcceptance()
     const scope = effectScope()
     const signup = scope.run(() => createForm({
-      clearOnSuccess: true, client: { subscribe: vi.fn(() => pending.promise) }
+      audience: 'updates', clearOnSuccess: true, client: { subscribe: vi.fn(() => pending.promise) }
     }))!
     const request = signup.submit()
     scope.stop()
@@ -279,6 +292,7 @@ describe.each(['internal', 'external'] as const)('signup clearing with %s refs',
     expect(signup.submitted.value).toBe(true)
     expect(signup.error.value).toBeUndefined()
     expect(signup.submittedEmail.value).toBeUndefined()
+    expect(signup.submittedAudience.value).toBeUndefined()
   })
 
   it('captures the trimmed payload email without changing the editable value', async () => {
@@ -295,31 +309,109 @@ describe.each(['internal', 'external'] as const)('signup clearing with %s refs',
     expect(signup.email.value).toBe('  User@example.com  ')
   })
 
-  it('preserves the last accepted email through edits, validation and request failures until a new success or reset', async () => {
+  it('preserves the accepted email and audience through edits and failures until a new success or reset', async () => {
     const subscribe = vi.fn()
       .mockResolvedValueOnce({ accepted: true })
       .mockRejectedValueOnce(new Error('Server unavailable'))
       .mockResolvedValueOnce({ accepted: true })
-    const signup = createForm({ client: { subscribe } })
+    const audience = ref<string | undefined>('updates')
+    const signup = createForm({ audience, client: { subscribe } })
     await signup.submit()
+    audience.value = undefined
     signup.email.value = 'invalid'
     expect(await signup.submit()).toBeUndefined()
     expect(subscribe).toHaveBeenCalledTimes(1)
     expect(signup.submittedEmail.value).toBe('user@example.com')
+    expect(signup.submittedAudience.value).toBe('updates')
 
     signup.email.value = 'next@example.com'
     await signup.submit()
     expect(signup.state.value).toBe('error')
     expect(signup.submittedEmail.value).toBe('user@example.com')
+    expect(signup.submittedAudience.value).toBe('updates')
     signup.clearForm()
     expect(signup.submittedEmail.value).toBe('user@example.com')
+    expect(signup.submittedAudience.value).toBe('updates')
 
     signup.email.value = 'next@example.com'
     signup.consent.value = true
     await signup.submit()
     expect(signup.submittedEmail.value).toBe('next@example.com')
+    expect(signup.submittedAudience.value).toBeUndefined()
     signup.reset()
     expect(signup.submittedEmail.value).toBeUndefined()
+    expect(signup.submittedAudience.value).toBeUndefined()
+  })
+
+  it.each(['ref', 'getter'] as const)('captures the pending payload audience from a %s despite later edits', async source => {
+    const audience = ref('updates')
+    const pending = deferredAcceptance()
+    const subscribe = vi.fn(() => pending.promise)
+    const signup = createForm({
+      audience: source === 'ref' ? audience : () => audience.value,
+      clearOnSuccess: true, client: { subscribe }
+    })
+    const request = signup.submit()
+    audience.value = 'events'
+    signup.email.value = 'edited@example.com'
+    pending.accept()
+    await request
+
+    expect(subscribe).toHaveBeenCalledExactlyOnceWith({
+      email: 'user@example.com', audience: 'updates', consent: true, consentVersion: 'v1'
+    })
+    expect(signup.submittedEmail.value).toBe('user@example.com')
+    expect(signup.submittedAudience.value).toBe('updates')
+    expect(signup.email.value).toBe('edited@example.com')
+  })
+
+  it('updates and clears both snapshots atomically for synchronous observers', async () => {
+    const audience = ref<string | undefined>()
+    const signup = createForm({ audience, client: { subscribe: vi.fn().mockResolvedValue({ accepted: true }) } })
+    const pairs: (string | undefined)[][] = []
+    const stop = watch([signup.submittedEmail, signup.submittedAudience], values => {
+      pairs.push(values)
+    }, { flush: 'sync' })
+
+    await signup.submit()
+    signup.email.value = 'next@example.com'
+    audience.value = 'events'
+    await signup.submit()
+    signup.reset()
+    stop()
+
+    expect(pairs).toEqual([
+      ['user@example.com', undefined], ['next@example.com', 'events'], [undefined, undefined]
+    ])
+  })
+
+  it('uses paired snapshots for resend after selection changes and same-email audience replacements', async () => {
+    const audience = ref<string | undefined>('updates')
+    const subscribe = vi.fn().mockResolvedValue({ accepted: true })
+    const signup = createForm({ audience, clearOnSuccess: true, client: { subscribe } })
+    const resendConfirmation = vi.fn().mockResolvedValue({ accepted: true })
+    const resend = useNewsletterResend({
+      email: signup.submittedEmail, audience: signup.submittedAudience, client: { resendConfirmation }
+    })
+
+    await signup.submit()
+    audience.value = 'events'
+    await resend.submit()
+    expect(resendConfirmation).toHaveBeenLastCalledWith({ email: 'user@example.com', audience: 'updates' })
+
+    signup.email.value = 'user@example.com'
+    signup.consent.value = true
+    await signup.submit()
+    audience.value = undefined
+    await resend.submit()
+    expect(resendConfirmation).toHaveBeenLastCalledWith({ email: 'user@example.com', audience: 'events' })
+
+    signup.email.value = 'user@example.com'
+    signup.consent.value = true
+    await signup.submit()
+    expect(subscribe.mock.calls[2]?.[0]).not.toHaveProperty('audience')
+    await resend.submit()
+    expect(resendConfirmation).toHaveBeenLastCalledWith({ email: 'user@example.com' })
   })
 
   it('reactively supplies the accepted email to resend after clearing, subsequent success and reset', async () => {

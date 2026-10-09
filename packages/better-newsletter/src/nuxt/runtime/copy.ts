@@ -93,7 +93,7 @@ export const defaultNewsletterCopy: NewsletterCopy = {
     successTitle: 'Unsubscribed',
     success: 'You have been successfully unsubscribed from the newsletter.',
     invalidTitle: 'Invalid link',
-    invalid: 'This unsubscribe link is invalid or has already been used.',
+    invalid: 'This unsubscribe link is invalid or incomplete.',
     error: 'Failed to unsubscribe. Please try again.'
   }
 }

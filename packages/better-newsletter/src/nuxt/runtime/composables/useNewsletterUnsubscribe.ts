@@ -16,6 +16,7 @@ export interface UseNewsletterUnsubscribeOptions {
 export interface UseNewsletterUnsubscribeReturn {
   token: ComputedRef<string>
   state: Ref<NewsletterState>
+  loading: ComputedRef<boolean>
   displayState: ComputedRef<NewsletterState>
   error: Ref<unknown>
   resultTitle: ComputedRef<string>
@@ -30,7 +31,7 @@ export function useNewsletterUnsubscribe(options?: UseNewsletterUnsubscribeOptio
   const messages = useNewsletterCopy(() => toValue(options?.copy))
   const route = useRoute()
   const defaultClient = useNewsletterClient()
-  const { state, error, reset, run } = useNewsletterRequest()
+  const { state, loading, error, reset, run } = useNewsletterRequest()
 
   const queryToken = computed(() => {
     const query = route?.query as Record<string, string | string[] | undefined> | undefined
@@ -75,6 +76,7 @@ export function useNewsletterUnsubscribe(options?: UseNewsletterUnsubscribeOptio
   return {
     token,
     state,
+    loading,
     displayState,
     error,
     resultTitle,

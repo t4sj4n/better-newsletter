@@ -8,20 +8,32 @@ const form = reactive({ email: '', consent: false })
 const signup = useNewsletterSignup({
   email: toRef(form, 'email'), consent: toRef(form, 'consent'), clearOnSuccess: true, honeypot: website, client
 })
-const resend = useNewsletterResend({ email: signup.submittedEmail, client })
+const resend = useNewsletterResend({ email: signup.submittedEmail, audience: signup.submittedAudience, client })
 const confirmation = useNewsletterConfirm({ token: 'token', client })
 const unsubscribe = useNewsletterUnsubscribe({ token: 'capability', client })
 // Compile package-owned calls without relying on generated InternalApi.
 function checkTypes() {
   const signupError: string | undefined = signup.errorMessage.value
   const submittedEmail: string | undefined = signup.submittedEmail.value
+  const submittedAudience: string | undefined = signup.submittedAudience.value
   const clearForm: () => void = signup.clearForm
   const resendError: string | undefined = resend.errorMessage.value
   const confirmationDescription: string = confirmation.resultDescription.value
   const unsubscribeDescription: string = unsubscribe.resultDescription.value
-  void [signupError, resendError, confirmationDescription, unsubscribeDescription, clearForm, submittedEmail]
+  const loading: boolean[] = [signup.loading.value, resend.loading.value, confirmation.loading.value, unsubscribe.loading.value]
+  void [signupError, resendError, confirmationDescription, unsubscribeDescription, clearForm, submittedEmail, submittedAudience, loading]
   // @ts-expect-error the submitted email snapshot is read-only
   signup.submittedEmail.value = 'another@example.com'
+  // @ts-expect-error the submitted audience snapshot is read-only
+  signup.submittedAudience.value = 'events'
+  // @ts-expect-error loading helpers are read-only
+  signup.loading.value = true
+  // @ts-expect-error loading helpers are read-only
+  resend.loading.value = true
+  // @ts-expect-error loading helpers are read-only
+  confirmation.loading.value = true
+  // @ts-expect-error loading helpers are read-only
+  unsubscribe.loading.value = true
   void legacyClient.subscribe
   void client.subscribe({ email: 'packed@example.com', consent: true, consentVersion: 'packed-v1', website: website.value })
   void client.resendConfirmation({ email: 'packed@example.com' })

@@ -23,7 +23,9 @@ export interface UseNewsletterSignupReturn {
   consent: Ref<boolean>
   submitted: Ref<boolean>
   submittedEmail: ComputedRef<string | undefined>
+  submittedAudience: ComputedRef<string | undefined>
   state: Ref<NewsletterState>
+  loading: ComputedRef<boolean>
   error: Ref<unknown>
   errorMessage: ComputedRef<string | undefined>
   emailError: ComputedRef<string | undefined>
@@ -37,13 +39,14 @@ export interface UseNewsletterSignupReturn {
 export function useNewsletterSignup(options?: UseNewsletterSignupOptions): UseNewsletterSignupReturn {
   const messages = useNewsletterCopy(() => toValue(options?.copy))
   const defaultClient = useNewsletterClient()
-  const { state, error, reset: resetRequest, run } = useNewsletterRequest()
+  const { state, loading, error, reset: resetRequest, run } = useNewsletterRequest()
 
   const email = options?.email ?? ref('')
   const consent = options?.consent ?? ref(false)
   const submitted = ref(false)
-  const lastSubmittedEmail = ref<string>()
-  const submittedEmail = computed(() => lastSubmittedEmail.value)
+  const lastSubmission = ref<{ email: string; audience: string | undefined }>()
+  const submittedEmail = computed(() => lastSubmission.value?.email)
+  const submittedAudience = computed(() => lastSubmission.value?.audience)
   let formRevision = 0
 
   watch([email, consent], () => { formRevision++ }, { flush: 'sync' })
@@ -62,7 +65,7 @@ export function useNewsletterSignup(options?: UseNewsletterSignupOptions): UseNe
   function reset() {
     clearForm()
     resetRequest()
-    lastSubmittedEmail.value = undefined
+    lastSubmission.value = undefined
   }
 
   async function submit(formElement?: HTMLFormElement | null) {
@@ -94,7 +97,7 @@ export function useNewsletterSignup(options?: UseNewsletterSignupOptions): UseNe
     const client = toValue(options?.client) ?? defaultClient
     return await run(() => client.subscribe(input), () => {
       // run invokes this mapper only for the active, undisposed request generation.
-      lastSubmittedEmail.value = input.email
+      lastSubmission.value = { email: input.email, audience: input.audience }
       if (options?.clearOnSuccess && formRevision === submittedRevision) clearForm()
       return 'success'
     })
@@ -105,7 +108,9 @@ export function useNewsletterSignup(options?: UseNewsletterSignupOptions): UseNe
     consent,
     submitted,
     submittedEmail,
+    submittedAudience,
     state,
+    loading,
     error,
     errorMessage,
     emailError,

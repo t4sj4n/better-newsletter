@@ -1012,18 +1012,38 @@ The composable returns the supplied refs unchanged. Edits from either the host o
 
 Automatic clearing skips invalidated requests, failures and responses after scope disposal. If email or consent changes while a request is in flight, the whole form is retained, even if the changed value is subsequently restored before the response. The same guards apply to internal and external refs. Success remains neutral request acceptance, rather than confirmation of the subscription.
 
-#### Submitted email and resend
+#### Submitted email, audience and resend
 
-`useNewsletterSignup` exposes `submittedEmail: ComputedRef<string | undefined>`, a read-only snapshot of the trimmed email sent by the most recent successfully accepted request. It starts undefined and follows the captured request payload, even if the user edits the form while that request is pending. Use it to connect a resend action while automatically clearing editable input:
+`useNewsletterSignup` exposes `submittedEmail` and `submittedAudience`, both read-only `ComputedRef<string | undefined>` snapshots from the same most recent successfully accepted request. They start undefined and capture the trimmed email and explicit audience from the payload, even if the user edits the form or changes the selected audience while that request is pending. Use them to connect a resend action while automatically clearing editable input:
 
 ```ts
-const signup = useNewsletterSignup({ clearOnSuccess: true })
-const resend = useNewsletterResend({ email: signup.submittedEmail })
+const form = reactive({ email: '', consent: false })
+const selectedAudience = ref<string | undefined>('updates')
+const signup = useNewsletterSignup({
+  email: toRef(form, 'email'),
+  consent: toRef(form, 'consent'),
+  audience: selectedAudience,
+  clearOnSuccess: true
+})
+const resend = useNewsletterResend({
+  email: signup.submittedEmail,
+  audience: signup.submittedAudience
+})
 ```
 
-`clearForm()` and `clearOnSuccess` preserve the snapshot. Form edits, validation failures and rejected requests also preserve the last accepted email. A later valid success replaces it, while explicit `reset()` clears it to undefined. Invalidated or superseded responses, including responses after reset or scope disposal, cannot update it. The snapshot records submitted input; neutral acceptance does not establish delivery, subscription existence or confirmation.
+`clearForm()` and `clearOnSuccess` preserve both snapshots. Form/audience edits, validation failures and rejected requests also preserve them. A later valid success replaces both together, while explicit `reset()` clears both to undefined. Invalidated or superseded responses, including responses after reset or scope disposal, cannot update them. The snapshots record submitted input; neutral acceptance does not establish delivery, subscription existence or confirmation.
 
-Resend follows successful snapshot updates and clears its email/request state when signup is reset. For audience-specific flows, also configure resend with the audience corresponding to the accepted signup; `submittedEmail` does not capture the audience.
+Resend uses the captured audience even if the host changes the current selection after acceptance. A successful signup without an explicit audience sets `submittedAudience` to undefined, replacing any previous audience snapshot. This means no audience was sent; the client does not know the server-side default audience. Resend then also omits the audience, allowing the server to resolve its default. Resend follows accepted email changes and clears its email/request state when signup is reset.
+
+#### Loading helper
+
+All four composables expose `loading: ComputedRef<boolean>`, which is true exactly while `state.value === 'loading'`. It follows the existing request lifecycle, including reset and protection against stale responses. When using a nested ref on the returned plain object, access `.value` in the template:
+
+```vue
+<button :disabled="signup.loading.value" :aria-busy="signup.loading.value" @click="signup.submit()">
+  {{ signup.loading.value ? 'Submitting…' : 'Subscribe' }}
+</button>
+```
 
 #### Result helpers
 
@@ -1036,7 +1056,7 @@ Resend follows successful snapshot updates and clears its email/request state wh
 
 `errorMessage` is undefined outside the `error` state. In that state it selects the first non-empty string from `error.data.statusMessage`, `error.data.message`, then `error.message`, and finally the corresponding `messages` fallback. The generic default-client HTTP message is skipped so untranslated transport text does not replace your fallback. The raw `error` ref remains available. Resetting or starting a new request clears the previous error.
 
-`resultDescription` follows `displayState`, alongside the existing `resultTitle`. Render these helpers only in result states: their default error copy also applies during `idle` and `loading`. A missing token uses invalid copy. All helpers follow reactive `copy` overrides, including error fallbacks.
+`resultDescription` follows `displayState`, alongside the existing `resultTitle`. Render these helpers only in result states: their default error copy also applies during `idle` and `loading`. A missing or empty token uses the existing `invalid` display state; the default confirmation and unsubscribe descriptions cover invalid or incomplete links. Customize those descriptions and titles through the existing `confirmation.invalid` / `invalidTitle` and `unsubscribe.invalid` / `invalidTitle` copy keys. All helpers follow reactive `copy` overrides, including error fallbacks.
 
 ### Consumer example and maintainer playground
 

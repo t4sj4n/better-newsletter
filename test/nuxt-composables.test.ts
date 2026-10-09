@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from 'vitest'
-import { ref } from 'vue'
+import { isReadonly, ref } from 'vue'
 import { createNewsletterClient, type NewsletterClient } from '../packages/better-newsletter/src/client.js'
 import { extractErrorMessage } from '../packages/better-newsletter/src/nuxt/runtime/utils/request.js'
 import type {
@@ -242,10 +242,19 @@ describe('useNewsletterConfirm', () => {
     expect(confirmation.resultDescription.value).toBe('Updated description')
   })
 
-  it('describes missing tokens using displayState rather than request state', () => {
-    const confirmation = useNewsletterConfirm({ token: '' })
+  it.each([undefined, ''])('describes missing token %j with reactive invalid copy', async token => {
+    const copy = ref<NewsletterCopyOverrides>({})
+    const confirm = vi.fn()
+    const confirmation = useNewsletterConfirm({ token, copy, client: { confirm, resendConfirmation: vi.fn() } })
     expect(confirmation.state.value).toBe('idle')
-    expect(confirmation.resultDescription.value).toBe(defaultNewsletterCopy.confirmation.invalid)
+    expect(confirmation.displayState.value).toBe('invalid')
+    expect(confirmation.resultDescription.value).toBe('This confirmation link is invalid or incomplete.')
+    copy.value = { confirmation: { invalidTitle: 'Custom title', invalid: 'Custom incomplete link' } }
+    expect(confirmation.resultTitle.value).toBe('Custom title')
+    expect(confirmation.resultDescription.value).toBe('Custom incomplete link')
+    await confirmation.confirm()
+    expect(confirm).not.toHaveBeenCalled()
+    expect(confirmation.loading.value).toBe(false)
   })
 
   it('maps custom client error codes to states and guards against race conditions', async () => {
@@ -322,10 +331,19 @@ describe('useNewsletterUnsubscribe', () => {
     expect(unsub.resultDescription.value).toBe('Updated description')
   })
 
-  it('describes missing tokens using displayState rather than request state', () => {
-    const unsub = useNewsletterUnsubscribe({ token: '' })
+  it.each([undefined, ''])('describes missing token %j with reactive invalid copy', async token => {
+    const copy = ref<NewsletterCopyOverrides>({})
+    const unsubscribe = vi.fn()
+    const unsub = useNewsletterUnsubscribe({ token, copy, client: { unsubscribe } })
     expect(unsub.state.value).toBe('idle')
-    expect(unsub.resultDescription.value).toBe(defaultNewsletterCopy.unsubscribe.invalid)
+    expect(unsub.displayState.value).toBe('invalid')
+    expect(unsub.resultDescription.value).toBe('This unsubscribe link is invalid or incomplete.')
+    copy.value = { unsubscribe: { invalidTitle: 'Custom title', invalid: 'Custom incomplete link' } }
+    expect(unsub.resultTitle.value).toBe('Custom title')
+    expect(unsub.resultDescription.value).toBe('Custom incomplete link')
+    await unsub.unsubscribe()
+    expect(unsubscribe).not.toHaveBeenCalled()
+    expect(unsub.loading.value).toBe(false)
   })
 
   it('handles token submission and success state', async () => {
@@ -354,6 +372,81 @@ describe('useNewsletterUnsubscribe', () => {
     await unsub.unsubscribe()
     expect(unsub.displayState.value).toBe('error')
     expect(unsub.resultTitle.value).toBe(defaultNewsletterCopy.common.error)
+  })
+})
+
+describe.each(['signup', 'resend', 'confirm', 'unsubscribe'] as const)('%s loading', kind => {
+  const success = { accepted: true, confirmed: true, unsubscribed: true } as const
+
+  function deferredResult() {
+    let resolve!: (value: typeof success) => void
+    let reject!: (error: unknown) => void
+    const promise = new Promise<typeof success>((accept, fail) => { resolve = accept; reject = fail })
+    return { promise, accept: () => resolve(success), reject }
+  }
+
+  function createAction(action: () => Promise<typeof success>) {
+    const client = { subscribe: action, resendConfirmation: action, confirm: action, unsubscribe: action }
+    if (kind === 'signup') {
+      const form = useNewsletterSignup({ client })
+      const prepare = () => { form.email.value = 'user@example.com'; form.consent.value = true }
+      prepare()
+      return { form, submit: () => form.submit(), prepare }
+    }
+    if (kind === 'resend') {
+      const form = useNewsletterResend({ email: 'user@example.com', client })
+      return { form, submit: () => form.submit(), prepare: () => {} }
+    }
+    if (kind === 'confirm') {
+      const form = useNewsletterConfirm({ token: 'token', client })
+      return { form, submit: () => form.confirm(), prepare: () => {} }
+    }
+    const form = useNewsletterUnsubscribe({ token: 'capability', client })
+    return { form, submit: () => form.unsubscribe(), prepare: () => {} }
+  }
+
+  it.each(['success', 'error'] as const)('tracks a pending request until %s and reset', async state => {
+    const pending = deferredResult()
+    const action = vi.fn(() => pending.promise)
+    const { form, submit } = createAction(action)
+    expect(isReadonly(form.loading)).toBe(true)
+    expect(form.loading.value).toBe(false)
+    const request = submit()
+    expect(form.loading.value).toBe(true)
+    expect(await submit()).toBeUndefined()
+    expect(action).toHaveBeenCalledTimes(1)
+    if (state === 'success') pending.accept()
+    else pending.reject(new Error('Request failed'))
+    await request
+    expect(form.state.value).toBe(state)
+    expect(form.loading.value).toBe(false)
+    form.reset()
+    expect(form.state.value).toBe('idle')
+    expect(form.loading.value).toBe(false)
+  })
+
+  it.each([false, true])('ignores stale responses after reset with a newer request pending=%s', async retry => {
+    const first = deferredResult()
+    const second = deferredResult()
+    const action = vi.fn().mockReturnValueOnce(first.promise).mockReturnValueOnce(second.promise)
+    const { form, submit, prepare } = createAction(action)
+    const oldRequest = submit()
+    expect(form.loading.value).toBe(true)
+    form.reset()
+    expect(form.loading.value).toBe(false)
+    prepare()
+    const newRequest = retry ? submit() : undefined
+    expect(form.loading.value).toBe(retry)
+    first.accept()
+    expect(await oldRequest).toBeUndefined()
+    expect(form.state.value).toBe(retry ? 'loading' : 'idle')
+    expect(form.loading.value).toBe(retry)
+    if (retry) {
+      second.accept()
+      await newRequest
+      expect(form.state.value).toBe('success')
+      expect(form.loading.value).toBe(false)
+    }
   })
 })
 

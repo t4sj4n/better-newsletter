@@ -17,6 +17,7 @@ export interface UseNewsletterConfirmOptions {
 export interface UseNewsletterConfirmReturn {
   token: ComputedRef<string>
   state: Ref<NewsletterState>
+  loading: ComputedRef<boolean>
   displayState: ComputedRef<NewsletterState>
   error: Ref<unknown>
   completed: ComputedRef<boolean>
@@ -32,7 +33,7 @@ export function useNewsletterConfirm(options?: UseNewsletterConfirmOptions): Use
   const messages = useNewsletterCopy(() => toValue(options?.copy))
   const route = useRoute()
   const defaultClient = useNewsletterClient()
-  const { state, error, reset, run } = useNewsletterRequest()
+  const { state, loading, error, reset, run } = useNewsletterRequest()
 
   const queryToken = computed(() => {
     const query = route?.query as Record<string, string | string[] | undefined> | undefined
@@ -83,6 +84,7 @@ export function useNewsletterConfirm(options?: UseNewsletterConfirmOptions): Use
   return {
     token,
     state,
+    loading,
     displayState,
     error,
     completed,
